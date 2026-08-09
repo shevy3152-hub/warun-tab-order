@@ -1,0 +1,16 @@
+.pnpm-store/
+prototype/node_modules/
+prototype/dist/
+
+# Local visual-QA working files
+prototype/qa-*.png
+prototype/qa/*-raw*.png
+prototype/qa/*-clipped.png
+
+# Local environment and logs
+.env
+.env.*
+!.env.example
+*.log
+.DS_Store
+Thumbs.db
