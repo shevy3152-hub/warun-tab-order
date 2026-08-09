@@ -1,0 +1,1442 @@
+openapi: 3.1.0
+info:
+  title: Warun Tab Order Local API
+  version: 1.0.0
+  description: |
+    店舗LAN内だけで動作する小規模居酒屋向け注文APIのv1契約。
+    SQLiteにコミットされた状態を唯一の正本とし、RESTで操作、SSEで変更通知を行う。
+    customer向けレスポンスには価格と合計を含めない。
+servers:
+  - url: https://{serverIp}:8443
+    description: 本運用のローカルHTTPSサーバー
+    variables:
+      serverIp:
+        default: 192.168.1.10
+        description: ルーターで固定またはDHCP予約したサーバーIPv4アドレス
+tags:
+  - name: System
+  - name: Pairing
+  - name: Device
+  - name: Menu
+  - name: Orders
+  - name: StaffCalls
+  - name: Admin
+  - name: Events
+security:
+  - bearerAuth: []
+paths:
+  /v1/health:
+    get:
+      tags: [System]
+      summary: サーバーとDBの準備状態を確認する
+      operationId: getHealth
+      security: []
+      responses:
+        '200':
+          description: DBを含めて受付可能
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+        '503':
+          description: プロセスは応答したがDBが受付不能
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+
+  /v1/admin/pairing-codes:
+    post:
+      tags: [Admin, Pairing]
+      summary: 一回限りの端末ペアリングコードを発行する
+      description: adminだけが実行できる。customer用コードはtableId必須。
+      operationId: createPairingCode
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreatePairingCodeRequest'
+      responses:
+        '201':
+          description: コードを発行した。平文コードはこの応答でだけ返す。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PairingCode'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/AuthenticationFailed'
+        '403':
+          $ref: '#/components/responses/PermissionDenied'
+        '409':
+          $ref: '#/components/responses/AssignmentConflict'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /v1/pairings/claim:
+    post:
+      tags: [Pairing]
+      summary: ペアリングコードを消費して端末を登録する
+      operationId: claimPairingCode
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ClaimPairingRequest'
+      responses:
+        '201':
+          description: 端末登録成功。deviceTokenは再表示しない。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClaimPairingResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '409':
+          description: コード使用済み、deviceId登録済み、または割り当て競合
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '410':
+          description: ペアリングコードが失効済み
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /v1/device/config:
+    get:
+      tags: [Device]
+      summary: 認証端末の役割とサーバー側設定を取得する
+      operationId: getDeviceConfig
+      responses:
+        '200':
+          description: 端末設定
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeviceConfig'
+        '401':
+          $ref: '#/components/responses/AuthenticationFailed'
+        '403':
+          $ref: '#/components/responses/DeviceNotRegistered'
+
+  /v1/menu:
+    get:
+      tags: [Menu]
+      summary: 認証端末の役割に応じた現在メニューを取得する
+      description: customerにはpriceYenとkitchenAliasを返さない。
+      operationId: getMenu
+      responses:
+        '200':
+          description: 役割別メニューと取得時点のeventId
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/CustomerMenuResponse'
+                  - $ref: '#/components/schemas/StaffMenuResponse'
+        '401':
+          $ref: '#/components/responses/AuthenticationFailed'
+        '403':
+          $ref: '#/components/responses/DeviceNotRegistered'
+
+  /v1/orders:
+    post:
+      tags: [Orders]
+      summary: 客席端末から注文を送信する
+      description: |
+        customerだけが実行できる。tableIdやtableNumberは受け付けない。
+        サーバーはBearer token、deviceId、サーバー側table assignmentからテーブルを決定する。
+        サーバーはfingerprintを再計算し、価格・売り切れをトランザクション内で検証する。
+      operationId: createOrder
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateOrderRequest'
+      responses:
+        '201':
+          description: 新しい注文を作成した
+          headers:
+            Idempotency-Result:
+              schema:
+                type: string
+                const: created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrderReceipt'
+        '200':
+          description: 同じclientOrderIdと同じfingerprintの再送。既存注文を返した。
+          headers:
+            Idempotency-Result:
+              schema:
+                type: string
+                const: replayed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrderReceipt'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/AuthenticationFailed'
+        '403':
+          description: 未登録・失効端末、customer以外、またはtokenとdeviceId不一致
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '409':
+          $ref: '#/components/responses/IdempotencyConflict'
+        '422':
+          $ref: '#/components/responses/InvalidOrder'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServerBusy'
+
+  /v1/orders/active:
+    get:
+      tags: [Orders]
+      summary: キッチン用のアクティブ注文を取得する
+      operationId: listActiveOrders
+      responses:
+        '200':
+          description: newとactiveの注文。未提供品は各注文内で先に並ぶ。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ActiveOrdersResponse'
+        '401':
+          $ref: '#/components/responses/AuthenticationFailed'
+        '403':
+          $ref: '#/components/responses/PermissionDenied'
+
+  /v1/orders/history:
+    get:
+      tags: [Orders]
+      summary: 提供済み注文履歴を取得する
+      operationId: listOrderHistory
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: completed注文を新しい順に返す
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrderHistoryResponse'
+        '401':
+          $ref: '#/components/responses/AuthenticationFailed'
+        '403':
+          $ref: '#/components/responses/PermissionDenied'
+
+  /v1/orders/{orderId}:
+    get:
+      tags: [Orders]
+      summary: 注文詳細を取得する
+      operationId: getOrder
+      parameters:
+        - $ref: '#/components/parameters/OrderId'
+      responses:
+        '200':
+          description: kitchen/admin向けの価格スナップショットを含む注文詳細
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StaffOrder'
+        '401':
+          $ref: '#/components/responses/AuthenticationFailed'
+        '403':
+          $ref: '#/components/responses/PermissionDenied'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /v1/orders/{orderId}/items/{orderItemId}/served:
+    patch:
+      tags: [Orders]
+      summary: 注文品目の提供済み状態を更新する
+      description: 最後の未提供品をservedにしたトランザクションで注文をcompletedへ移す。
+      operationId: updateOrderItemServed
+      parameters:
+        - $ref: '#/components/parameters/OrderId'
+        - $ref: '#/components/parameters/OrderItemId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateServedRequest'
+      responses:
+        '200':
+          description: 更新後の注文。全品提供済みならstatusはcompleted。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StaffOrder'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/AuthenticationFailed'
+        '403':
+          $ref: '#/components/responses/PermissionDenied'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: expectedOrderVersion不一致、または完了済み注文
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServerBusy'
+
+  /v1/staff-calls:
+    get:
+      tags: [StaffCalls]
+      summary: スタッフ呼び出しを取得する
+      operationId: listStaffCalls
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [open, resolved]
+            default: open
+      responses:
+        '200':
+          description: kitchen/admin向け呼び出し一覧
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StaffCallsResponse'
+        '401':
+          $ref: '#/components/responses/AuthenticationFailed'
+        '403':
+          $ref: '#/components/responses/PermissionDenied'
+    post:
+      tags: [StaffCalls]
+      summary: 客席からスタッフを呼び出す
+      operationId: createStaffCall
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateStaffCallRequest'
+      responses:
+        '201':
+          description: 新規呼び出し
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StaffCallReceipt'
+        '200':
+          description: 同じclientCallIdの再送。既存呼び出しを返す。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StaffCallReceipt'
+        '401':
+          $ref: '#/components/responses/AuthenticationFailed'
+        '403':
+          $ref: '#/components/responses/DeviceNotRegistered'
+        '409':
+          $ref: '#/components/responses/IdempotencyConflict'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /v1/staff-calls/{staffCallId}/resolve:
+    patch:
+      tags: [StaffCalls]
+      summary: スタッフ呼び出しを解決済みにする
+      operationId: resolveStaffCall
+      parameters:
+        - $ref: '#/components/parameters/StaffCallId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [expectedVersion]
+              properties:
+                expectedVersion:
+                  type: integer
+                  minimum: 1
+      responses:
+        '200':
+          description: 解決後の呼び出し
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StaffCall'
+        '401':
+          $ref: '#/components/responses/AuthenticationFailed'
+        '403':
+          $ref: '#/components/responses/PermissionDenied'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/VersionConflict'
+
+  /v1/admin/menu-items/{menuItemId}:
+    patch:
+      tags: [Admin, Menu]
+      summary: メニューの管理項目を更新する
+      description: 更新後の値は新規注文から適用し、既存注文スナップショットは変更しない。
+      operationId: updateMenuItem
+      parameters:
+        - $ref: '#/components/parameters/MenuItemId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateMenuItemRequest'
+      responses:
+        '200':
+          description: 更新後メニュー
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StaffMenuItem'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/AuthenticationFailed'
+        '403':
+          $ref: '#/components/responses/PermissionDenied'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/VersionConflict'
+
+  /v1/admin/menu-items/{menuItemId}/sold-out:
+    patch:
+      tags: [Admin, Menu]
+      summary: 売り切れ状態を更新する
+      description: 新規注文の受付可否だけを変更し、既存注文には影響させない。
+      operationId: updateSoldOut
+      parameters:
+        - $ref: '#/components/parameters/MenuItemId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateSoldOutRequest'
+      responses:
+        '200':
+          description: 更新後メニュー
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StaffMenuItem'
+        '401':
+          $ref: '#/components/responses/AuthenticationFailed'
+        '403':
+          $ref: '#/components/responses/PermissionDenied'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/VersionConflict'
+
+  /v1/admin/table-assignments/{tableId}:
+    put:
+      tags: [Admin, Device]
+      summary: 客席端末とテーブルの固定割り当てを更新する
+      description: 変更は新規注文から適用し、既存注文のtableNumberSnapshotは変更しない。
+      operationId: updateTableAssignment
+      parameters:
+        - $ref: '#/components/parameters/TableId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateTableAssignmentRequest'
+      responses:
+        '200':
+          description: 更新後割り当て
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TableAssignment'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/AuthenticationFailed'
+        '403':
+          $ref: '#/components/responses/PermissionDenied'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/AssignmentConflict'
+
+  /v1/snapshot:
+    get:
+      tags: [System, Events]
+      summary: イベント欠落時に権限別の最新状態を再取得する
+      operationId: getSnapshot
+      responses:
+        '200':
+          description: このスナップショットへ対応するlastEventIdを含む
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SnapshotResponse'
+        '401':
+          $ref: '#/components/responses/AuthenticationFailed'
+        '403':
+          $ref: '#/components/responses/DeviceNotRegistered'
+
+  /v1/events:
+    get:
+      tags: [Events]
+      summary: SSEで権限別イベントを受信する
+      description: |
+        Last-Event-IDまたはafterEventIdの次のeventIdから欠落分を昇順送信し、その後ライブ配信する。
+        SSE切断はREST注文の失敗を意味しない。履歴が利用不能なら410を返し、クライアントはsnapshotを取得する。
+      operationId: streamEvents
+      parameters:
+        - $ref: '#/components/parameters/LastEventIdHeader'
+        - $ref: '#/components/parameters/EventEpochHeader'
+        - $ref: '#/components/parameters/AfterEventId'
+      responses:
+        '200':
+          description: |
+            text/event-stream。各メッセージはid、event、dataを持つ。
+            dataはEventEnvelopeのJSON表現。
+          content:
+            text/event-stream:
+              schema:
+                type: string
+              example: |-
+                id: 1842
+                event: order.created
+                data: {"eventEpoch":"00000000-0000-4000-8000-000000000100","eventId":1842,"type":"order.created","aggregateId":"01912345-6789-4abc-8def-0123456789ab","occurredAtMs":1786280000000,"payload":{}}
+
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/AuthenticationFailed'
+        '403':
+          $ref: '#/components/responses/DeviceNotRegistered'
+        '410':
+          $ref: '#/components/responses/EventHistoryUnavailable'
+
+  /v1/events/replay:
+    get:
+      tags: [Events]
+      summary: 欠落イベントをJSONで再取得する
+      operationId: replayEvents
+      parameters:
+        - $ref: '#/components/parameters/EventEpochQueryRequired'
+        - $ref: '#/components/parameters/AfterEventIdRequired'
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+            default: 200
+      responses:
+        '200':
+          description: afterEventIdより大きいイベントを昇順で返す
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EventReplayResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/AuthenticationFailed'
+        '403':
+          $ref: '#/components/responses/DeviceNotRegistered'
+        '410':
+          $ref: '#/components/responses/EventHistoryUnavailable'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: random-device-token
+      description: ペアリング時に一度だけ発行される256-bit以上の端末トークン
+
+  parameters:
+    OrderId:
+      name: orderId
+      in: path
+      required: true
+      schema:
+        $ref: '#/components/schemas/Uuid'
+    OrderItemId:
+      name: orderItemId
+      in: path
+      required: true
+      schema:
+        type: integer
+        minimum: 1
+    StaffCallId:
+      name: staffCallId
+      in: path
+      required: true
+      schema:
+        $ref: '#/components/schemas/Uuid'
+    MenuItemId:
+      name: menuItemId
+      in: path
+      required: true
+      schema:
+        $ref: '#/components/schemas/OpaqueId'
+    TableId:
+      name: tableId
+      in: path
+      required: true
+      schema:
+        type: integer
+        minimum: 1
+    Cursor:
+      name: cursor
+      in: query
+      schema:
+        type: string
+        maxLength: 256
+    Limit:
+      name: limit
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 200
+        default: 50
+    LastEventIdHeader:
+      name: Last-Event-ID
+      in: header
+      required: false
+      schema:
+        type: string
+        pattern: '^[0-9]+$'
+    EventEpochHeader:
+      name: X-Event-Epoch
+      in: header
+      required: false
+      schema:
+        $ref: '#/components/schemas/Uuid'
+      description: Last-Event-IDを送る場合は同時に送る。初回接続では省略可能。
+    EventEpochQueryRequired:
+      name: eventEpoch
+      in: query
+      required: true
+      schema:
+        $ref: '#/components/schemas/Uuid'
+    AfterEventId:
+      name: afterEventId
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 0
+    AfterEventIdRequired:
+      name: afterEventId
+      in: query
+      required: true
+      schema:
+        type: integer
+        minimum: 0
+
+  responses:
+    BadRequest:
+      description: JSON形式、必須項目、またはパラメーターが不正
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    AuthenticationFailed:
+      description: 端末トークンがない、無効、または検証失敗
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          example:
+            type: about:blank
+            title: Authentication failed
+            status: 401
+            code: authentication_failed
+            requestId: req_01
+    DeviceNotRegistered:
+      description: 端末が未登録、失効、または無効
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          example:
+            type: about:blank
+            title: Device is not registered
+            status: 403
+            code: device_not_registered
+            requestId: req_01
+    PermissionDenied:
+      description: 認証済みだがroleに操作権限がない
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    NotFound:
+      description: 対象が存在しない、または権限上開示しない
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    IdempotencyConflict:
+      description: 同じクライアントIDに異なるfingerprintが登録済み
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          example:
+            type: about:blank
+            title: Idempotency conflict
+            status: 409
+            code: idempotency_conflict
+            requestId: req_01
+            details:
+              clientOrderId: 01912345-6789-4abc-8def-0123456789ab
+    VersionConflict:
+      description: expectedVersionが現在値と一致しない
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    AssignmentConflict:
+      description: 端末またはテーブルが別の割り当てに使用中
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    InvalidOrder:
+      description: |
+        注文内容を受け付けられない。
+        codeはfingerprint_mismatch、invalid_menu_item、item_sold_out、invalid_quantityのいずれか。
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    ServerBusy:
+      description: SQLite書き込みロックをbusy timeout内に取得できない
+      headers:
+        Retry-After:
+          schema:
+            type: integer
+            minimum: 1
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    EventHistoryUnavailable:
+      description: 指定eventId以降の完全な履歴を保持していない。snapshot再取得が必要。
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          example:
+            type: about:blank
+            title: Event history unavailable
+            status: 410
+            code: event_history_unavailable
+            requestId: req_01
+            details:
+              snapshotUrl: /v1/snapshot
+              currentEventEpoch: 00000000-0000-4000-8000-000000000100
+    InternalError:
+      description: 内部エラー。秘密情報やスタックトレースは返さない。
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+
+  schemas:
+    Uuid:
+      type: string
+      format: uuid
+      pattern: '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+    OpaqueId:
+      type: string
+      pattern: '^[A-Za-z0-9_-]{1,64}$'
+    TimestampMs:
+      type: integer
+      format: int64
+      minimum: 0
+      description: UTC Unix epoch milliseconds
+    EventId:
+      type: integer
+      format: int64
+      minimum: 0
+    Sha256Hex:
+      type: string
+      pattern: '^[0-9a-f]{64}$'
+    DeviceRole:
+      type: string
+      enum: [customer, kitchen, admin]
+    Problem:
+      type: object
+      additionalProperties: false
+      required: [type, title, status, code, requestId]
+      properties:
+        type:
+          type: string
+        title:
+          type: string
+        status:
+          type: integer
+          minimum: 400
+          maximum: 599
+        code:
+          type: string
+          enum:
+            - bad_request
+            - authentication_failed
+            - device_not_registered
+            - device_mismatch
+            - permission_denied
+            - not_found
+            - pairing_code_used
+            - pairing_code_expired
+            - assignment_conflict
+            - fingerprint_mismatch
+            - idempotency_conflict
+            - invalid_menu_item
+            - item_sold_out
+            - invalid_quantity
+            - version_conflict
+            - order_completed
+            - event_history_unavailable
+            - server_busy
+            - internal_error
+        detail:
+          type: string
+        requestId:
+          type: string
+          maxLength: 80
+        details:
+          type: object
+          additionalProperties: true
+
+    Health:
+      type: object
+      additionalProperties: false
+      required: [status, db, serverTimeMs, schemaVersion, eventEpoch]
+      properties:
+        status:
+          type: string
+          const: ready
+        db:
+          type: string
+          const: ready
+        serverTimeMs:
+          $ref: '#/components/schemas/TimestampMs'
+        schemaVersion:
+          type: integer
+          const: 1
+        eventEpoch:
+          $ref: '#/components/schemas/Uuid'
+
+    CreatePairingCodeRequest:
+      type: object
+      additionalProperties: false
+      required: [role]
+      properties:
+        role:
+          $ref: '#/components/schemas/DeviceRole'
+        tableId:
+          type: integer
+          minimum: 1
+          description: customerでは必須。kitchen/adminでは指定禁止。
+        ttlSeconds:
+          type: integer
+          minimum: 60
+          maximum: 1800
+          default: 600
+    PairingCode:
+      type: object
+      additionalProperties: false
+      required: [pairingCode, role, expiresAtMs]
+      properties:
+        pairingCode:
+          type: string
+          pattern: '^[A-Z0-9]{8,16}$'
+        role:
+          $ref: '#/components/schemas/DeviceRole'
+        tableId:
+          type: integer
+          minimum: 1
+        expiresAtMs:
+          $ref: '#/components/schemas/TimestampMs'
+    ClaimPairingRequest:
+      type: object
+      additionalProperties: false
+      required: [pairingCode, deviceId, displayName, appVersion]
+      properties:
+        pairingCode:
+          type: string
+          pattern: '^[A-Z0-9]{8,16}$'
+        deviceId:
+          $ref: '#/components/schemas/Uuid'
+        displayName:
+          type: string
+          minLength: 1
+          maxLength: 80
+        appVersion:
+          type: string
+          minLength: 1
+          maxLength: 40
+    ClaimPairingResponse:
+      type: object
+      additionalProperties: false
+      required: [deviceToken, config]
+      properties:
+        deviceToken:
+          type: string
+          minLength: 43
+          maxLength: 128
+          description: 256-bit以上のランダム値。平文はこの応答でだけ返す。
+        config:
+          $ref: '#/components/schemas/DeviceConfig'
+    DeviceConfig:
+      type: object
+      additionalProperties: false
+      required: [deviceId, role, displayName, status, configVersion]
+      properties:
+        deviceId:
+          $ref: '#/components/schemas/Uuid'
+        role:
+          $ref: '#/components/schemas/DeviceRole'
+        displayName:
+          type: string
+        status:
+          type: string
+          enum: [active, revoked]
+        tableId:
+          type: integer
+          minimum: 1
+          description: customerのサーバー側割り当て。customer以外では省略。
+        tableLabel:
+          type: string
+        configVersion:
+          type: integer
+          minimum: 1
+
+    Category:
+      type: object
+      additionalProperties: false
+      required: [categoryId, name, sortOrder]
+      properties:
+        categoryId:
+          $ref: '#/components/schemas/OpaqueId'
+        name:
+          type: string
+        sortOrder:
+          type: integer
+          minimum: 0
+    CustomerMenuItem:
+      type: object
+      additionalProperties: false
+      required: [menuItemId, categoryId, formalName, description, isSoldOut, sortOrder, version]
+      properties:
+        menuItemId:
+          $ref: '#/components/schemas/OpaqueId'
+        categoryId:
+          $ref: '#/components/schemas/OpaqueId'
+        formalName:
+          type: string
+        description:
+          type: string
+        isSoldOut:
+          type: boolean
+        sortOrder:
+          type: integer
+          minimum: 0
+        imageUri:
+          type: string
+        version:
+          type: integer
+          minimum: 1
+    StaffMenuItem:
+      type: object
+      additionalProperties: false
+      required:
+        - menuItemId
+        - categoryId
+        - formalName
+        - kitchenAlias
+        - description
+        - priceYen
+        - isSoldOut
+        - isActive
+        - sortOrder
+        - version
+      properties:
+        menuItemId:
+          $ref: '#/components/schemas/OpaqueId'
+        categoryId:
+          $ref: '#/components/schemas/OpaqueId'
+        formalName:
+          type: string
+        kitchenAlias:
+          type: string
+        description:
+          type: string
+        priceYen:
+          type: integer
+          minimum: 0
+        isSoldOut:
+          type: boolean
+        isActive:
+          type: boolean
+        sortOrder:
+          type: integer
+          minimum: 0
+        imageUri:
+          type: string
+        version:
+          type: integer
+          minimum: 1
+    CustomerMenuResponse:
+      type: object
+      additionalProperties: false
+      required: [audience, eventEpoch, lastEventId, categories, items]
+      properties:
+        audience:
+          type: string
+          const: customer
+        eventEpoch:
+          $ref: '#/components/schemas/Uuid'
+        lastEventId:
+          $ref: '#/components/schemas/EventId'
+        categories:
+          type: array
+          items:
+            $ref: '#/components/schemas/Category'
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/CustomerMenuItem'
+    StaffMenuResponse:
+      type: object
+      additionalProperties: false
+      required: [audience, eventEpoch, lastEventId, categories, items]
+      properties:
+        audience:
+          type: string
+          enum: [kitchen, admin]
+        eventEpoch:
+          $ref: '#/components/schemas/Uuid'
+        lastEventId:
+          $ref: '#/components/schemas/EventId'
+        categories:
+          type: array
+          items:
+            $ref: '#/components/schemas/Category'
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/StaffMenuItem'
+
+    CreateOrderItem:
+      type: object
+      additionalProperties: false
+      required: [menuItemId, quantity]
+      properties:
+        menuItemId:
+          $ref: '#/components/schemas/OpaqueId'
+        quantity:
+          type: integer
+          minimum: 1
+          maximum: 99
+    CreateOrderRequest:
+      type: object
+      additionalProperties: false
+      required: [schemaVersion, clientOrderId, deviceId, fingerprint, items]
+      properties:
+        schemaVersion:
+          type: integer
+          const: 1
+        clientOrderId:
+          $ref: '#/components/schemas/Uuid'
+        deviceId:
+          $ref: '#/components/schemas/Uuid'
+        clientCreatedAtMs:
+          $ref: '#/components/schemas/TimestampMs'
+        fingerprint:
+          allOf:
+            - $ref: '#/components/schemas/Sha256Hex'
+            - description: |
+                同じmenuItemIdを集約しASCII昇順に並べたitemsを使い、固定キー順・空白なしUTF-8 JSON
+                {"schemaVersion":1,"clientOrderId":"...","deviceId":"...","items":[...]}
+                のSHA-256を小文字hexで表す。サーバーが再計算する。
+        items:
+          type: array
+          minItems: 1
+          maxItems: 50
+          items:
+            $ref: '#/components/schemas/CreateOrderItem'
+      description: tableId、価格、正式名、合計は送信しない。
+    OrderReceipt:
+      type: object
+      additionalProperties: false
+      required: [orderId, clientOrderId, status, acceptedAtMs, idempotencyResult]
+      properties:
+        orderId:
+          $ref: '#/components/schemas/Uuid'
+        clientOrderId:
+          $ref: '#/components/schemas/Uuid'
+        status:
+          type: string
+          enum: [new, active, completed]
+        acceptedAtMs:
+          $ref: '#/components/schemas/TimestampMs'
+        idempotencyResult:
+          type: string
+          enum: [created, replayed]
+      description: customer向け。価格、合計、他テーブル情報を含めない。
+    StaffOrderItem:
+      type: object
+      additionalProperties: false
+      required:
+        - orderItemId
+        - formalNameSnapshot
+        - kitchenAliasSnapshot
+        - unitPriceYenSnapshot
+        - quantity
+        - lineTotalYen
+        - isServed
+      properties:
+        orderItemId:
+          type: integer
+          minimum: 1
+        menuItemId:
+          type: string
+        formalNameSnapshot:
+          type: string
+        kitchenAliasSnapshot:
+          type: string
+        unitPriceYenSnapshot:
+          type: integer
+          minimum: 0
+        quantity:
+          type: integer
+          minimum: 1
+          maximum: 99
+        lineTotalYen:
+          type: integer
+          minimum: 0
+        isServed:
+          type: boolean
+        servedAtMs:
+          $ref: '#/components/schemas/TimestampMs'
+    StaffOrder:
+      type: object
+      additionalProperties: false
+      required:
+        - orderId
+        - clientOrderId
+        - tableId
+        - tableNumberSnapshot
+        - status
+        - totalAmountYen
+        - acceptedAtMs
+        - version
+        - items
+      properties:
+        orderId:
+          $ref: '#/components/schemas/Uuid'
+        clientOrderId:
+          $ref: '#/components/schemas/Uuid'
+        tableId:
+          type: integer
+          minimum: 1
+        tableNumberSnapshot:
+          type: integer
+          minimum: 1
+        status:
+          type: string
+          enum: [new, active, completed]
+        totalAmountYen:
+          type: integer
+          minimum: 0
+        acceptedAtMs:
+          $ref: '#/components/schemas/TimestampMs'
+        completedAtMs:
+          $ref: '#/components/schemas/TimestampMs'
+        version:
+          type: integer
+          minimum: 1
+        items:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/StaffOrderItem'
+    ActiveOrdersResponse:
+      type: object
+      additionalProperties: false
+      required: [eventEpoch, lastEventId, orders]
+      properties:
+        eventEpoch:
+          $ref: '#/components/schemas/Uuid'
+        lastEventId:
+          $ref: '#/components/schemas/EventId'
+        orders:
+          type: array
+          items:
+            $ref: '#/components/schemas/StaffOrder'
+    OrderHistoryResponse:
+      type: object
+      additionalProperties: false
+      required: [orders]
+      properties:
+        orders:
+          type: array
+          items:
+            $ref: '#/components/schemas/StaffOrder'
+        nextCursor:
+          type: string
+    UpdateServedRequest:
+      type: object
+      additionalProperties: false
+      required: [isServed, expectedOrderVersion]
+      properties:
+        isServed:
+          type: boolean
+        expectedOrderVersion:
+          type: integer
+          minimum: 1
+
+    CreateStaffCallRequest:
+      type: object
+      additionalProperties: false
+      required: [clientCallId, deviceId, callType]
+      properties:
+        clientCallId:
+          $ref: '#/components/schemas/Uuid'
+        deviceId:
+          $ref: '#/components/schemas/Uuid'
+        callType:
+          type: string
+          const: staff
+      description: tableIdは送信せず、サーバー側端末割り当てから決定する。
+    StaffCallReceipt:
+      type: object
+      additionalProperties: false
+      required: [staffCallId, clientCallId, status, createdAtMs]
+      properties:
+        staffCallId:
+          $ref: '#/components/schemas/Uuid'
+        clientCallId:
+          $ref: '#/components/schemas/Uuid'
+        status:
+          type: string
+          enum: [open, resolved]
+        createdAtMs:
+          $ref: '#/components/schemas/TimestampMs'
+    StaffCall:
+      type: object
+      additionalProperties: false
+      required:
+        - staffCallId
+        - clientCallId
+        - tableId
+        - tableNumberSnapshot
+        - callType
+        - status
+        - createdAtMs
+        - version
+      properties:
+        staffCallId:
+          $ref: '#/components/schemas/Uuid'
+        clientCallId:
+          $ref: '#/components/schemas/Uuid'
+        tableId:
+          type: integer
+          minimum: 1
+        tableNumberSnapshot:
+          type: integer
+          minimum: 1
+        callType:
+          type: string
+          const: staff
+        status:
+          type: string
+          enum: [open, resolved]
+        createdAtMs:
+          $ref: '#/components/schemas/TimestampMs'
+        resolvedAtMs:
+          $ref: '#/components/schemas/TimestampMs'
+        version:
+          type: integer
+          minimum: 1
+    StaffCallsResponse:
+      type: object
+      additionalProperties: false
+      required: [eventEpoch, lastEventId, calls]
+      properties:
+        eventEpoch:
+          $ref: '#/components/schemas/Uuid'
+        lastEventId:
+          $ref: '#/components/schemas/EventId'
+        calls:
+          type: array
+          items:
+            $ref: '#/components/schemas/StaffCall'
+
+    UpdateMenuItemRequest:
+      type: object
+      additionalProperties: false
+      minProperties: 2
+      required: [expectedVersion]
+      properties:
+        expectedVersion:
+          type: integer
+          minimum: 1
+        categoryId:
+          $ref: '#/components/schemas/OpaqueId'
+        formalName:
+          type: string
+          minLength: 1
+          maxLength: 120
+        kitchenAlias:
+          type: string
+          minLength: 1
+          maxLength: 40
+        description:
+          type: string
+          maxLength: 1000
+        priceYen:
+          type: integer
+          minimum: 0
+          maximum: 10000000
+        sortOrder:
+          type: integer
+          minimum: 0
+        isActive:
+          type: boolean
+    UpdateSoldOutRequest:
+      type: object
+      additionalProperties: false
+      required: [isSoldOut, expectedVersion]
+      properties:
+        isSoldOut:
+          type: boolean
+        expectedVersion:
+          type: integer
+          minimum: 1
+    UpdateTableAssignmentRequest:
+      type: object
+      additionalProperties: false
+      required: [customerDeviceId, expectedVersion]
+      properties:
+        customerDeviceId:
+          $ref: '#/components/schemas/Uuid'
+        expectedVersion:
+          type: integer
+          minimum: 1
+    TableAssignment:
+      type: object
+      additionalProperties: false
+      required: [tableId, tableLabel, customerDeviceId, version]
+      properties:
+        tableId:
+          type: integer
+          minimum: 1
+        tableLabel:
+          type: string
+        customerDeviceId:
+          $ref: '#/components/schemas/Uuid'
+        version:
+          type: integer
+          minimum: 1
+
+    EventEnvelope:
+      type: object
+      additionalProperties: false
+      required: [eventEpoch, eventId, type, aggregateId, occurredAtMs, payload]
+      properties:
+        eventEpoch:
+          $ref: '#/components/schemas/Uuid'
+        eventId:
+          $ref: '#/components/schemas/EventId'
+        type:
+          type: string
+          enum:
+            - order.created
+            - order.updated
+            - order.completed
+            - menu.updated
+            - menu.sold_out_updated
+            - staff_call.created
+            - staff_call.resolved
+            - device.paired
+            - device.revoked
+            - table.assignment_updated
+        aggregateId:
+          type: string
+        occurredAtMs:
+          $ref: '#/components/schemas/TimestampMs'
+        payload:
+          type: object
+          additionalProperties: true
+    EventReplayResponse:
+      type: object
+      additionalProperties: false
+      required: [eventEpoch, events, lastEventId, hasMore]
+      properties:
+        eventEpoch:
+          $ref: '#/components/schemas/Uuid'
+        events:
+          type: array
+          items:
+            $ref: '#/components/schemas/EventEnvelope'
+        lastEventId:
+          $ref: '#/components/schemas/EventId'
+        hasMore:
+          type: boolean
+    SnapshotResponse:
+      type: object
+      additionalProperties: false
+      required: [eventEpoch, lastEventId, device, menu]
+      properties:
+        eventEpoch:
+          $ref: '#/components/schemas/Uuid'
+        lastEventId:
+          $ref: '#/components/schemas/EventId'
+        device:
+          $ref: '#/components/schemas/DeviceConfig'
+        menu:
+          oneOf:
+            - $ref: '#/components/schemas/CustomerMenuResponse'
+            - $ref: '#/components/schemas/StaffMenuResponse'
+        activeOrders:
+          type: array
+          description: kitchen/adminだけに含める。
+          items:
+            $ref: '#/components/schemas/StaffOrder'
+        openStaffCalls:
+          type: array
+          description: kitchen/adminだけに含める。
+          items:
+            $ref: '#/components/schemas/StaffCall'
