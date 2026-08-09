@@ -39,11 +39,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/Health'
         '503':
-          description: プロセスは応答したがDBが受付不能
-          content:
-            application/problem+json:
-              schema:
-                $ref: '#/components/schemas/Problem'
+          $ref: '#/components/responses/ReadOnlyServiceUnavailable'
 
   /v1/admin/pairing-codes:
     post:
@@ -122,17 +118,24 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/DeviceConfig'
+                oneOf:
+                  - $ref: '#/components/schemas/CustomerDeviceConfig'
+                  - $ref: '#/components/schemas/KitchenDeviceConfig'
+                  - $ref: '#/components/schemas/AdminDeviceConfig'
+                discriminator:
+                  propertyName: role
         '401':
-          $ref: '#/components/responses/AuthenticationFailed'
+          $ref: '#/components/responses/ReadOnlyAuthenticationFailed'
         '403':
-          $ref: '#/components/responses/DeviceNotRegistered'
+          $ref: '#/components/responses/ReadOnlyAuthorizationFailed'
+        '500':
+          $ref: '#/components/responses/ReadOnlyInternalError'
 
   /v1/menu:
     get:
       tags: [Menu]
       summary: 認証端末の役割に応じた現在メニューを取得する
-      description: customerにはpriceYenとkitchenAliasを返さない。
+      description: customerにはpriceYenとkitchenAliasを返さず、kitchenにもpriceYenを返さない。
       operationId: getMenu
       responses:
         '200':
@@ -142,11 +145,16 @@ paths:
               schema:
                 oneOf:
                   - $ref: '#/components/schemas/CustomerMenuResponse'
-                  - $ref: '#/components/schemas/StaffMenuResponse'
+                  - $ref: '#/components/schemas/KitchenMenuResponse'
+                  - $ref: '#/components/schemas/AdminMenuResponse'
+                discriminator:
+                  propertyName: audience
         '401':
-          $ref: '#/components/responses/AuthenticationFailed'
+          $ref: '#/components/responses/ReadOnlyAuthenticationFailed'
         '403':
-          $ref: '#/components/responses/DeviceNotRegistered'
+          $ref: '#/components/responses/ReadOnlyAuthorizationFailed'
+        '500':
+          $ref: '#/components/responses/ReadOnlyInternalError'
 
   /v1/orders:
     post:
@@ -414,7 +422,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/StaffMenuItem'
+                $ref: '#/components/schemas/AdminMenuItem'
         '400':
           $ref: '#/components/responses/BadRequest'
         '401':
@@ -446,7 +454,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/StaffMenuItem'
+                $ref: '#/components/schemas/AdminMenuItem'
         '401':
           $ref: '#/components/responses/AuthenticationFailed'
         '403':
@@ -662,6 +670,35 @@ components:
         minimum: 0
 
   responses:
+    ReadOnlyAuthenticationFailed:
+      description: 端末トークンがない、形式不正、未登録、または失効済み
+      headers:
+        WWW-Authenticate:
+          schema:
+            type: string
+            const: Bearer
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ReadOnlyErrorResponse'
+    ReadOnlyAuthorizationFailed:
+      description: 認証済み端末のroleまたはサーバー側端末設定では実行できない
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ReadOnlyErrorResponse'
+    ReadOnlyInternalError:
+      description: 内部エラー。秘密情報、SQL、cause、stack traceは返さない。
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ReadOnlyErrorResponse'
+    ReadOnlyServiceUnavailable:
+      description: プロセスは応答したがDBが受付不能
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ReadOnlyErrorResponse'
     BadRequest:
       description: JSON形式、必須項目、またはパラメーターが不正
       content:
@@ -852,6 +889,33 @@ components:
           const: 1
         eventEpoch:
           $ref: '#/components/schemas/Uuid'
+    ReadOnlyErrorDetail:
+      type: object
+      additionalProperties: false
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          enum:
+            - AUTHENTICATION_FAILED
+            - AUTHORIZATION_FAILED
+            - BAD_REQUEST
+            - NOT_FOUND
+            - METHOD_NOT_ALLOWED
+            - URI_TOO_LONG
+            - INTERNAL_ERROR
+            - SERVICE_UNAVAILABLE
+        message:
+          type: string
+    ReadOnlyErrorResponse:
+      type: object
+      additionalProperties: false
+      required: [error, requestId]
+      properties:
+        error:
+          $ref: '#/components/schemas/ReadOnlyErrorDetail'
+        requestId:
+          $ref: '#/components/schemas/Uuid'
 
     CreatePairingCodeRequest:
       type: object
@@ -915,28 +979,99 @@ components:
         config:
           $ref: '#/components/schemas/DeviceConfig'
     DeviceConfig:
+      oneOf:
+        - $ref: '#/components/schemas/CustomerDeviceConfig'
+        - $ref: '#/components/schemas/KitchenDeviceConfig'
+        - $ref: '#/components/schemas/AdminDeviceConfig'
+      discriminator:
+        propertyName: role
+        mapping:
+          customer: '#/components/schemas/CustomerDeviceConfig'
+          kitchen: '#/components/schemas/KitchenDeviceConfig'
+          admin: '#/components/schemas/AdminDeviceConfig'
+    CustomerDeviceConfig:
       type: object
       additionalProperties: false
-      required: [deviceId, role, displayName, status, configVersion]
+      required:
+        - deviceId
+        - role
+        - deviceLabel
+        - status
+        - configVersion
+        - eventEpoch
+        - lastEventId
+        - tableId
+        - tableLabel
+        - tableIsActive
       properties:
         deviceId:
           $ref: '#/components/schemas/Uuid'
         role:
-          $ref: '#/components/schemas/DeviceRole'
-        displayName:
+          type: string
+          const: customer
+        deviceLabel:
           type: string
         status:
           type: string
-          enum: [active, revoked]
-        tableId:
-          type: integer
-          minimum: 1
-          description: customerのサーバー側割り当て。customer以外では省略。
-        tableLabel:
-          type: string
+          const: active
         configVersion:
           type: integer
           minimum: 1
+        eventEpoch:
+          $ref: '#/components/schemas/Uuid'
+        lastEventId:
+          $ref: '#/components/schemas/EventId'
+        tableId:
+          type: integer
+          minimum: 1
+        tableLabel:
+          type: string
+        tableIsActive:
+          type: boolean
+    KitchenDeviceConfig:
+      type: object
+      additionalProperties: false
+      required: [deviceId, role, deviceLabel, status, configVersion, eventEpoch, lastEventId]
+      properties:
+        deviceId:
+          $ref: '#/components/schemas/Uuid'
+        role:
+          type: string
+          const: kitchen
+        deviceLabel:
+          type: string
+        status:
+          type: string
+          const: active
+        configVersion:
+          type: integer
+          minimum: 1
+        eventEpoch:
+          $ref: '#/components/schemas/Uuid'
+        lastEventId:
+          $ref: '#/components/schemas/EventId'
+    AdminDeviceConfig:
+      type: object
+      additionalProperties: false
+      required: [deviceId, role, deviceLabel, status, configVersion, eventEpoch, lastEventId]
+      properties:
+        deviceId:
+          $ref: '#/components/schemas/Uuid'
+        role:
+          type: string
+          const: admin
+        deviceLabel:
+          type: string
+        status:
+          type: string
+          const: active
+        configVersion:
+          type: integer
+          minimum: 1
+        eventEpoch:
+          $ref: '#/components/schemas/Uuid'
+        lastEventId:
+          $ref: '#/components/schemas/EventId'
 
     Category:
       type: object
@@ -950,6 +1085,25 @@ components:
         sortOrder:
           type: integer
           minimum: 0
+    AdminCategory:
+      type: object
+      additionalProperties: false
+      required: [categoryId, name, sortOrder, isVisible, version, updatedAtMs]
+      properties:
+        categoryId:
+          $ref: '#/components/schemas/OpaqueId'
+        name:
+          type: string
+        sortOrder:
+          type: integer
+          minimum: 0
+        isVisible:
+          type: boolean
+        version:
+          type: integer
+          minimum: 1
+        updatedAtMs:
+          $ref: '#/components/schemas/TimestampMs'
     CustomerMenuItem:
       type: object
       additionalProperties: false
@@ -973,7 +1127,35 @@ components:
         version:
           type: integer
           minimum: 1
-    StaffMenuItem:
+    KitchenMenuItem:
+      type: object
+      additionalProperties: false
+      required:
+        - menuItemId
+        - categoryId
+        - formalName
+        - kitchenAlias
+        - isSoldOut
+        - sortOrder
+        - version
+      properties:
+        menuItemId:
+          $ref: '#/components/schemas/OpaqueId'
+        categoryId:
+          $ref: '#/components/schemas/OpaqueId'
+        formalName:
+          type: string
+        kitchenAlias:
+          type: string
+        isSoldOut:
+          type: boolean
+        sortOrder:
+          type: integer
+          minimum: 0
+        version:
+          type: integer
+          minimum: 1
+    AdminMenuItem:
       type: object
       additionalProperties: false
       required:
@@ -987,6 +1169,7 @@ components:
         - isActive
         - sortOrder
         - version
+        - updatedAtMs
       properties:
         menuItemId:
           $ref: '#/components/schemas/OpaqueId'
@@ -1013,6 +1196,8 @@ components:
         version:
           type: integer
           minimum: 1
+        updatedAtMs:
+          $ref: '#/components/schemas/TimestampMs'
     CustomerMenuResponse:
       type: object
       additionalProperties: false
@@ -1033,14 +1218,14 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/CustomerMenuItem'
-    StaffMenuResponse:
+    KitchenMenuResponse:
       type: object
       additionalProperties: false
       required: [audience, eventEpoch, lastEventId, categories, items]
       properties:
         audience:
           type: string
-          enum: [kitchen, admin]
+          const: kitchen
         eventEpoch:
           $ref: '#/components/schemas/Uuid'
         lastEventId:
@@ -1052,7 +1237,27 @@ components:
         items:
           type: array
           items:
-            $ref: '#/components/schemas/StaffMenuItem'
+            $ref: '#/components/schemas/KitchenMenuItem'
+    AdminMenuResponse:
+      type: object
+      additionalProperties: false
+      required: [audience, eventEpoch, lastEventId, categories, items]
+      properties:
+        audience:
+          type: string
+          const: admin
+        eventEpoch:
+          $ref: '#/components/schemas/Uuid'
+        lastEventId:
+          $ref: '#/components/schemas/EventId'
+        categories:
+          type: array
+          items:
+            $ref: '#/components/schemas/AdminCategory'
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/AdminMenuItem'
 
     CreateOrderItem:
       type: object
@@ -1420,7 +1625,10 @@ components:
         menu:
           oneOf:
             - $ref: '#/components/schemas/CustomerMenuResponse'
-            - $ref: '#/components/schemas/StaffMenuResponse'
+            - $ref: '#/components/schemas/KitchenMenuResponse'
+            - $ref: '#/components/schemas/AdminMenuResponse'
+          discriminator:
+            propertyName: audience
         activeOrders:
           type: array
           description: kitchen/adminだけに含める。
