@@ -95,3 +95,35 @@ fingerprintはクライアント値を使用せず、次の固定キー順・空
 repositoryへ渡したDB接続の所有権は呼び出し側にあります。`repository.close()`はrepositoryの再利用を禁止しますが、DB接続は閉じません。DB接続は`initializeDatabase()`が返す`close()`で呼び出し側が閉じます。
 
 HTTP、RESTルート、SSE、認証ミドルウェア、IndexedDBは未実装です。自動テストでは2つのworker threadと2つのSQLite接続から同じ実ファイルDBへ同時注文を送り、最終的に`created` 1件と`replayed` 1件へ収束することを確認しています。本番端末・長時間・高負荷条件の並列負荷試験は未実施です。
+
+## 端末トークン認証層
+
+`src/auth/device-auth.mjs`は、端末だけが保持する生トークンからDB上の端末principalを取得するread-only認証層です。生トークンは256-bitの乱数をpaddingなしbase64urlで表したcanonicalな43文字とし、前後空白を自動除去しません。
+
+```js
+import {
+  authorizeDeviceRole,
+  createDeviceAuthenticator,
+} from './src/auth/device-auth.mjs';
+
+const authenticator = createDeviceAuthenticator({ database: connection.database });
+const principal = authenticator.authenticateDeviceToken(rawToken);
+authorizeDeviceRole(principal, ['customer']);
+```
+
+DBには生トークンを保存せず、canonical base64url文字列のUTF-8バイト列をSHA-256で計算した小文字hexだけを`devices.token_hash`へ保存します。認証層は入力トークンを同じ方法でhash化し、prepared statementで検索します。principalの`deviceId`、`role`、`deviceLabel`、割り当て済みの場合の`tableId`はすべてDBから生成され、凍結されます。生トークンとtoken hashはprincipal、エラー、ログへ含めません。
+
+roleは`customer`、`kitchen`、`admin`の完全一致で判定します。暗黙の階層や継承はなく、adminであっても`['customer']`の操作は許可されません。各操作がallow-listを明示します。
+
+認証成功・失敗のどちらでも`last_seen_at_ms`や更新日時を書き換えません。lastSeen更新、監査ログ、token発行・ローテーション・失効API、ペアリングコード消費は別機能です。失効済み端末やhash変更前の旧トークンは、未登録トークンと同じ`AUTHENTICATION_FAILED`として扱います。
+
+注文作成への接続境界は次のとおりです。
+
+1. 将来のHTTP層がAuthorizationヘッダーから生トークンを取り出す
+2. 認証層がprincipalを生成し、`authorizeDeviceRole(principal, ['customer'])`を実行する
+3. `principal.deviceId`だけを注文repositoryの`authenticatedDeviceId`へ渡す
+4. リクエストbodyのdeviceId、role、tableId、fingerprintは受け付けない
+
+`authenticator.close()`はauthenticatorの再利用を禁止しますが、呼び出し側所有のDB接続は閉じません。
+
+Authorizationヘッダー解析、HTTP認証ミドルウェア、HTTPS証明書配布、ペアリング、token発行・更新は未実装です。
