@@ -127,3 +127,33 @@ roleは`customer`、`kitchen`、`admin`の完全一致で判定します。暗�
 `authenticator.close()`はauthenticatorの再利用を禁止しますが、呼び出し側所有のDB接続は閉じません。
 
 Authorizationヘッダー解析、HTTP認証ミドルウェア、HTTPS証明書配布、ペアリング、token発行・更新は未実装です。
+
+## 端末設定・メニュー読み取り層
+
+`src/catalog/catalog-repository.mjs`は、端末トークン認証層が発行したprincipalだけを受け取り、最新の端末設定とrole別メニューをSQLiteから読み取ります。通常のオブジェクトで偽造したprincipal、失効後の端末、無効な客席割り当ては拒否します。principal内の古いroleやtableIdを正本にせず、`principal.deviceId`を検索キーとして現在のDB状態を再取得します。
+
+authenticatorとcatalog repositoryは、同じローカルサーバープロセスの同じ正本DBに対して生成してください。現在のprincipal発行印はDB識別子までは保持しないため、複数の異なる店舗DBを一つのプロセスで扱う構成は未対応です。
+
+```js
+import { createCatalogRepository } from './src/catalog/catalog-repository.mjs';
+
+const catalog = createCatalogRepository({ database: connection.database });
+const settings = catalog.getDeviceSettings(principal);
+const menu = catalog.getMenuForPrincipal(principal);
+```
+
+公開範囲はroleごとに分離します。
+
+- `customer`: 表示中カテゴリと表示中商品、正式名、説明、売り切れ状態、表示順を返す。価格、厨房通称、非表示項目は返さない
+- `kitchen`: 表示中カテゴリと表示中商品、正式名、厨房通称、売り切れ状態、表示順を返す。価格と非表示項目は返さない
+- `admin`: 全カテゴリと全商品、正式名、厨房通称、価格、売り切れ、表示状態、表示順、versionを返す
+
+売り切れ商品は`customer`と`kitchen`の一覧にも`isSoldOut: true`で残します。ただし表示は注文可否の正本ではなく、新規注文時には注文repositoryが現在の売り切れ状態を再検証して拒否します。
+
+端末・テーブル、カテゴリ、商品、event cursorは短いread transactionで取得します。カテゴリと商品は同じDBスナップショットに属し、結果は安定した明示順で並べ、返却オブジェクトと配列を再帰的に凍結します。読み取りによって`last_seen_at_ms`、更新日時、`event_log`、その他のDB行は変更しません。
+
+catalog repositoryへ渡したDB接続の所有権は呼び出し側にあります。`catalog.close()`はrepositoryの再利用を禁止しますが、DB接続は閉じません。
+
+この返却値はHTTPへ公開する前のrole別内部DTOです。現行OpenAPIの`StaffMenuResponse`はkitchenとadminを共通形状にして価格を必須としており、価格を不要とするkitchen用DTOとは一致しません。HTTP実装前に、OpenAPIをkitchen用とadmin用へ分割し、`DeviceConfig`の表示名・設定revision表現も内部DTOと整合させる必要があります。
+
+HTTPルート、レスポンス変換、キャッシュ制御、ETag、SSE更新通知は未実装です。
