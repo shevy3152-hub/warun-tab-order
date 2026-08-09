@@ -153,9 +153,9 @@ paths:
       tags: [Orders]
       summary: 客席端末から注文を送信する
       description: |
-        customerだけが実行できる。tableIdやtableNumberは受け付けない。
-        サーバーはBearer token、deviceId、サーバー側table assignmentからテーブルを決定する。
-        サーバーはfingerprintを再計算し、価格・売り切れをトランザクション内で検証する。
+        customerだけが実行できる。deviceId、role、tableId、tableNumber、fingerprintは受け付けない。
+        サーバーはBearer tokenから得た認証済みdeviceIdとサーバー側table assignmentからテーブルを決定する。
+        サーバーは認証済みdeviceIdと注文品目からfingerprintを計算し、価格・売り切れをトランザクション内で検証する。
       operationId: createOrder
       requestBody:
         required: true
@@ -176,7 +176,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/OrderReceipt'
         '200':
-          description: 同じclientOrderIdと同じfingerprintの再送。既存注文を返した。
+          description: 同じclientOrderIdと同じサーバー計算fingerprintの再送。既存注文を返した。
           headers:
             Idempotency-Result:
               schema:
@@ -191,7 +191,7 @@ paths:
         '401':
           $ref: '#/components/responses/AuthenticationFailed'
         '403':
-          description: 未登録・失効端末、customer以外、またはtokenとdeviceId不一致
+          description: 未登録・失効端末、またはcustomer以外
           content:
             application/problem+json:
               schema:
@@ -733,7 +733,7 @@ components:
     InvalidOrder:
       description: |
         注文内容を受け付けられない。
-        codeはfingerprint_mismatch、invalid_menu_item、item_sold_out、invalid_quantityのいずれか。
+        codeはinvalid_menu_item、item_sold_out、invalid_quantityのいずれか。
       content:
         application/problem+json:
           schema:
@@ -788,9 +788,6 @@ components:
       type: integer
       format: int64
       minimum: 0
-    Sha256Hex:
-      type: string
-      pattern: '^[0-9a-f]{64}$'
     DeviceRole:
       type: string
       enum: [customer, kitchen, admin]
@@ -819,7 +816,6 @@ components:
             - pairing_code_used
             - pairing_code_expired
             - assignment_conflict
-            - fingerprint_mismatch
             - idempotency_conflict
             - invalid_menu_item
             - item_sold_out
@@ -1072,31 +1068,26 @@ components:
     CreateOrderRequest:
       type: object
       additionalProperties: false
-      required: [schemaVersion, clientOrderId, deviceId, fingerprint, items]
+      required: [schemaVersion, clientOrderId, items]
       properties:
         schemaVersion:
           type: integer
           const: 1
         clientOrderId:
           $ref: '#/components/schemas/Uuid'
-        deviceId:
-          $ref: '#/components/schemas/Uuid'
         clientCreatedAtMs:
           $ref: '#/components/schemas/TimestampMs'
-        fingerprint:
-          allOf:
-            - $ref: '#/components/schemas/Sha256Hex'
-            - description: |
-                同じmenuItemIdを集約しASCII昇順に並べたitemsを使い、固定キー順・空白なしUTF-8 JSON
-                {"schemaVersion":1,"clientOrderId":"...","deviceId":"...","items":[...]}
-                のSHA-256を小文字hexで表す。サーバーが再計算する。
         items:
           type: array
           minItems: 1
           maxItems: 50
           items:
             $ref: '#/components/schemas/CreateOrderItem'
-      description: tableId、価格、正式名、合計は送信しない。
+      description: |
+        deviceId、role、tableId、価格、正式名、合計、fingerprintは送信しない。
+        サーバーは認証済みdeviceIdとmenuItemId順に安定ソートしたitemsから、固定キー順・空白なしUTF-8 JSON
+        {"fingerprintVersion":1,"authenticatedDeviceId":"<device UUID>","items":[{"menuItemId":"<id>","quantity":1}]}
+        を作り、SHA-256を小文字hexで計算する。保存済みfingerprintは内部監査・競合判定専用で、customer向けレスポンスには含めない。
     OrderReceipt:
       type: object
       additionalProperties: false

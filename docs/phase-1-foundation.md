@@ -162,20 +162,22 @@ data: {"eventEpoch":"00000000-0000-4000-8000-000000000100","eventId":1842,"type"
 1. 客席端末は注文確定時にUUID v4形式の `clientOrderId` を一度だけ生成する。
 2. 段階2では送信前に注文をIndexedDBへ保存する。
 3. タイムアウト、再起動、再接続後の再送でも同じ `clientOrderId` を使用する。
-4. 同じmenuItemIdは一行へ集約し、menuItemIdのASCII昇順に並べる。
-5. 次の固定キー順・空白なしUTF-8 JSONをfingerprint入力とする。価格とテーブル番号は含めない。
+4. クライアントはfingerprintやdeviceIdを注文bodyへ含めない。認証済みprincipalのdeviceIdだけをサーバーが使用する。
+5. サーバーは同じmenuItemIdが重複していないことを検証し、menuItemIdのASCII昇順に安定ソートする。
+6. 次の固定キー順・空白なしUTF-8 JSONをfingerprint入力とする。
 
 ```json
-{"schemaVersion":1,"clientOrderId":"<uuid>","deviceId":"<uuid>","items":[{"menuItemId":"<id>","quantity":1}]}
+{"fingerprintVersion":1,"authenticatedDeviceId":"<device UUID>","items":[{"menuItemId":"<id>","quantity":1}]}
 ```
 
-6. fingerprintは上記バイト列のSHA-256を小文字64桁hexで表す。クライアントは送信し、サーバーも同じ規則で再計算する。クライアント値と再計算値が異なる場合は422 `fingerprint_mismatch`。
+7. サーバーは上記UTF-8バイト列のSHA-256を小文字64桁hexで計算する。価格、商品名、厨房通称、テーブル番号、売り切れ、作成時刻、eventId、自動生成IDは含めない。
+8. fingerprintはDB内部の監査・競合判定にだけ保存し、customer向けレスポンスへ含めない。再送時もサーバーが同じ方法で再計算する。
 
 ### サーバー処理
 
-1. 認証、role、deviceId一致を確認する。
+1. 端末トークンからprincipalを認証し、customer roleを確認する。注文bodyのdeviceId、role、tableIdは使用しない。
 2. `BEGIN IMMEDIATE` を開始し、`client_order_id` を検索する。
-3. 登録済みで保存済みfingerprintが同じなら、既存注文の成功レスポンスを `replayed` として返す。明細を追加しない。
+3. 登録済みで保存済みfingerprintと認証済みdeviceIdが同じなら、既存注文の成功レスポンスを `replayed` として返す。明細とイベントを追加せず、現在の価格・売り切れ・割り当てを再評価しない。
 4. 登録済みでfingerprintが異なるなら、既存注文を変更せず409 `idempotency_conflict` を返す。
 5. 未登録ならサーバー側割り当てを読み、商品、販売中、売り切れ、数量を検証する。
 6. 現在の正式品名、厨房通称、整数円単価、テーブル番号をスナップショットし、合計をサーバー計算する。
