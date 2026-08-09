@@ -263,6 +263,22 @@ export function createCatalogRepository({ database } = {}) {
     return device;
   }
 
+  function loadEventCursor() {
+    const cursor = statements.findEventCursor.get();
+    if (
+      !cursor
+      || typeof cursor.event_epoch !== 'string'
+      || !Number.isSafeInteger(cursor.last_event_id)
+      || cursor.last_event_id < 0
+    ) {
+      throw repositoryError(
+        CATALOG_ERROR_CODES.DATABASE_FAILURE,
+        'The current catalog event cursor is unavailable.',
+      );
+    }
+    return cursor;
+  }
+
   function ensureOpen() {
     if (closed) {
       throw repositoryError(
@@ -307,6 +323,7 @@ export function createCatalogRepository({ database } = {}) {
 
     return runReadTransaction(() => {
       const device = loadCurrentDevice(principal);
+      const cursor = loadEventCursor();
       const table = device.assignedTable;
       const configVersion = Math.max(
         1,
@@ -319,6 +336,8 @@ export function createCatalogRepository({ database } = {}) {
         deviceLabel: device.display_name,
         status: device.status,
         configVersion,
+        eventEpoch: cursor.event_epoch,
+        lastEventId: cursor.last_event_id,
       };
 
       if (device.role === 'customer') {
@@ -337,13 +356,7 @@ export function createCatalogRepository({ database } = {}) {
 
     return runReadTransaction(() => {
       const device = loadCurrentDevice(principal);
-      const cursor = statements.findEventCursor.get();
-      if (!cursor || typeof cursor.event_epoch !== 'string') {
-        throw repositoryError(
-          CATALOG_ERROR_CODES.DATABASE_FAILURE,
-          'The current catalog event cursor is unavailable.',
-        );
-      }
+      const cursor = loadEventCursor();
 
       let categoryRows;
       let itemRows;

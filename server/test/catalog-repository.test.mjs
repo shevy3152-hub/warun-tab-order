@@ -343,6 +343,8 @@ test('customer principal retrieves current device settings', async () => {
     assert.equal(settings.deviceLabel, '客席端末1');
     assert.equal(settings.status, 'active');
     assert.ok(Number.isSafeInteger(settings.configVersion) && settings.configVersion >= 1);
+    assert.equal(typeof settings.eventEpoch, 'string');
+    assert.ok(Number.isSafeInteger(settings.lastEventId) && settings.lastEventId >= 0);
   });
 });
 
@@ -351,7 +353,15 @@ test('kitchen principal retrieves current device settings', async () => {
     const settings = catalog.getDeviceSettings(authenticate(authenticator, KITCHEN_TOKEN));
     assert.deepEqual(
       Object.keys(settings).sort(),
-      ['configVersion', 'deviceId', 'deviceLabel', 'role', 'status'],
+      [
+        'configVersion',
+        'deviceId',
+        'deviceLabel',
+        'eventEpoch',
+        'lastEventId',
+        'role',
+        'status',
+      ],
     );
     assert.equal(settings.role, 'kitchen');
   });

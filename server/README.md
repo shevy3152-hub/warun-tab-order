@@ -1,6 +1,6 @@
 # SQLite foundation
 
-このディレクトリは、店舗内ローカルサーバー向けSQLite基盤の最小実装です。現段階ではHTTPサーバー、REST API、SSE、認証処理は実装していません。
+このディレクトリは、店舗内ローカルサーバー向けSQLite基盤の最小実装です。端末トークン認証、role別の読み取り、試験用read-only HTTP基盤までを含みます。注文POST、SSE、管理更新、ペアリングなどの書き込みREST APIは実装していません。
 
 ## 実行条件
 
@@ -94,7 +94,7 @@ fingerprintはクライアント値を使用せず、次の固定キー順・空
 
 repositoryへ渡したDB接続の所有権は呼び出し側にあります。`repository.close()`はrepositoryの再利用を禁止しますが、DB接続は閉じません。DB接続は`initializeDatabase()`が返す`close()`で呼び出し側が閉じます。
 
-HTTP、RESTルート、SSE、認証ミドルウェア、IndexedDBは未実装です。自動テストでは2つのworker threadと2つのSQLite接続から同じ実ファイルDBへ同時注文を送り、最終的に`created` 1件と`replayed` 1件へ収束することを確認しています。本番端末・長時間・高負荷条件の並列負荷試験は未実施です。
+注文POSTのHTTPルート、SSE、IndexedDBは未実装です。自動テストでは2つのworker threadと2つのSQLite接続から同じ実ファイルDBへ同時注文を送り、最終的に`created` 1件と`replayed` 1件へ収束することを確認しています。本番端末・長時間・高負荷条件の並列負荷試験は未実施です。
 
 ## 端末トークン認証層
 
@@ -126,7 +126,7 @@ roleは`customer`、`kitchen`、`admin`の完全一致で判定します。暗�
 
 `authenticator.close()`はauthenticatorの再利用を禁止しますが、呼び出し側所有のDB接続は閉じません。
 
-Authorizationヘッダー解析、HTTP認証ミドルウェア、HTTPS証明書配布、ペアリング、token発行・更新は未実装です。
+HTTPS証明書配布、ペアリング、token発行・更新は未実装です。Authorizationヘッダーの解析は後述のread-only HTTP基盤だけが実装しています。
 
 ## 端末設定・メニュー読み取り層
 
@@ -154,6 +154,44 @@ const menu = catalog.getMenuForPrincipal(principal);
 
 catalog repositoryへ渡したDB接続の所有権は呼び出し側にあります。`catalog.close()`はrepositoryの再利用を禁止しますが、DB接続は閉じません。
 
-この返却値はHTTPへ公開する前のrole別内部DTOです。現行OpenAPIの`StaffMenuResponse`はkitchenとadminを共通形状にして価格を必須としており、価格を不要とするkitchen用DTOとは一致しません。HTTP実装前に、OpenAPIをkitchen用とadmin用へ分割し、`DeviceConfig`の表示名・設定revision表現も内部DTOと整合させる必要があります。
+この返却値はHTTPへ公開する前のrole別内部DTOです。HTTP層はDB行や内部DTOをそのままJSON化せず、OpenAPIで分離したcustomer、kitchen、admin用schemaへ許可フィールドだけを明示変換します。
 
-HTTPルート、レスポンス変換、キャッシュ制御、ETag、SSE更新通知は未実装です。
+ETagとSSE更新通知は未実装です。
+
+## 認証付きread-only HTTP基盤
+
+`src/http/http-server.mjs`はNode.js標準の`node:http`だけを使用する、試験用のHTTP server factoryです。次の3操作だけを実装しています。
+
+- `GET /v1/health`: 認証不要のreadiness確認。SQLiteのschema versionとevent epochを確認できた場合だけ`200`を返し、DBが受付不能なら`503`を返す。純粋なprocess livenessではない
+- `GET /v1/device/config`: Bearer認証後、DBの最新端末状態と客席割り当てをrole別DeviceConfigへ変換する
+- `GET /v1/menu`: Bearer認証後、catalog repositoryの同一read snapshotから得たrole別メニューを外部DTOへ変換する
+
+```js
+import { createDeviceAuthenticator } from './src/auth/device-auth.mjs';
+import { createCatalogRepository } from './src/catalog/catalog-repository.mjs';
+import { createReadOnlyHttpServer } from './src/http/http-server.mjs';
+
+const authenticator = createDeviceAuthenticator({ database: connection.database });
+const catalog = createCatalogRepository({ database: connection.database });
+const server = createReadOnlyHttpServer({
+  database: connection.database,
+  authenticator,
+  catalog,
+});
+
+server.listen(0, '127.0.0.1');
+```
+
+認証対象routeは`Authorization: Bearer <token>`だけを資格情報として使用します。schemeは大文字・小文字を区別せず、token本体は加工せず大文字・小文字を区別します。tokenをURL/query、cookie、request bodyから取得しません。重複Authorization、カンマ結合値、Bearer以外、不正な空白形式は同じ汎用`401`として拒否し、生tokenやhashをレスポンス・例外へ含めません。Node.jsのHTTP parserがfield-value外側の正規なOWSを除去した後は、アプリ層から元の外側OWSを識別できない点は標準parserの境界です。
+
+レスポンスの公開範囲は次のとおりです。
+
+- customer: 端末の現在テーブルを返す。メニューに価格と厨房通称を含めない
+- kitchen: 固定テーブル情報を返さない。メニューに厨房通称を含めるが価格は含めない
+- admin: 固定テーブル情報を返さない。管理に必要な価格、表示状態、versionを含める
+
+どのroleにも生token、token hash、pairing情報を返しません。全JSON応答は`application/json; charset=utf-8`、`Cache-Control: no-store`、`X-Content-Type-Options: nosniff`を設定し、サーバー生成UUIDのrequest IDを付けます。対象pathは完全一致で、trailing slashは別pathとして`404`、既知pathのGET以外（HEADを含む）は`405`です。query parameterは認証やrole変更に使用せず、現在は無視します。
+
+クライアントと同一originで配信する前提であり、broad CORSや`Access-Control-Allow-Origin: *`は実装しません。HTTPS、注文POST、SSE、管理更新、ペアリング、Windows service起動処理も未実装です。このHTTP基盤はローカル統合試験用であり、現段階のまま本番公開またはインターネット公開してはいけません。
+
+HTTP serverの`close()`が所有するのはlistenerとHTTP接続だけです。注入されたauthenticator、catalog repository、SQLite接続は呼び出し側所有であり、serverを閉じても自動的に閉じません。終了時は呼び出し側がserver、repository、authenticator、DBの順で明示的に終了します。
