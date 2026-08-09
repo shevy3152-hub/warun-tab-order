@@ -1,6 +1,8 @@
 .pnpm-store/
 prototype/node_modules/
 prototype/dist/
+server/data/
+server/tmp/
 
 # Local visual-QA working files
 prototype/qa-*.png
