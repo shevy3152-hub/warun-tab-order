@@ -1,5 +1,15 @@
 # Persistent Context
 
+## Handoff 2026-08-11
+
+- Branch: `feature/sqlite-foundation`; customer order outbox commit: `8049117` (`feat: connect customer order outbox`), pushed to `origin/feature/sqlite-foundation`.
+- Implemented API-mode customer order submission with runtime `WARUN_ORDER_MODE`, `WARUN_API_BASE`, and `WARUN_API_TOKEN` settings; default demo mode remains local and does not use the API transport.
+- Implemented IndexedDB outbox database `warun-customer-order-outbox` version 1, memory adapter tests, atomic claims, retry/backoff, online flush, and safe created/replayed, retryable, and rejected result handling.
+- The outbox implementation is prototype/client-side only. Multi-device production synchronization, browser-level IndexedDB adapter QA on real tablets, authentication provisioning/rotation, and end-to-end network acceptance remain unverified.
+- Verification completed: direct Vite build plus Sites packaging, Sites tests 4/4, outbox tests 18/18 twice, typography regression 1/1, and server tests 306/306. `pnpm run build` was not usable because dependency restoration attempted registry access and a non-TTY modules purge; no dependency or pnpm approval setting was changed.
+- Existing user changes in `mvp-design-spec.md`, `prototype/AGENTS.md`, `prototype/README.md`, `prototype/src/styles.css`, `prototype/DESIGN_SYSTEM.md`, `prototype/assets/`, and `prototype/tests/typography.test.mjs` were not staged or committed.
+- Next: validate the configured API mode in a browser against the existing local server with a real runtime token and deliberate offline/online transitions.
+
 最終確認日: 2026-08-09
 
 ## Git基準点
