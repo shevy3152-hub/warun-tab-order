@@ -16,6 +16,10 @@ import {
   isEventRepositoryError,
 } from '../events/event-errors.mjs';
 import {
+  PAIRING_ERROR_CODES,
+  isPairingServiceError,
+} from '../pairing/pairing-service.mjs';
+import {
   SNAPSHOT_ERROR_CODES,
   isSnapshotServiceError,
 } from '../events/snapshot-errors.mjs';
@@ -43,6 +47,7 @@ import {
   ORDER_JSON_BODY_ERROR_CODES,
   isOrderJsonBodyError,
   readOrderJsonBody,
+  readJsonBody,
 } from './json-body.mjs';
 
 const ROUTE_METHODS = new Map([
@@ -53,6 +58,9 @@ const ROUTE_METHODS = new Map([
   ['/v1/snapshot', 'GET'],
   ['/v1/events', 'GET'],
   ['/v1/events/replay', 'GET'],
+  ['/v1/admin/pairing-codes', 'POST'],
+  ['/v1/pairings/claim', 'POST'],
+  ['/v1/admin/devices/revoke', 'POST'],
 ]);
 const READ_ONLY_ROUTE_METHODS = new Map([
   ['/v1/health', 'GET'],
@@ -283,6 +291,18 @@ function mapApplicationError(error) {
     return createHttpError(HTTP_ERROR_CODES.INTERNAL_ERROR);
   }
 
+  if (isPairingServiceError(error)) {
+    if (error.code === PAIRING_ERROR_CODES.CODE_EXPIRED) return createHttpError(HTTP_ERROR_CODES.PAIRING_EXPIRED);
+    if (error.code === PAIRING_ERROR_CODES.TOO_MANY_ATTEMPTS) return createHttpError(HTTP_ERROR_CODES.TOO_MANY_REQUESTS);
+    if (error.code === PAIRING_ERROR_CODES.DEVICE_NOT_FOUND) return createHttpError(HTTP_ERROR_CODES.DEVICE_NOT_FOUND);
+    if ([
+      PAIRING_ERROR_CODES.CODE_USED,
+      PAIRING_ERROR_CODES.TABLE_CONFLICT,
+      PAIRING_ERROR_CODES.DEVICE_CONFLICT,
+    ].includes(error.code)) return createHttpError(HTTP_ERROR_CODES.PAIRING_CONFLICT);
+    return createHttpError(HTTP_ERROR_CODES.PAIRING_INVALID);
+  }
+
   if (isCatalogRepositoryError(error)) {
     if (
       error.code === CATALOG_ERROR_CODES.AUTHENTICATION_REQUIRED
@@ -463,6 +483,7 @@ function createConfiguredHttpServer({
   eventRepository = undefined,
   snapshotService = undefined,
   sseHub = undefined,
+  pairingService = undefined,
   readServiceState = undefined,
   requestIdFactory = randomUUID,
   now = Date.now,
@@ -533,6 +554,25 @@ function createConfiguredHttpServer({
         return;
       }
 
+      if (target.path === '/v1/pairings/claim') {
+        const pairings = requireService(pairingService, 'claimPairingCode');
+        const body = await readJsonBody(request);
+        const claim = pairings.claimPairingCodeRequest({
+          pairingCode: body?.pairingCode,
+          deviceId: body?.deviceId,
+          displayName: body?.displayName,
+          appVersion: body?.appVersion,
+        });
+        const claimedPrincipal = authenticator.authenticateDeviceToken(claim.deviceToken);
+        const config = mapDeviceConfigResponse(catalog.getDeviceSettings(claimedPrincipal));
+        writeJsonResponse(response, {
+          statusCode: 201,
+          body: { deviceToken: claim.deviceToken, config },
+          requestId,
+        });
+        return;
+      }
+
       principal = authenticateRequest(request, authenticator);
 
       if (target.path === '/v1/orders') {
@@ -556,6 +596,25 @@ function createConfiguredHttpServer({
           requestId,
           headers: { 'Idempotency-Result': result.idempotencyResult },
         });
+        return;
+      }
+
+      if (target.path === '/v1/admin/pairing-codes' || target.path === '/v1/admin/devices/revoke') {
+        authorizeDeviceRole(principal, ['admin']);
+        const pairings = requireService(pairingService, target.path === '/v1/admin/pairing-codes' ? 'createPairingCode' : 'revokeDevice');
+        const body = await readJsonBody(request);
+        if (target.path === '/v1/admin/pairing-codes') {
+          const pairing = pairings.createPairingCodeRequest({
+            role: body?.role,
+            tableId: body?.tableId,
+            expiresAtMs: body?.expiresAtMs,
+            createdByDeviceId: principal.deviceId,
+          });
+          writeJsonResponse(response, { statusCode: 201, body: pairing, requestId });
+          return;
+        }
+        const revoked = pairings.revokeDeviceRequest({ deviceId: body?.deviceId, actorDeviceId: principal.deviceId });
+        writeJsonResponse(response, { statusCode: 200, body: revoked, requestId });
         return;
       }
 

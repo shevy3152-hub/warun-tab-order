@@ -20,7 +20,8 @@ import {
   WifiSlash,
   X,
 } from "@phosphor-icons/react";
-import { createCustomerOrderClient } from "./order-outbox.js";
+import { createCustomerOrderClient, resolveOrderApiConfig } from "./order-outbox.js";
+import { claimCustomerDevice, createIndexedDbCredentialStore, loadOrCreateCustomerDevice, runtimeForCustomerCredentials } from "./device-credentials.js";
 import { customerOrderNoticeFromOutboxEvent } from "./customer-order-notice.js";
 
 const STORAGE_KEY = "izakaya-order-prototype-v3";
@@ -658,14 +659,59 @@ function AdminScreen({ state, updateState, section = "menu" }) {
   );
 }
 
+function PairingScreen({ onClaim, error }) {
+  const [pairingCode, setPairingCode] = useState("");
+  const [displayName, setDisplayName] = useState("customer tablet");
+  const [submitting, setSubmitting] = useState(false);
+  const submit = async (event) => {
+    event.preventDefault();
+    if (submitting || !pairingCode.trim()) return;
+    setSubmitting(true);
+    try { await onClaim({ pairingCode: pairingCode.trim(), displayName: displayName.trim() }); }
+    finally { setSubmitting(false); }
+  };
+  return <main className="customer-shell"><section className="empty-state"><h1>端末登録</h1><p>管理者から受け取ったペアリングコードを入力してください。</p><form className="inline-form" onSubmit={submit}><label>ペアリングコード<input value={pairingCode} onChange={(event) => setPairingCode(event.target.value)} autoComplete="off" required /></label><label>端末名<input value={displayName} onChange={(event) => setDisplayName(event.target.value)} maxLength={80} required /></label><button className="button button--primary" disabled={submitting}>{submitting ? "登録中" : "端末を登録"}</button></form>{error ? <p role="alert">ペアリングに失敗しました。管理者へコードの再発行を依頼してください。</p> : null}</section></main>;
+}
+
 export function App() {
   const route = useRoute();
-  const [orderClient] = useState(() => createCustomerOrderClient());
+  const [orderClient, setOrderClient] = useState(null);
+  const [pairingError, setPairingError] = useState(false);
   const [state, setState] = useState(() => {
     try { return JSON.parse(localStorage.getItem(STORAGE_KEY)) || defaultState; } catch { return defaultState; }
   });
 
   const updateState = (updater) => setState((current) => typeof updater === "function" ? updater(current) : updater);
+
+  useEffect(() => {
+    let cancelled = false;
+    const bootstrap = async () => {
+      const config = resolveOrderApiConfig(window);
+      if (config.mode === "demo" || config.enabled) {
+        if (!cancelled) setOrderClient(createCustomerOrderClient());
+        return;
+      }
+      const store = createIndexedDbCredentialStore({ indexedDB: window.indexedDB });
+      const credentials = await loadOrCreateCustomerDevice({ store, globalObject: window });
+      if (cancelled) return;
+      if (!credentials.token) return;
+      const runtime = runtimeForCustomerCredentials({ globalObject: window, baseUrl: config.baseUrl, token: credentials.token });
+      setOrderClient(createCustomerOrderClient({ global: runtime, indexedDB: window.indexedDB }));
+    };
+    void bootstrap().catch(() => { if (!cancelled) setPairingError(true); });
+    return () => { cancelled = true; };
+  }, []);
+
+  const claim = async ({ pairingCode, displayName }) => {
+    const config = resolveOrderApiConfig({ ...window, location: window.location, navigator: window.navigator, WARUN_ORDER_MODE: "api" });
+    const store = createIndexedDbCredentialStore({ indexedDB: window.indexedDB });
+    const device = await loadOrCreateCustomerDevice({ store, globalObject: window });
+    await claimCustomerDevice({ store, baseUrl: config.baseUrl || new URL("/v1", window.location.origin).toString(), pairingCode, deviceId: device.deviceId, displayName, appVersion: "prototype" });
+    const credentials = await store.load();
+    const runtime = runtimeForCustomerCredentials({ globalObject: window, baseUrl: config.baseUrl || new URL("/v1", window.location.origin).toString(), token: credentials.token });
+    setPairingError(false);
+    setOrderClient(createCustomerOrderClient({ global: runtime, indexedDB: window.indexedDB }));
+  };
 
   useEffect(() => {
     try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch { /* Direct-open previews may not provide storage. */ }
@@ -680,6 +726,7 @@ export function App() {
     return () => window.removeEventListener("storage", sync);
   }, []);
   useEffect(() => {
+    if (!orderClient) return undefined;
     const unsubscribe = orderClient.subscribe((event) => {
       setState((current) => {
         const hasOrder = current.orders.some((order) => order.id === event.clientOrderId || order.clientOrderId === event.clientOrderId);
@@ -711,6 +758,7 @@ export function App() {
   }, [orderClient]);
 
   const content = useMemo(() => {
+    if (!orderClient) return <PairingScreen onClaim={claim} error={pairingError} />;
     if (route === "/") return <CustomerScreen state={state} updateState={updateState} deviceId="customer-03" orderClient={orderClient} />;
     if (route.startsWith("/customer/")) return <CustomerScreen state={state} updateState={updateState} deviceId={route.split("/")[2]} orderClient={orderClient} />;
     if (route === "/kitchen") return <KitchenScreen state={state} updateState={updateState} />;
@@ -718,7 +766,7 @@ export function App() {
     if (route.startsWith("/admin/")) return <AdminScreen state={state} updateState={updateState} section={route.split("/")[2] || "menu"} />;
     if (route === "/devices") return <Launcher state={state} updateState={updateState} />;
     return <CustomerScreen state={state} updateState={updateState} deviceId="customer-03" orderClient={orderClient} />;
-  }, [route, state, orderClient]);
+  }, [route, state, orderClient, pairingError]);
 
   return content;
 }

@@ -17,3 +17,13 @@ The server binds to `0.0.0.0` by default, serves the built prototype, forwards s
 For production, serve `prototype/dist/client` and proxy `/v1` to the API server on the same origin. Reserve or fix the PC's LAN address in DHCP/router administration; this repository does not change router settings or auto-fix the PC address. Allow the selected Web/API ports through the Windows firewall for the store LAN only.
 
 Tokens remain runtime configuration. Do not put tokens in this file, URLs, localStorage, or logs.
+
+## Customer tablet pairing
+
+The admin client creates a short-lived one-time code with `POST /v1/admin/pairing-codes` using its existing Bearer token. Send JSON containing `role: "customer"`, a free `tableId`, and `expiresAtMs` (60 seconds to 24 hours ahead). The response contains the code once; do not log or paste it into a URL.
+
+Open the same LAN Web URL on A90. In API mode, a first-run registration screen asks for the pairing code and a display name. The browser generates and keeps its device ID in IndexedDB, sends the claim to `/v1/pairings/claim`, and stores the returned credential only in its IndexedDB credential store. The token is used only in the Bearer header; it is not rendered, placed in localStorage, URLs, order payloads, or logs. Reloading keeps the same device registration.
+
+Because schema v1 has no claim ID or encrypted response-recovery field, a lost claim response cannot be safely retried with the same code. Reissue a new pairing code and revoke any orphaned device from the admin client with `POST /v1/admin/devices/revoke`. A used, expired, over-attempt, duplicate-device, or occupied-table code is rejected.
+
+The current HTTP listener is for local verification only. Store operation requires HTTPS (including the LAN Web URL); TLS termination and certificates are outside this change.

@@ -429,3 +429,22 @@ export async function readOrderJsonBody(request) {
   const bodyBytes = await readBodyBytes(request, declaredLength);
   return parseOrderJsonText(decodeUtf8(bodyBytes));
 }
+
+export function parseJsonText(text) {
+  if (typeof text !== 'string' || text === '') throw bodyError(ORDER_JSON_BODY_ERROR_CODES.INVALID_JSON);
+  assertNoDuplicateJsonKeys(text);
+  try {
+    return JSON.parse(text);
+  } catch (error) {
+    throw bodyError(ORDER_JSON_BODY_ERROR_CODES.INVALID_JSON, { cause: error });
+  }
+}
+
+export async function readJsonBody(request) {
+  const rawHeaders = request?.rawHeaders;
+  validateContentType(rawHeaders);
+  validateContentEncoding(rawHeaders);
+  const declaredLength = readDeclaredLength(rawHeaders);
+  const bodyBytes = await readBodyBytes(request, declaredLength);
+  return parseJsonText(decodeUtf8(bodyBytes));
+}

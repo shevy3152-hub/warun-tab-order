@@ -14,6 +14,11 @@ export const HTTP_ERROR_CODES = Object.freeze({
   URI_TOO_LONG: 'URI_TOO_LONG',
   INTERNAL_ERROR: 'INTERNAL_ERROR',
   SERVICE_UNAVAILABLE: 'SERVICE_UNAVAILABLE',
+  PAIRING_INVALID: 'PAIRING_INVALID',
+  PAIRING_CONFLICT: 'PAIRING_CONFLICT',
+  PAIRING_EXPIRED: 'PAIRING_EXPIRED',
+  TOO_MANY_REQUESTS: 'TOO_MANY_REQUESTS',
+  DEVICE_NOT_FOUND: 'DEVICE_NOT_FOUND',
 });
 
 const DEFINITIONS = Object.freeze({
@@ -77,6 +82,11 @@ const DEFINITIONS = Object.freeze({
     statusCode: 503,
     message: 'Service unavailable.',
   }),
+  [HTTP_ERROR_CODES.PAIRING_INVALID]: Object.freeze({ statusCode: 400, message: 'Pairing request is invalid.' }),
+  [HTTP_ERROR_CODES.PAIRING_CONFLICT]: Object.freeze({ statusCode: 409, message: 'Pairing conflicts with an existing device or assignment.' }),
+  [HTTP_ERROR_CODES.PAIRING_EXPIRED]: Object.freeze({ statusCode: 410, message: 'Pairing code expired.' }),
+  [HTTP_ERROR_CODES.TOO_MANY_REQUESTS]: Object.freeze({ statusCode: 429, message: 'Too many pairing attempts.' }),
+  [HTTP_ERROR_CODES.DEVICE_NOT_FOUND]: Object.freeze({ statusCode: 404, message: 'Device was not found.' }),
 });
 
 export class ReadOnlyHttpError extends Error {
