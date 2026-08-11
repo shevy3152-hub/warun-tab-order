@@ -40,8 +40,11 @@ test("admin runtime is injected only into the admin shell", async () => {
     const customerHtml = await fetchHtml("/");
     const adminHtml = await fetchHtml("/admin.html");
     assert.doesNotMatch(customerHtml, /WARUN_RUNTIME_CONFIG|test-admin-runtime-token/);
+    assert.doesNotMatch(customerHtml, /window\.location\.hash="\/admin\/devices"/);
     assert.match(adminHtml, /WARUN_RUNTIME_CONFIG/);
     assert.match(adminHtml, /test-admin-runtime-token/);
+    assert.match(adminHtml, /window\.location\.hash="\/admin\/devices"/);
+    assert.ok(adminHtml.indexOf('window.location.hash="/admin/devices"') < adminHtml.indexOf('type="module"'));
     assert.ok(adminHtml.indexOf("WARUN_RUNTIME_CONFIG") < adminHtml.indexOf('type="module"'));
   } finally {
     await new Promise((resolve) => webServer?.close(resolve));

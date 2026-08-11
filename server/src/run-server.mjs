@@ -27,12 +27,15 @@ const CONTENT_TYPES = Object.freeze({
 });
 
 function injectAdminRuntime(html, adminRuntimeToken) {
-  if (!adminRuntimeToken) return html;
-  const runtimeScript = `<script>window.WARUN_RUNTIME_CONFIG=Object.assign({},window.WARUN_RUNTIME_CONFIG||{},{apiToken:${JSON.stringify(adminRuntimeToken)}});</script>`;
+  const adminRouteScript = '<script>if (!window.location.hash) window.location.hash="/admin/devices";</script>';
+  const runtimeScript = adminRuntimeToken
+    ? `<script>window.WARUN_RUNTIME_CONFIG=Object.assign({},window.WARUN_RUNTIME_CONFIG||{},{apiToken:${JSON.stringify(adminRuntimeToken)}});</script>`
+    : '';
+  const injection = `${adminRouteScript}${runtimeScript}`;
   const moduleScript = /<script\b[^>]*\btype=["']module["'][^>]*>/i;
   return moduleScript.test(html)
-    ? html.replace(moduleScript, (tag) => `${runtimeScript}${tag}`)
-    : html.replace("</head>", `${runtimeScript}</head>`);
+    ? html.replace(moduleScript, (tag) => `${injection}${tag}`)
+    : html.replace("</head>", `${injection}</head>`);
 }
 
 export function lanIPv4Addresses(interfaces = networkInterfaces()) {
