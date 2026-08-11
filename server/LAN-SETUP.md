@@ -20,9 +20,9 @@ Tokens remain runtime configuration. Do not put tokens in this file, URLs, local
 
 ## Customer tablet pairing
 
-The admin client creates a short-lived one-time code with `POST /v1/admin/pairing-codes` using its existing Bearer token. Send JSON containing `role: "customer"`, a free `tableId`, and `expiresAtMs` (60 seconds to 24 hours ahead). The response contains the code once; do not log or paste it into a URL.
+The admin client creates a short-lived one-time code with `POST /v1/admin/pairing-codes` using its existing Bearer token. Send JSON containing `role: "customer"`, a free `tableId`, and `expiresAtMs` (60 seconds to 24 hours ahead). The admin Devices screen can issue this code as an in-memory QR image; the raw code is not rendered as text, logged, or put in a URL. Configure the admin Bearer token through the existing runtime injection (`window.WARUN_ADMIN_API_TOKEN` or `window.WARUN_RUNTIME_CONFIG.adminToken`), never localStorage.
 
-Open the same LAN Web URL on A90. In API mode, a first-run registration screen asks for the pairing code and a display name. The browser generates and keeps its device ID in IndexedDB, sends the claim to `/v1/pairings/claim`, and stores the returned credential only in its IndexedDB credential store. The token is used only in the Bearer header; it is not rendered, placed in localStorage, URLs, order payloads, or logs. Reloading keeps the same device registration.
+Open the same LAN Web URL on A90. In API mode, use the A90 camera's QR reader to read the QR shown by the admin Devices screen, then paste the scanned code into the first-run registration screen with a display name. The browser generates and keeps its device ID in IndexedDB, sends the claim to `/v1/pairings/claim`, and stores the returned credential only in its IndexedDB credential store. The token is used only in the Bearer header; it is not rendered, placed in localStorage, URLs, order payloads, or logs. Reloading keeps the same device registration.
 
 Because schema v1 has no claim ID or encrypted response-recovery field, a lost claim response cannot be safely retried with the same code. Reissue a new pairing code and revoke any orphaned device from the admin client with `POST /v1/admin/devices/revoke`. A used, expired, over-attempt, duplicate-device, or occupied-table code is rejected.
 

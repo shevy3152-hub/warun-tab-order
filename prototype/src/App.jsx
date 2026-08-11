@@ -23,6 +23,8 @@ import {
 import { createCustomerOrderClient, resolveOrderApiConfig } from "./order-outbox.js";
 import { claimCustomerDevice, createIndexedDbCredentialStore, loadOrCreateCustomerDevice, runtimeForCustomerCredentials } from "./device-credentials.js";
 import { customerOrderNoticeFromOutboxEvent } from "./customer-order-notice.js";
+import { issueCustomerPairingCode } from "./admin-pairing.js";
+import { pairingCodeQrSvg } from "./qr-code.js";
 
 const STORAGE_KEY = "izakaya-order-prototype-v3";
 
@@ -603,6 +605,9 @@ const adminTabs = [
 function AdminScreen({ state, updateState, section = "menu" }) {
   const [showAdd, setShowAdd] = useState(false);
   const [editingMenuId, setEditingMenuId] = useState(null);
+  const [pairingTableId, setPairingTableId] = useState("1");
+  const [pairingQr, setPairingQr] = useState(null);
+  const [pairingError, setPairingError] = useState(false);
   const categoriesById = Object.fromEntries(state.categories.map((category) => [category.id, category]));
   const editingMenu = state.menuItems.find((item) => item.id === editingMenuId) ?? null;
   const setMenuItem = (id, patch) => updateState((current) => ({ ...current, menuItems: current.menuItems.map((item) => item.id === id ? { ...item, ...patch } : item) }));
@@ -632,6 +637,16 @@ function AdminScreen({ state, updateState, section = "menu" }) {
     setShowAdd(false);
   };
   const sortedMenus = [...state.menuItems].sort((a, b) => (categoriesById[a.categoryId]?.sortOrder ?? 99) - (categoriesById[b.categoryId]?.sortOrder ?? 99) || a.sortOrder - b.sortOrder);
+  const issuePairing = async () => {
+    setPairingError(false);
+    try {
+      const result = await issueCustomerPairingCode({ tableId: Number(pairingTableId), expiresAtMs: Date.now() + 10 * 60 * 1000 });
+      setPairingQr(pairingCodeQrSvg(result.code));
+    } catch {
+      setPairingQr(null);
+      setPairingError(true);
+    }
+  };
 
   return (
     <StaffShell route={`/admin/${section}`} title="メニュー管理" subtitle="メニューの追加・編集・並び順の変更ができます。" state={state} right={<button className="save-indicator"><Check size={24} weight="bold" /> 保存する</button>}>
@@ -651,6 +666,7 @@ function AdminScreen({ state, updateState, section = "menu" }) {
         </> : null}
 
         {section === "devices" ? <>
+          <div className="pairing-admin-panel"><div><span className="section-kicker">CUSTOMER PAIRING</span><h2>客席端末をQRで登録</h2><p>管理者だけが発行します。raw codeは文字表示・保存せず、A90のカメラでQRを読み取ってください。</p></div><label>テーブル<select value={pairingTableId} onChange={(event) => setPairingTableId(event.target.value)}>{[1, 2, 3, 4, 5, 6, 7, 8].map((tableId) => <option value={String(tableId)} key={tableId}>テーブル {tableId}</option>)}</select></label><button className="button button--primary" onClick={issuePairing}>QRを発行</button>{pairingError ? <p role="alert">QRを発行できませんでした。管理者API設定と空きテーブルを確認してください。</p> : null}{pairingQr ? <div className="pairing-qr" dangerouslySetInnerHTML={{ __html: pairingQr }} /> : null}</div>
           <div className="admin-toolbar"><div><span className="section-kicker">FIXED ASSIGNMENT</span><h2>客席端末とテーブル</h2><p>客席からは変更できません。端末を置き替えたときだけここで設定します。</p></div></div>
           <div className="device-admin-grid">{state.devices.map((device, index) => <article key={device.deviceId}><div className="device-admin-icon"><Monitor size={38} weight="duotone" /></div><div><small>端末 {String(index + 1).padStart(2, "0")}</small><h3>{device.label}</h3><code>{device.deviceId}</code></div><label>固定テーブル<select value={device.tableId} onChange={(event) => updateState((current) => ({ ...current, devices: current.devices.map((item) => item.deviceId === device.deviceId ? { ...item, tableId: event.target.value } : item) }))}>{[1, 2, 3, 4, 5, 6, 7, 8].map((tableId) => <option value={String(tableId)} key={tableId}>テーブル {tableId}</option>)}</select></label><ConnectionBadge online={!state.offlineDevices.includes(device.deviceId)} compact /></article>)}</div>
         </> : null}
