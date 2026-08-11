@@ -1,6 +1,8 @@
 function configuredAdminToken(env) {
   if (typeof env?.WARUN_ADMIN_API_TOKEN === "string") return env.WARUN_ADMIN_API_TOKEN.trim();
   if (typeof env?.WARUN_RUNTIME_CONFIG?.adminToken === "string") return env.WARUN_RUNTIME_CONFIG.adminToken.trim();
+  if (typeof env?.WARUN_API_TOKEN === "string") return env.WARUN_API_TOKEN.trim();
+  if (typeof env?.WARUN_RUNTIME_CONFIG?.apiToken === "string") return env.WARUN_RUNTIME_CONFIG.apiToken.trim();
   return "";
 }
 

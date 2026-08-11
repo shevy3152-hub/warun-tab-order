@@ -29,3 +29,17 @@ test("admin pairing transport uses the Bearer token only in the header", async (
   assert.equal(request.options.body.includes(TOKEN), false);
   assert.equal(request.options.headers.Authorization, `Bearer ${TOKEN}`);
 });
+
+test("admin pairing reuses the existing runtime API token path", async () => {
+  let authorization;
+  await issueCustomerPairingCode({
+    env: { location: { origin: "http://localhost" }, WARUN_RUNTIME_CONFIG: { apiToken: TOKEN } },
+    tableId: 1,
+    expiresAtMs: Date.now() + 600000,
+    fetchImpl: async (_url, options) => {
+      authorization = options.headers.Authorization;
+      return { ok: true, async json() { return { code: CODE, role: "customer", tableId: 1, expiresAtMs: Date.now() + 600000 }; } };
+    },
+  });
+  assert.equal(authorization, `Bearer ${TOKEN}`);
+});

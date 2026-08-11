@@ -26,6 +26,15 @@ const CONTENT_TYPES = Object.freeze({
   ".ttf": "font/ttf",
 });
 
+function injectAdminRuntime(html, adminRuntimeToken) {
+  if (!adminRuntimeToken) return html;
+  const runtimeScript = `<script>window.WARUN_RUNTIME_CONFIG=Object.assign({},window.WARUN_RUNTIME_CONFIG||{},{apiToken:${JSON.stringify(adminRuntimeToken)}});</script>`;
+  const moduleScript = /<script\b[^>]*\btype=["']module["'][^>]*>/i;
+  return moduleScript.test(html)
+    ? html.replace(moduleScript, (tag) => `${runtimeScript}${tag}`)
+    : html.replace("</head>", `${runtimeScript}</head>`);
+}
+
 export function lanIPv4Addresses(interfaces = networkInterfaces()) {
   return Object.values(interfaces)
     .flatMap((entries) => entries || [])
@@ -87,7 +96,7 @@ export function createWarunServer({ databasePath, now = Date.now } = {}) {
   return { server, closeDependencies, connection };
 }
 
-export function createSameOriginWebServer({ apiServer, webRoot }) {
+export function createSameOriginWebServer({ apiServer, webRoot, adminRuntimeToken = "" }) {
   if (!apiServer || typeof apiServer.listeners !== "function") throw new TypeError("An API server is required.");
   const apiHandler = apiServer.listeners("request")[0];
   if (typeof apiHandler !== "function") throw new TypeError("The API server has no request handler.");
@@ -100,19 +109,22 @@ export function createSameOriginWebServer({ apiServer, webRoot }) {
       return;
     }
 
-    const requestedPath = pathname === "/" ? "index.html" : pathname.slice(1);
+    const adminShell = pathname === "/admin.html";
+    const requestedPath = pathname === "/" || adminShell ? "index.html" : pathname.slice(1);
     const candidate = resolve(resolvedWebRoot, requestedPath);
     const relativePath = relative(resolvedWebRoot, candidate);
     const safePath = relativePath && !relativePath.startsWith("..") && !relativePath.includes("..\\") && !relativePath.includes("../");
     const filePath = safePath ? candidate : resolve(resolvedWebRoot, "index.html");
     try {
-      const body = await readFile(filePath);
+      let body = await readFile(filePath);
+      if (adminShell) body = injectAdminRuntime(body.toString("utf8"), adminRuntimeToken);
       response.writeHead(200, { "Cache-Control": "no-store", "Content-Type": CONTENT_TYPES[extname(filePath)] || "application/octet-stream" });
       response.end(body);
     } catch {
       if (filePath !== resolve(resolvedWebRoot, "index.html")) {
         try {
-          const body = await readFile(resolve(resolvedWebRoot, "index.html"));
+        let body = await readFile(resolve(resolvedWebRoot, "index.html"));
+        if (adminShell) body = injectAdminRuntime(body.toString("utf8"), adminRuntimeToken);
           response.writeHead(200, { "Cache-Control": "no-store", "Content-Type": CONTENT_TYPES[".html"] });
           response.end(body);
           return;
@@ -141,7 +153,7 @@ async function main() {
   const databasePath = resolve(process.env.WARUN_DB_PATH || "var/warun.sqlite3");
   const application = createWarunServer({ databasePath });
   const webRoot = resolve(process.env.WARUN_WEB_ROOT || "../prototype/dist/client");
-  const webServer = createSameOriginWebServer({ apiServer: application.server, webRoot });
+  const webServer = createSameOriginWebServer({ apiServer: application.server, webRoot, adminRuntimeToken: process.env.WARUN_ADMIN_API_TOKEN || "" });
   const address = await listen(application.server, { host, port });
   const webAddress = await listen(webServer, { host, port: webPort });
   const urls = accessUrls({ host, port: address.port, webPort: webAddress.port });
