@@ -126,9 +126,9 @@ export function createPairingService({ database, now = Date.now, idFactory = ran
     });
   }
 
-  function createPairingCodeRequest(request) {
+  function createPairingCodeRequest(request, { createdByDeviceId } = {}) {
     exactFields(request, ['role', 'tableId', 'expiresAtMs']);
-    return createPairingCode(request);
+    return createPairingCode({ ...request, createdByDeviceId });
   }
 
   function claimPairingCode({ pairingCode, deviceId, displayName, appVersion } = {}) {

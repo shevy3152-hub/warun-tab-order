@@ -28,7 +28,8 @@ async function fixture(run) {
 }
 
 test('pairing code is hashed, claim is one-shot, and token revocation works', async () => fixture(async ({ db, adminId, service }) => {
-  const created = service.createPairingCode({ role: 'customer', tableId: 1, expiresAtMs: 200000, createdByDeviceId: adminId });
+  const created = service.createPairingCodeRequest({ role: 'customer', tableId: 1, expiresAtMs: 200000 }, { createdByDeviceId: adminId });
+  assert.throws(() => service.createPairingCodeRequest({ role: 'customer', tableId: 1, expiresAtMs: 200000, createdByDeviceId: adminId }, { createdByDeviceId: adminId }), (error) => error.code === PAIRING_ERROR_CODES.INVALID_REQUEST);
   assert.equal(db.prepare('SELECT COUNT(*) AS count FROM pairing_codes WHERE code_hash = ?').get(hash(created.code)).count, 1);
   const deviceId = uuid(2);
   const claimed = service.claimPairingCode({ pairingCode: created.code, deviceId, displayName: 'A90', appVersion: 'test' });

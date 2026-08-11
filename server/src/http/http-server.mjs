@@ -608,8 +608,7 @@ function createConfiguredHttpServer({
             role: body?.role,
             tableId: body?.tableId,
             expiresAtMs: body?.expiresAtMs,
-            createdByDeviceId: principal.deviceId,
-          });
+          }, { createdByDeviceId: principal.deviceId });
           writeJsonResponse(response, { statusCode: 201, body: pairing, requestId });
           return;
         }
