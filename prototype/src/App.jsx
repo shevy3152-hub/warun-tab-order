@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowLeft,
   ArrowRight,
@@ -20,6 +20,7 @@ import {
   WifiSlash,
   X,
 } from "@phosphor-icons/react";
+import { createCustomerOrderClient } from "./order-outbox.js";
 
 const STORAGE_KEY = "izakaya-order-prototype-v3";
 
@@ -158,6 +159,18 @@ function yen(value) {
   return new Intl.NumberFormat("ja-JP", { style: "currency", currency: "JPY", maximumFractionDigits: 0 }).format(value);
 }
 
+function customerTransportLabel(order) {
+  switch (order.transportState) {
+    case "sending": return "送信中";
+    case "retrying": return "再送中";
+    case "pending": return "送信待ち";
+    case "synced": return "送信済み";
+    case "rejected": return "業務エラー";
+    case "failed": return "送信失敗";
+    default: return order.status === "completed" ? "提供済み" : order.status === "queued_offline" ? "送信待ち" : "準備中";
+  }
+}
+
 function navigate(route) {
   window.location.hash = route;
 }
@@ -281,14 +294,16 @@ function Launcher({ state, updateState }) {
   );
 }
 
-function CustomerScreen({ state, updateState, deviceId }) {
+function CustomerScreen({ state, updateState, deviceId, orderClient }) {
   const device = state.devices.find((item) => item.deviceId === deviceId) ?? state.devices[0];
-  const online = !state.offlineDevices.includes(device.deviceId);
+  const apiMode = orderClient.mode === "api";
+  const online = apiMode ? typeof navigator === "undefined" || navigator.onLine !== false : !state.offlineDevices.includes(device.deviceId);
   const categories = [...state.categories].filter((category) => category.isVisible).sort((a, b) => a.sortOrder - b.sortOrder);
   const [categoryId, setCategoryId] = useState(categories[0]?.id ?? "recommended");
   const [cart, setCart] = useState({ edamame: 1, dashimaki: 1, beer: 2, lemon: 1, karaage: 1, yakitori: 2, otoshi: 2 });
   const [modal, setModal] = useState(null);
   const [notice, setNotice] = useState(null);
+  const submitLock = useRef(false);
   const featuredIds = ["edamame", "dashimaki", "beer", "lemon", "karaage"];
   const currentItems = categoryId === "recommended"
     ? featuredIds.map((id) => state.menuItems.find((item) => item.id === id)).filter(Boolean)
@@ -303,23 +318,73 @@ function CustomerScreen({ state, updateState, deviceId }) {
     setCart((current) => ({ ...current, [menuItemId]: Math.max(0, (current[menuItemId] ?? 0) + delta) }));
   };
 
-  const submitOrder = () => {
-    if (!cartRows.length) return;
+  const submitOrder = async () => {
+    if (!cartRows.length || submitLock.current) return;
+    submitLock.current = true;
     const now = new Date().toISOString();
-    const order = {
-      id: `ORD-${Date.now().toString().slice(-6)}-T${device.tableId}`,
-      tableId: device.tableId,
-      createdAt: now,
-      status: online ? "new" : "queued_offline",
-      totalAmount: cartRows.reduce((sum, row) => sum + row.item.price * row.quantity, 0),
-      syncedAt: online ? now : null,
-      completedAt: null,
-      items: cartRows.map((row) => ({ id: makeId("item"), menuItemId: row.item.id, nameSnapshot: row.item.name, unitPriceSnapshot: row.item.price, quantity: row.quantity, isServed: false, servedAt: null })),
-    };
-    updateState((current) => ({ ...current, orders: [...current.orders, order] }));
-    setCart({});
-    setModal(null);
-    setNotice(online ? "送信しました。ご注文を承りました。" : "通信が戻るまで、この端末に安全に保存します。送信待ちです。");
+    const items = cartRows.map((row) => ({
+      id: makeId("item"),
+      menuItemId: row.item.id,
+      nameSnapshot: row.item.name,
+      unitPriceSnapshot: row.item.price,
+      quantity: row.quantity,
+      isServed: false,
+      servedAt: null,
+    }));
+
+    try {
+      if (apiMode) {
+        setNotice({ kind: "sending", message: "送信中です。注文を保存しています。" });
+        const outboxRecord = await orderClient.enqueue({ items: cartRows.map((row) => ({ menuItemId: row.item.id, quantity: row.quantity })) });
+        const order = {
+          id: outboxRecord.clientOrderId,
+          clientOrderId: outboxRecord.clientOrderId,
+          tableId: device.tableId,
+          createdAt: now,
+          status: "queued_offline",
+          transportState: "pending",
+          totalAmount: cartRows.reduce((sum, row) => sum + row.item.price * row.quantity, 0),
+          syncedAt: null,
+          completedAt: null,
+          items,
+        };
+        updateState((current) => ({ ...current, orders: [...current.orders, order] }));
+        setCart({});
+        setModal(null);
+        const result = await orderClient.flush({ clientOrderId: outboxRecord.clientOrderId });
+        if (result.state === "synced") {
+          setNotice({ kind: "success", message: "送信済みです。ご注文を承りました。" });
+        } else if (result.state === "rejected") {
+          setNotice({ kind: "error", message: "業務エラーのため送信できませんでした。内容をご確認ください。" });
+        } else if (result.errorCode === "API_TOKEN_UNCONFIGURED" || result.errorCode === "API_BASE_UNCONFIGURED") {
+          setNotice({ kind: "error", message: "API接続設定が未完了のため、送信待ちです。" });
+        } else if (result.errorCode === "OFFLINE" || result.errorCode === "NETWORK_ERROR" || result.errorCode?.startsWith("HTTP_5")) {
+          setNotice({ kind: "failed", message: "送信に失敗しました。通信が戻るまで送信待ちです。" });
+        } else {
+          setNotice({ kind: "pending", message: "送信待ちです。通信が戻ると自動で再送します。" });
+        }
+        return;
+      }
+
+      const order = {
+        id: `ORD-${Date.now().toString().slice(-6)}-T${device.tableId}`,
+        tableId: device.tableId,
+        createdAt: now,
+        status: online ? "new" : "queued_offline",
+        totalAmount: cartRows.reduce((sum, row) => sum + row.item.price * row.quantity, 0),
+        syncedAt: online ? now : null,
+        completedAt: null,
+        items,
+      };
+      updateState((current) => ({ ...current, orders: [...current.orders, order] }));
+      setCart({});
+      setModal(null);
+      setNotice(online ? "送信しました。ご注文を承りました。" : "通信が戻るまで、この端末に安全に保存します。送信待ちです。");
+    } catch {
+      setNotice({ kind: "failed", message: "注文を保存できませんでした。もう一度お試しください。" });
+    } finally {
+      submitLock.current = false;
+    }
   };
 
   const callStaff = () => {
@@ -327,6 +392,8 @@ function CustomerScreen({ state, updateState, deviceId }) {
     setModal(null);
     setNotice("スタッフを呼び出しました。少々お待ちください。");
   };
+  const noticeKind = typeof notice === "string" ? (online ? "success" : "pending") : notice?.kind;
+  const noticeMessage = typeof notice === "string" ? notice : notice?.message;
 
   return (
     <div className="customer-app">
@@ -350,7 +417,7 @@ function CustomerScreen({ state, updateState, deviceId }) {
           <div className="table-label">テーブル <b>{device.tableId}</b></div>
         </header>
 
-        {notice ? <div className={`customer-notice ${online ? "is-success" : "is-queued"}`}><span>{online ? <CheckCircle size={26} weight="fill" /> : <WifiSlash size={26} weight="bold" />}{notice}</span><button onClick={() => setNotice(null)} aria-label="通知を閉じる"><X size={20} /></button></div> : null}
+        {notice ? <div className={`customer-notice ${noticeKind === "success" ? "is-success" : "is-queued"}`}><span>{noticeKind === "success" ? <CheckCircle size={26} weight="fill" /> : noticeKind === "sending" ? <WifiHigh size={26} weight="bold" /> : <WifiSlash size={26} weight="bold" />}{noticeMessage}</span><button onClick={() => setNotice(null)} aria-label="通知を閉じる"><X size={20} /></button></div> : null}
 
         <div className="customer-content">
           <section className="menu-panel">
@@ -383,7 +450,7 @@ function CustomerScreen({ state, updateState, deviceId }) {
       {modal === "confirm" ? <Modal title="注文内容の確認" onClose={() => setModal(null)}><div className="confirm-list">{cartRows.map((row) => <div key={row.item.id}><b>{row.item.name}</b><span>{row.quantity}点</span></div>)}</div><p className="price-hidden-note">内容をご確認のうえ、注文を送信してください。</p><div className="modal-actions"><button className="button button--quiet" onClick={() => setModal(null)}>戻る</button><button className="button button--primary button--large" onClick={submitOrder}>{online ? "注文を送信" : "送信待ちに保存"}</button></div></Modal> : null}
       {modal === "staff" ? <Modal title="スタッフを呼びますか？" onClose={() => setModal(null)}><p className="modal-lead">テーブル {device.tableId} からスタッフへお知らせします。</p><div className="modal-actions"><button className="button button--quiet" onClick={() => setModal(null)}>やめる</button><button className="button button--primary button--large" onClick={callStaff}><Bell size={22} weight="bold" /> 呼び出す</button></div></Modal> : null}
       {modal === "feature" ? <Modal title="確認" onClose={() => setModal(null)}><p className="modal-lead">この機能は次の実装段階で接続します。</p><div className="modal-actions"><button className="button button--primary" onClick={() => setModal(null)}>閉じる</button></div></Modal> : null}
-      {modal === "history" ? <Modal title="これまでのご注文" onClose={() => setModal(null)} wide><div className="customer-history">{customerHistory.length ? customerHistory.map((order) => <article key={order.id}><header><b>{formatTime(order.createdAt)} のご注文</b><span className={`status-chip status-${order.status}`}>{order.status === "completed" ? "提供済み" : order.status === "queued_offline" ? "送信待ち" : "準備中"}</span></header>{order.items.map((item) => <div key={item.id}><span>{item.nameSnapshot}</span><b>{item.quantity}点</b></div>)}</article>) : <div className="empty-state"><ClipboardText size={42} /><p>注文履歴はまだありません。</p></div>}</div></Modal> : null}
+      {modal === "history" ? <Modal title="これまでのご注文" onClose={() => setModal(null)} wide><div className="customer-history">{customerHistory.length ? customerHistory.map((order) => <article key={order.id}><header><b>{formatTime(order.createdAt)} のご注文</b><span className={`status-chip status-${order.status}`}>{customerTransportLabel(order)}</span></header>{order.items.map((item) => <div key={item.id}><span>{item.nameSnapshot}</span><b>{item.quantity}点</b></div>)}</article>) : <div className="empty-state"><ClipboardText size={42} /><p>注文履歴はまだありません。</p></div>}</div></Modal> : null}
     </div>
   );
 }
@@ -571,6 +638,7 @@ function AdminScreen({ state, updateState, section = "menu" }) {
 
 export function App() {
   const route = useRoute();
+  const [orderClient] = useState(() => createCustomerOrderClient());
   const [state, setState] = useState(() => {
     try { return JSON.parse(localStorage.getItem(STORAGE_KEY)) || defaultState; } catch { return defaultState; }
   });
@@ -589,16 +657,46 @@ export function App() {
     window.addEventListener("storage", sync);
     return () => window.removeEventListener("storage", sync);
   }, []);
+  useEffect(() => {
+    const unsubscribe = orderClient.subscribe((event) => {
+      setState((current) => {
+        const hasOrder = current.orders.some((order) => order.id === event.clientOrderId || order.clientOrderId === event.clientOrderId);
+        if (!hasOrder) return current;
+        const transportState = event.displayState || event.state;
+        return {
+          ...current,
+          orders: current.orders.map((order) => {
+            if (order.id !== event.clientOrderId && order.clientOrderId !== event.clientOrderId) return order;
+            const nextStatus = event.state === "synced"
+              ? order.status === "queued_offline" ? "new" : order.status
+              : event.state === "rejected" ? "rejected" : event.state === "pending" ? "queued_offline" : order.status;
+            return {
+              ...order,
+              status: nextStatus,
+              transportState,
+              transportErrorCode: event.lastErrorCode || null,
+              syncedAt: event.state === "synced" ? new Date().toISOString() : order.syncedAt,
+            };
+          }),
+        };
+      });
+    });
+    void orderClient.start();
+    return () => {
+      unsubscribe();
+      void orderClient.stop();
+    };
+  }, [orderClient]);
 
   const content = useMemo(() => {
-    if (route === "/") return <CustomerScreen state={state} updateState={updateState} deviceId="customer-03" />;
-    if (route.startsWith("/customer/")) return <CustomerScreen state={state} updateState={updateState} deviceId={route.split("/")[2]} />;
+    if (route === "/") return <CustomerScreen state={state} updateState={updateState} deviceId="customer-03" orderClient={orderClient} />;
+    if (route.startsWith("/customer/")) return <CustomerScreen state={state} updateState={updateState} deviceId={route.split("/")[2]} orderClient={orderClient} />;
     if (route === "/kitchen") return <KitchenScreen state={state} updateState={updateState} />;
     if (route === "/history") return <HistoryScreen state={state} />;
     if (route.startsWith("/admin/")) return <AdminScreen state={state} updateState={updateState} section={route.split("/")[2] || "menu"} />;
     if (route === "/devices") return <Launcher state={state} updateState={updateState} />;
-    return <CustomerScreen state={state} updateState={updateState} deviceId="customer-03" />;
-  }, [route, state]);
+    return <CustomerScreen state={state} updateState={updateState} deviceId="customer-03" orderClient={orderClient} />;
+  }, [route, state, orderClient]);
 
   return content;
 }
