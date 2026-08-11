@@ -168,17 +168,22 @@ async function main() {
   console.log("PC Web URL:", urls.webUrls[0]);
   for (const url of urls.webUrls.slice(1)) console.log("LAN Web URL:", url);
 
-  let shuttingDown = false;
-  const shutdown = () => {
-    if (shuttingDown) return;
-    shuttingDown = true;
-    webServer.close(() => application.server.close(() => {
-      application.closeDependencies();
-    }));
-  };
-  process.once("SIGINT", shutdown);
-  process.once("SIGTERM", shutdown);
-  await new Promise(() => {});
+  let keepAlive;
+  await new Promise((resolveShutdown) => {
+    let shuttingDown = false;
+    const shutdown = () => {
+      if (shuttingDown) return;
+      shuttingDown = true;
+      clearInterval(keepAlive);
+      webServer.close(() => application.server.close(() => {
+        application.closeDependencies();
+        resolveShutdown();
+      }));
+    };
+    process.once("SIGINT", shutdown);
+    process.once("SIGTERM", shutdown);
+    keepAlive = setInterval(() => {}, 60_000);
+  });
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
