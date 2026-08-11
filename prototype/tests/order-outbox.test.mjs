@@ -12,6 +12,7 @@ import {
   resolveOrderApiConfig,
   retryDelayForAttempt,
 } from "../src/order-outbox.js";
+import { customerOrderNoticeFromOutboxEvent } from "../src/customer-order-notice.js";
 
 const ITEM_ID = "edamame";
 
@@ -256,6 +257,19 @@ test("online recovery flushes pending orders", async () => {
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(calls.length, 1);
   assert.equal(calls[0].clientOrderId, record.clientOrderId);
+});
+
+test("outbox success events map to a customer sent notice after recovery", () => {
+  assert.deepEqual(customerOrderNoticeFromOutboxEvent({ clientOrderId: uuid(40), state: "synced", displayState: "synced" }), {
+    kind: "success",
+    message: "送信済みです。ご注文を承りました。",
+  });
+  assert.deepEqual(customerOrderNoticeFromOutboxEvent({ clientOrderId: uuid(41), state: "synced", displayState: "synced", idempotencyResult: "replayed" }), {
+    kind: "success",
+    message: "送信済みです。ご注文を承りました。",
+  });
+  assert.equal(customerOrderNoticeFromOutboxEvent({ clientOrderId: uuid(42), state: "rejected", displayState: "business_error" }).kind, "error");
+  assert.equal(customerOrderNoticeFromOutboxEvent({ clientOrderId: uuid(43), state: "pending", displayState: "failed" }).kind, "failed");
 });
 
 test("retry delays use bounded exponential backoff instead of a tight loop", async () => {

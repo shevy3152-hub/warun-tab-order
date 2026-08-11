@@ -21,6 +21,7 @@ import {
   X,
 } from "@phosphor-icons/react";
 import { createCustomerOrderClient } from "./order-outbox.js";
+import { customerOrderNoticeFromOutboxEvent } from "./customer-order-notice.js";
 
 const STORAGE_KEY = "izakaya-order-prototype-v3";
 
@@ -312,6 +313,27 @@ function CustomerScreen({ state, updateState, deviceId, orderClient }) {
   const cartCount = cartRows.reduce((sum, row) => sum + row.quantity, 0);
   const customerHistory = state.orders.filter((order) => order.tableId === device.tableId).sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 
+  useEffect(() => {
+    const unsubscribe = orderClient.subscribe((event) => {
+      const nextNotice = customerOrderNoticeFromOutboxEvent(event);
+      if (!nextNotice) return;
+      setNotice((current) => current?.kind === nextNotice.kind && current?.message === nextNotice.message ? current : nextNotice);
+    });
+    return unsubscribe;
+  }, [orderClient]);
+
+  useEffect(() => {
+    if (!apiMode) return;
+    const pendingOrder = customerHistory.find((order) => ["sending", "retrying", "pending", "queued_offline", "rejected"].includes(order.transportState) || order.status === "queued_offline");
+    if (!pendingOrder) return;
+    const nextNotice = customerOrderNoticeFromOutboxEvent({
+      clientOrderId: pendingOrder.clientOrderId || pendingOrder.id,
+      state: pendingOrder.transportState === "rejected" ? "rejected" : pendingOrder.transportState === "sending" ? "sending" : "pending",
+      displayState: pendingOrder.transportState === "retrying" ? "retrying" : pendingOrder.transportState === "failed" ? "failed" : pendingOrder.transportState,
+    });
+    if (nextNotice) setNotice((current) => current?.kind === nextNotice.kind && current?.message === nextNotice.message ? current : nextNotice);
+  }, [apiMode, customerHistory, state.orders]);
+
   const changeQuantity = (menuItemId, delta) => {
     const item = state.menuItems.find((menu) => menu.id === menuItemId);
     if (!item || item.isSoldOut) return;
@@ -428,7 +450,7 @@ function CustomerScreen({ state, updateState, deviceId, orderClient }) {
                   <article className={`menu-row ${item.isSoldOut ? "is-sold-out" : ""}`} key={item.id}>
                     <div className="menu-row__index">{String(index + 1).padStart(2, "0")}</div>
                     <div className="menu-row__copy"><h2>{item.name}</h2><p>{item.description}</p></div>
-                    {item.isSoldOut ? <div className="sold-out-label"><b>売り切れ</b><small>SOLD OUT</small></div> : <div className="menu-row__price"><b>{yen(item.price)}</b><small>（税込）</small></div>}
+                    {item.isSoldOut ? <div className="sold-out-label"><b>売り切れ</b><small>SOLD OUT</small></div> : null}
                     {item.isSoldOut ? <button className="add-button add-button--disabled" disabled><Minus size={30} weight="bold" /></button> : <button className="add-button" onClick={() => changeQuantity(item.id, 1)} aria-label={`${item.name}を追加`}><Plus size={36} weight="bold" /></button>}
                   </article>
                 );
