@@ -113,18 +113,21 @@ test("run-server stays alive until SIGINT and releases both ports", async () => 
   const serverRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
   const apiPort = 18787;
   const webPort = 15173;
+  const { NODE_OPTIONS, NODE_TEST_CONTEXT, ...childEnvironment } = process.env;
   const child = spawn(process.execPath, ["src/run-server.mjs"], {
     cwd: serverRoot,
-    env: { ...process.env, WARUN_DB_PATH: databasePath, WARUN_ADMIN_API_TOKEN: adminToken, WARUN_SERVER_PORT: String(apiPort), WARUN_WEB_PORT: String(webPort) },
+    env: { ...childEnvironment, WARUN_DB_PATH: databasePath, WARUN_ADMIN_API_TOKEN: adminToken, WARUN_SERVER_PORT: String(apiPort), WARUN_WEB_PORT: String(webPort) },
     stdio: ["ignore", "pipe", "pipe", "ipc"],
   });
   let output = "";
+  let errorOutput = "";
   const ready = new Promise((resolveReady, rejectReady) => {
-    const timeout = setTimeout(() => rejectReady(new Error("Server did not announce its URLs.")), 5000);
+    const timeout = setTimeout(() => rejectReady(new Error(`Server did not announce its URLs. stderr=${errorOutput}`)), 5000);
     child.stdout.on("data", (chunk) => {
       output += chunk.toString();
       if (output.includes(`http://127.0.0.1:${webPort}/`)) { clearTimeout(timeout); resolveReady(); }
     });
+    child.stderr.on("data", (chunk) => { errorOutput += chunk.toString(); });
     child.once("error", (error) => { clearTimeout(timeout); rejectReady(error); });
     child.once("exit", (code) => { if (code !== null) { clearTimeout(timeout); rejectReady(new Error(`Server exited before readiness: ${code}`)); } });
   });
@@ -144,14 +147,9 @@ test("run-server stays alive until SIGINT and releases both ports", async () => 
     assert.equal(pairingResponse.status, 201);
     assert.doesNotMatch(await pairingResponse.text(), new RegExp(adminToken));
     assert.equal(child.exitCode, null);
-    child.kill("SIGINT");
-    try {
-      await waitForChildExit(child, 1000);
-    } catch (error) {
-      if (process.platform !== "win32" || !child.connected) throw error;
-      child.send({ type: "shutdown" });
-      await waitForChildExit(child);
-    }
+    if (child.connected) child.send({ type: "shutdown" });
+    else child.kill("SIGINT");
+    await waitForChildExit(child);
     await assert.rejects(() => fetch(`http://127.0.0.1:${webPort}/`));
     await assert.rejects(() => fetch(`http://127.0.0.1:${apiPort}/v1/health`));
   } finally {
