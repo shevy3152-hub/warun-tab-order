@@ -18,3 +18,15 @@ test("API customer orders stay in memory instead of localStorage state", () => {
   assert.match(customerScreen, /const customerHistory = \(apiMode \? apiOrders : state\.orders\)/);
   assert.match(customerScreen, /disabled=\{submitting\}/);
 });
+
+test("customer starts with an empty cart and opens one confirmation flow", () => {
+  assert.match(customerScreen, /useState\(\{\}\)/);
+  assert.match(customerScreen, /const confirmOpenLock = useRef\(false\)/);
+  assert.match(customerScreen, /if \(!cartCount \|\| submitting \|\| confirmOpenLock\.current\) return/);
+  assert.match(customerScreen, /onClick=\{openConfirm\}/);
+});
+
+test("submit failures leave the confirmation modal and show a failed notice", () => {
+  assert.match(customerScreen, /catch \{\s*setModal\(null\);\s*setNotice\(\{ kind: "failed"/);
+  assert.match(customerScreen, /noticeKind === "failed" \|\| noticeKind === "error" \? "is-failed"/);
+});

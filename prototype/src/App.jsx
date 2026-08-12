@@ -305,12 +305,13 @@ function CustomerScreen({ state, updateState, deviceId, orderClient }) {
   const online = apiMode ? typeof navigator === "undefined" || navigator.onLine !== false : !state.offlineDevices.includes(device.deviceId);
   const categories = [...state.categories].filter((category) => category.isVisible).sort((a, b) => a.sortOrder - b.sortOrder);
   const [categoryId, setCategoryId] = useState(categories[0]?.id ?? "recommended");
-  const [cart, setCart] = useState({ edamame: 1, dashimaki: 1, beer: 2, lemon: 1, karaage: 1, yakitori: 2, otoshi: 2 });
+  const [cart, setCart] = useState({});
   const [modal, setModal] = useState(null);
   const [notice, setNotice] = useState(null);
   const [apiOrders, setApiOrders] = useState([]);
   const [submitting, setSubmitting] = useState(false);
   const submitLock = useRef(false);
+  const confirmOpenLock = useRef(false);
   const featuredIds = ["edamame", "dashimaki", "beer", "lemon", "karaage"];
   const currentItems = categoryId === "recommended"
     ? featuredIds.map((id) => state.menuItems.find((item) => item.id === id)).filter(Boolean)
@@ -320,6 +321,10 @@ function CustomerScreen({ state, updateState, deviceId, orderClient }) {
   const customerHistory = (apiMode ? apiOrders : state.orders)
     .filter((order) => order.tableId === device.tableId)
     .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+
+  useEffect(() => {
+    if (modal !== "confirm") confirmOpenLock.current = false;
+  }, [modal]);
 
   useEffect(() => {
     const unsubscribe = orderClient.subscribe((event) => {
@@ -421,11 +426,18 @@ function CustomerScreen({ state, updateState, deviceId, orderClient }) {
       setModal(null);
       setNotice(online ? "送信しました。ご注文を承りました。" : "通信が戻るまで、この端末に安全に保存します。送信待ちです。");
     } catch {
+      setModal(null);
       setNotice({ kind: "failed", message: "注文を保存できませんでした。もう一度お試しください。" });
     } finally {
       submitLock.current = false;
       setSubmitting(false);
     }
+  };
+
+  const openConfirm = () => {
+    if (!cartCount || submitting || confirmOpenLock.current) return;
+    confirmOpenLock.current = true;
+    setModal("confirm");
   };
 
   const callStaff = () => {
@@ -458,7 +470,7 @@ function CustomerScreen({ state, updateState, deviceId, orderClient }) {
           <div className="table-label">テーブル <b>{device.tableId}</b></div>
         </header>
 
-        {notice ? <div className={`customer-notice ${noticeKind === "success" ? "is-success" : "is-queued"}`}><span>{noticeKind === "success" ? <CheckCircle size={26} weight="fill" /> : noticeKind === "sending" ? <WifiHigh size={26} weight="bold" /> : <WifiSlash size={26} weight="bold" />}{noticeMessage}</span><button onClick={() => setNotice(null)} aria-label="通知を閉じる"><X size={20} /></button></div> : null}
+        {notice ? <div className={`customer-notice ${noticeKind === "success" ? "is-success" : noticeKind === "failed" || noticeKind === "error" ? "is-failed" : "is-queued"}`}><span>{noticeKind === "success" ? <CheckCircle size={26} weight="fill" /> : noticeKind === "sending" ? <WifiHigh size={26} weight="bold" /> : <WifiSlash size={26} weight="bold" />}{noticeMessage}</span><button onClick={() => setNotice(null)} aria-label="通知を閉じる"><X size={20} /></button></div> : null}
 
         <div className="customer-content">
           <section className="menu-panel">
@@ -482,7 +494,7 @@ function CustomerScreen({ state, updateState, deviceId, orderClient }) {
             <div className="cart-list">
               {cartRows.length ? cartRows.map((row, index) => <div className="cart-row" key={row.item.id}><span className="cart-row__index">{index + 1}</span><b>{row.item.name}</b><span>{row.quantity}点</span><button onClick={() => setCart((current) => ({ ...current, [row.item.id]: 0 }))} aria-label={`${row.item.name}を削除`}><X size={18} /></button></div>) : <div className="cart-empty"><Receipt size={54} weight="thin" /><p>商品を追加すると<br />ここに表示されます。</p></div>}
             </div>
-            <button className="confirm-button" disabled={!cartCount} onClick={() => setModal("confirm")}>注文を確定する <ArrowRight size={28} weight="bold" /></button>
+            <button className="confirm-button" disabled={!cartCount || submitting} onClick={openConfirm}>注文を確定する <ArrowRight size={28} weight="bold" /></button>
           </aside>
         </div>
         <footer className="customer-footer"><b>INFORMATION</b><span>アレルギー・原材料についてはスタッフまでお尋ねください。</span><strong>店内禁煙</strong></footer>
