@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
 import { bootstrapCustomerOrderClient } from '../../prototype/src/customer-bootstrap.js';
-import { createCustomerOrderClient, createMemoryOutbox } from '../../prototype/src/order-outbox.js';
+import { createCustomerOrderClient } from '../../prototype/src/order-outbox.js';
 import { createDeviceAuthenticator } from '../src/auth/device-auth.mjs';
 import { createCatalogRepository } from '../src/catalog/catalog-repository.mjs';
 import { initializeDatabase } from '../src/db/database.mjs';
@@ -61,9 +61,92 @@ async function close(server) {
   await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
 }
 
+function createPersistentTestOutbox(filePath) {
+  let operation = Promise.resolve();
+  const clone = (value) => JSON.parse(JSON.stringify(value));
+  const readRecords = async () => {
+    try {
+      return JSON.parse(await readFile(filePath, 'utf8'));
+    } catch (error) {
+      if (error?.code === 'ENOENT') return [];
+      throw error;
+    }
+  };
+  const writeRecords = async (records) => {
+    await writeFile(filePath, JSON.stringify(records), 'utf8');
+  };
+  const serialized = (callback) => {
+    const next = operation.then(callback, callback);
+    operation = next.catch(() => {});
+    return next;
+  };
+
+  return {
+    async put(record) {
+      return serialized(async () => {
+        const records = await readRecords();
+        const existing = records.find((item) => item.clientOrderId === record.clientOrderId);
+        if (existing) return clone(existing);
+        records.push(clone(record));
+        await writeRecords(records);
+        return clone(record);
+      });
+    },
+    async get(clientOrderId) {
+      const records = await readRecords();
+      const record = records.find((item) => item.clientOrderId === clientOrderId);
+      return record ? clone(record) : null;
+    },
+    async list() {
+      return (await readRecords()).map(clone);
+    },
+    async update(clientOrderId, patch) {
+      return serialized(async () => {
+        const records = await readRecords();
+        const index = records.findIndex((item) => item.clientOrderId === clientOrderId);
+        if (index < 0) return null;
+        records[index] = { ...records[index], ...clone(patch) };
+        await writeRecords(records);
+        return clone(records[index]);
+      });
+    },
+    async claim(clientOrderId, now) {
+      return serialized(async () => {
+        const records = await readRecords();
+        const index = records.findIndex((item) => item.clientOrderId === clientOrderId);
+        if (index < 0 || records[index].state !== 'pending') return null;
+        records[index] = {
+          ...records[index],
+          state: 'sending',
+          attemptCount: records[index].attemptCount + 1,
+          lastAttemptAt: now,
+        };
+        await writeRecords(records);
+        return clone(records[index]);
+      });
+    },
+    async recoverSending() {
+      return serialized(async () => {
+        const records = await readRecords();
+        let changed = false;
+        for (const record of records) {
+          if (record.state === 'sending') {
+            record.state = 'pending';
+            record.lastErrorCode = 'INTERRUPTED_SEND';
+            changed = true;
+          }
+        }
+        if (changed) await writeRecords(records);
+      });
+    },
+    async close() {},
+  };
+}
+
 test('automatic customer-to-kitchen-to-history flow uses one SQLite order', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'warun-auto-order-flow-'));
   const connection = initializeDatabase({ databasePath: join(directory, 'flow.sqlite3') });
+  const outboxPath = join(directory, 'outbox.json');
   let server;
   let authenticator;
   let catalog;
@@ -84,8 +167,7 @@ test('automatic customer-to-kitchen-to-history flow uses one SQLite order', asyn
     const origin = `http://127.0.0.1:${port}`;
     let fetchCalls = 0;
     const fetchImpl = (...args) => { fetchCalls += 1; return fetch(...args); };
-    const persistentOutbox = createMemoryOutbox();
-    const createClient = (options) => createCustomerOrderClient({ ...options, store: persistentOutbox, autoRetry: false });
+    const createClient = (options) => createCustomerOrderClient({ ...options, store: createPersistentTestOutbox(outboxPath), autoRetry: false });
     const credentialStore = { async load() { return { deviceId: CUSTOMER_ID, token: CUSTOMER_TOKEN }; } };
     const environment = { location: { origin }, navigator: { onLine: true }, fetch: fetchImpl };
     environment.navigator.onLine = false;
@@ -96,6 +178,9 @@ test('automatic customer-to-kitchen-to-history flow uses one SQLite order', asyn
     assert.equal(first.state, 'pending');
     assert.equal(fetchCalls, 0);
     await client.stop();
+    const persistedRecords = JSON.parse(await readFile(outboxPath, 'utf8'));
+    assert.equal(persistedRecords.length, 1);
+    assert.equal(persistedRecords[0].clientOrderId, record.clientOrderId);
 
     environment.navigator.onLine = true;
     const reloaded = await bootstrapCustomerOrderClient({ globalObject: environment, credentialStore, createClient });
