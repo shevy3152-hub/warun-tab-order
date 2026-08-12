@@ -1,7 +1,7 @@
 import { createServer as createNodeServer } from "node:http";
 import { readFile } from "node:fs/promises";
 import { networkInterfaces } from "node:os";
-import { extname, relative, resolve } from "node:path";
+import { extname, isAbsolute, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { createDeviceAuthenticator } from "./auth/device-auth.mjs";
@@ -62,6 +62,18 @@ export function accessUrls({ host = DEFAULT_HOST, port = DEFAULT_PORT, webPort =
 function envNumber(name, fallback) {
   const value = Number.parseInt(process.env[name] || "", 10);
   return Number.isInteger(value) && value > 0 && value <= 65_535 ? value : fallback;
+}
+
+export function resolveOperationalPath({ value, fallback, name, requireExplicit = false } = {}) {
+  const configured = typeof value === "string" ? value.trim() : "";
+  if (requireExplicit && !configured) {
+    throw new Error(`${name} must be an absolute path in production mode.`);
+  }
+  const selected = configured || fallback;
+  if (!isAbsolute(selected)) {
+    throw new Error(`${name} must be an absolute path.`);
+  }
+  return resolve(selected);
 }
 
 export function createWarunServer({ databasePath, now = Date.now } = {}) {
@@ -153,9 +165,20 @@ async function main() {
   const host = process.env.WARUN_SERVER_HOST || DEFAULT_HOST;
   const port = envNumber("WARUN_SERVER_PORT", DEFAULT_PORT);
   const webPort = envNumber("WARUN_WEB_PORT", 5173);
-  const databasePath = resolve(process.env.WARUN_DB_PATH || "var/warun.sqlite3");
+  const productionMode = process.env.WARUN_ENV === "production" || process.env.NODE_ENV === "production";
+  const databasePath = resolveOperationalPath({
+    value: process.env.WARUN_DB_PATH,
+    fallback: resolve("var/warun.sqlite3"),
+    name: "WARUN_DB_PATH",
+    requireExplicit: productionMode,
+  });
   const application = createWarunServer({ databasePath });
-  const webRoot = resolve(process.env.WARUN_WEB_ROOT || "../prototype/dist/client");
+  const webRoot = resolveOperationalPath({
+    value: process.env.WARUN_WEB_ROOT,
+    fallback: resolve("../prototype/dist/client"),
+    name: "WARUN_WEB_ROOT",
+    requireExplicit: productionMode,
+  });
   const webServer = createSameOriginWebServer({ apiServer: application.server, webRoot, adminRuntimeToken: process.env.WARUN_ADMIN_API_TOKEN || "" });
   const address = await listen(application.server, { host, port });
   const webAddress = await listen(webServer, { host, port: webPort });

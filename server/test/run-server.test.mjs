@@ -10,7 +10,13 @@ import { spawn } from "node:child_process";
 import test from "node:test";
 
 import { initializeDatabase } from "../src/db/database.mjs";
-import { accessUrls, createSameOriginWebServer, lanIPv4Addresses } from "../src/run-server.mjs";
+import { accessUrls, createSameOriginWebServer, lanIPv4Addresses, resolveOperationalPath } from "../src/run-server.mjs";
+
+test("operational paths are absolute and production paths are explicit", () => {
+  assert.equal(resolveOperationalPath({ value: "C:\\warun\\data\\warun.sqlite3", fallback: "C:\\fallback.sqlite3", name: "WARUN_DB_PATH" }), "C:\\warun\\data\\warun.sqlite3");
+  assert.throws(() => resolveOperationalPath({ value: "var/warun.sqlite3", fallback: "C:\\fallback.sqlite3", name: "WARUN_DB_PATH" }), /absolute path/);
+  assert.throws(() => resolveOperationalPath({ value: "", fallback: "C:\\fallback.sqlite3", name: "WARUN_DB_PATH", requireExplicit: true }), /absolute path/);
+});
 
 test("LAN access URLs are derived without changing the API contract", () => {
   assert.deepEqual(lanIPv4Addresses({
