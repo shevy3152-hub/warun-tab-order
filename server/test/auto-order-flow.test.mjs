@@ -84,15 +84,29 @@ test('automatic customer-to-kitchen-to-history flow uses one SQLite order', asyn
     const origin = `http://127.0.0.1:${port}`;
     let fetchCalls = 0;
     const fetchImpl = (...args) => { fetchCalls += 1; return fetch(...args); };
-    const createClient = (options) => createCustomerOrderClient({ ...options, store: createMemoryOutbox(), autoRetry: false });
+    const persistentOutbox = createMemoryOutbox();
+    const createClient = (options) => createCustomerOrderClient({ ...options, store: persistentOutbox, autoRetry: false });
     const credentialStore = { async load() { return { deviceId: CUSTOMER_ID, token: CUSTOMER_TOKEN }; } };
     const environment = { location: { origin }, navigator: { onLine: true }, fetch: fetchImpl };
+    environment.navigator.onLine = false;
     const client = await bootstrapCustomerOrderClient({ globalObject: environment, credentialStore, createClient });
     assert.equal(client.mode, 'api');
     const record = await client.enqueue({ items: [{ menuItemId: 'edamame', quantity: 1 }] });
     const first = await client.flush({ clientOrderId: record.clientOrderId });
-    assert.equal(first.state, 'synced');
-    assert.equal(first.idempotencyResult, 'created');
+    assert.equal(first.state, 'pending');
+    assert.equal(fetchCalls, 0);
+    await client.stop();
+
+    environment.navigator.onLine = true;
+    const reloaded = await bootstrapCustomerOrderClient({ globalObject: environment, credentialStore, createClient });
+    assert.equal(reloaded.mode, 'api');
+    await reloaded.start();
+    assert.equal(fetchCalls, 1);
+    const reloadedRecord = await reloaded.get(record.clientOrderId);
+    assert.equal(reloadedRecord.state, 'synced');
+    assert.equal(reloadedRecord.clientOrderId, record.clientOrderId);
+    await reloaded.stop();
+
     assert.equal(connection.database.prepare('SELECT COUNT(*) AS count FROM orders').get().count, 1);
     assert.equal(connection.database.prepare('SELECT COUNT(*) AS count FROM order_items').get().count, 1);
     assert.equal(connection.database.prepare('SELECT COUNT(*) AS count FROM event_log').get().count, 1);
@@ -124,10 +138,13 @@ test('automatic customer-to-kitchen-to-history flow uses one SQLite order', asyn
     assert.equal(history.orders.length, 1);
     assert.equal(history.orders[0].status, 'completed');
 
-    const reloaded = await bootstrapCustomerOrderClient({ globalObject: environment, credentialStore, createClient });
-    assert.equal(reloaded.mode, 'api');
-    await reloaded.start();
+    const secondReload = await bootstrapCustomerOrderClient({ globalObject: environment, credentialStore, createClient });
+    assert.equal(secondReload.mode, 'api');
+    await secondReload.start();
     assert.equal(fetchCalls, 1);
+    const secondReloadRecord = await secondReload.get(record.clientOrderId);
+    assert.equal(secondReloadRecord.state, 'synced');
+    await secondReload.stop();
   } finally {
     await close(server).catch(() => {});
     hub?.close();

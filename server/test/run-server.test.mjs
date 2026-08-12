@@ -12,6 +12,46 @@ import test from "node:test";
 import { initializeDatabase } from "../src/db/database.mjs";
 import { accessUrls, createSameOriginWebServer, DEFAULT_DATABASE_PATH, DEFAULT_WEB_ROOT, lanIPv4Addresses, resolveOperationalPath } from "../src/run-server.mjs";
 
+const CLEANUP_RETRY_LIMIT = 10;
+const CLEANUP_RETRY_DELAY_MS = 100;
+const childExitPromises = new WeakMap();
+
+function delay(milliseconds) {
+  return new Promise((resolveDelay) => setTimeout(resolveDelay, milliseconds));
+}
+
+async function waitForChildExit(child, timeoutMilliseconds = 5000) {
+  let exitPromise = childExitPromises.get(child);
+  if (!exitPromise) {
+    exitPromise = once(child, "exit");
+    childExitPromises.set(child, exitPromise);
+  }
+  await Promise.race([
+    exitPromise,
+    new Promise((_, reject) => setTimeout(() => reject(new Error("Child process did not exit.")), timeoutMilliseconds)),
+  ]);
+  // On Windows the child can exit while piped stdio handles keep the ChildProcess
+  // `close` event pending. Destroy only those test-owned pipes after exit; the
+  // process and its SQLite handles are already gone at this point.
+  child.stdout?.destroy();
+  child.stderr?.destroy();
+}
+
+async function removeTemporaryDirectory(directory) {
+  let lastError;
+  for (let attempt = 0; attempt < CLEANUP_RETRY_LIMIT; attempt += 1) {
+    try {
+      await rm(directory, { recursive: true, force: true });
+      return;
+    } catch (error) {
+      lastError = error;
+      if (!['EBUSY', 'EPERM', 'ENOTEMPTY'].includes(error?.code) || attempt === CLEANUP_RETRY_LIMIT - 1) throw error;
+      await delay(CLEANUP_RETRY_DELAY_MS);
+    }
+  }
+  throw lastError;
+}
+
 test("operational paths are absolute and production paths are explicit", () => {
   assert.equal(resolveOperationalPath({ value: "C:\\warun\\data\\warun.sqlite3", fallback: "C:\\fallback.sqlite3", name: "WARUN_DB_PATH" }), "C:\\warun\\data\\warun.sqlite3");
   assert.throws(() => resolveOperationalPath({ value: "var/warun.sqlite3", fallback: "C:\\fallback.sqlite3", name: "WARUN_DB_PATH" }), /absolute path/);
@@ -76,7 +116,7 @@ test("run-server stays alive until SIGINT and releases both ports", async () => 
   const child = spawn(process.execPath, ["src/run-server.mjs"], {
     cwd: serverRoot,
     env: { ...process.env, WARUN_DB_PATH: databasePath, WARUN_ADMIN_API_TOKEN: adminToken, WARUN_SERVER_PORT: String(apiPort), WARUN_WEB_PORT: String(webPort) },
-    stdio: ["ignore", "pipe", "pipe"],
+    stdio: ["ignore", "pipe", "pipe", "ipc"],
   });
   let output = "";
   const ready = new Promise((resolveReady, rejectReady) => {
@@ -105,11 +145,18 @@ test("run-server stays alive until SIGINT and releases both ports", async () => 
     assert.doesNotMatch(await pairingResponse.text(), new RegExp(adminToken));
     assert.equal(child.exitCode, null);
     child.kill("SIGINT");
-    await Promise.race([once(child, "exit"), new Promise((_, reject) => setTimeout(() => reject(new Error("Server did not stop after SIGINT.")), 5000))]);
+    try {
+      await waitForChildExit(child, 1000);
+    } catch (error) {
+      if (process.platform !== "win32" || !child.connected) throw error;
+      child.send({ type: "shutdown" });
+      await waitForChildExit(child);
+    }
     await assert.rejects(() => fetch(`http://127.0.0.1:${webPort}/`));
     await assert.rejects(() => fetch(`http://127.0.0.1:${apiPort}/v1/health`));
   } finally {
     if (child.exitCode === null) child.kill();
-    await rm(root, { recursive: true, force: true });
+    await waitForChildExit(child);
+    await removeTemporaryDirectory(root);
   }
 });

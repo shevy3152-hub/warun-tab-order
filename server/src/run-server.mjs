@@ -201,11 +201,21 @@ async function main() {
       if (shuttingDown) return;
       shuttingDown = true;
       clearInterval(keepAlive);
-      webServer.close(() => application.server.close(() => {
+      const closeServer = (target, callback) => {
+        target.close(callback);
+        target.closeIdleConnections?.();
+        target.closeAllConnections?.();
+      };
+      closeServer(webServer, () => closeServer(application.server, () => {
         application.closeDependencies();
         resolveShutdown();
       }));
     };
+    if (typeof process.send === "function") {
+      process.once("message", (message) => {
+        if (message?.type === "shutdown") shutdown();
+      });
+    }
     process.once("SIGINT", shutdown);
     process.once("SIGTERM", shutdown);
     keepAlive = setInterval(() => {}, 60_000);
