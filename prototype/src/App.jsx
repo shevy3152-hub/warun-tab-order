@@ -26,6 +26,7 @@ import { customerOrderNoticeFromOutboxEvent } from "./customer-order-notice.js";
 import { configuredAdminToken, fetchAdminOrderHistory, issueCustomerPairingCode } from "./admin-pairing.js";
 import { fetchKitchenOrders, kitchenApiConfigured, markKitchenItemServed } from "./kitchen-api.js";
 import { bootstrapCustomerOrderClient } from "./customer-bootstrap.js";
+import { pairingCodeQrSvg } from "./qr-code.js";
 
 const STORAGE_KEY = "izakaya-order-prototype-v3";
 
