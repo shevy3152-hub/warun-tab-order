@@ -65,7 +65,12 @@ set "WARUN_ENV=production"
 set "WARUN_AUTO_PROVISION_ADMIN=1"
 set "WARUN_DB_PATH=%SERVER_DIR%var\warun.sqlite3"
 set "WARUN_ADMIN_TOKEN_FILE=%SERVER_DIR%var\admin-token"
-set "WARUN_WEB_ROOT=%REPO_DIR%prototype\dist\client"
+set "WARUN_WEB_ROOT=%REPO_DIR%\prototype\dist\client"
+if not exist "%WARUN_WEB_ROOT%\index.html" (
+  echo Web root not found: %WARUN_WEB_ROOT%
+  popd
+  exit /b 1
+)
 
 echo Starting Warun. Keep this window open during service.
 node server\src\run-server.mjs

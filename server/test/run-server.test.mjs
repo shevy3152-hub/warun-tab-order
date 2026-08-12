@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash, randomBytes } from "node:crypto";
 import { once } from "node:events";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -72,6 +72,14 @@ test("LAN access URLs are derived without changing the API contract", () => {
     apiUrls: ["http://127.0.0.1:8787/v1", "http://192.168.1.23:8787/v1"],
     webUrls: ["http://127.0.0.1:5173/", "http://192.168.1.23:5173/"],
   });
+});
+
+test("Windows launcher resolves the repository root and validates the Web root", async () => {
+  const launcher = await readFile(new URL("../start-windows.cmd", import.meta.url), "utf8");
+  assert.match(launcher, /set "REPO_DIR=%SERVER_DIR%\.\."/);
+  assert.match(launcher, /set "WARUN_WEB_ROOT=%REPO_DIR%\\prototype\\dist\\client"/);
+  assert.match(launcher, /if not exist "%WARUN_WEB_ROOT%\\index\.html" \(/);
+  assert.match(launcher, /echo Web root not found: %WARUN_WEB_ROOT%/);
 });
 
 test("admin runtime is injected only into the admin shell", async () => {
