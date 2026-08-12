@@ -2,7 +2,7 @@
 setlocal EnableExtensions EnableDelayedExpansion
 
 set "SERVER_DIR=%~dp0"
-set "REPO_DIR=%SERVER_DIR%.."
+for %%I in ("%SERVER_DIR%..") do set "REPO_DIR=%%~fI"
 pushd "%REPO_DIR%" >nul || exit /b 1
 
 where node >nul 2>nul
@@ -65,7 +65,12 @@ set "WARUN_ENV=production"
 set "WARUN_AUTO_PROVISION_ADMIN=1"
 set "WARUN_DB_PATH=%SERVER_DIR%var\warun.sqlite3"
 set "WARUN_ADMIN_TOKEN_FILE=%SERVER_DIR%var\admin-token"
-set "WARUN_WEB_ROOT=%REPO_DIR%prototype\dist\client"
+set "WARUN_WEB_ROOT=%REPO_DIR%\prototype\dist\client"
+if not exist "%WARUN_WEB_ROOT%\" (
+  echo Web root not found: %WARUN_WEB_ROOT%
+  popd
+  exit /b 1
+)
 
 echo Starting Warun. Keep this window open during service.
 node server\src\run-server.mjs
