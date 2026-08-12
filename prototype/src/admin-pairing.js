@@ -38,3 +38,29 @@ export async function fetchAdminOrderHistory({ env = globalThis, fetchImpl = env
   if (!Array.isArray(body?.orders)) throw new Error("Order history response was invalid.");
   return body.orders;
 }
+
+export async function fetchAdminRegistrationRequests({ env = globalThis, fetchImpl = env.fetch } = {}) {
+  const token = configuredAdminToken(env);
+  const base = apiBase(env);
+  if (!token || !base || typeof fetchImpl !== "function") throw new Error("Admin registration is not configured.");
+  const response = await fetchImpl(`${base}/admin/registration-requests`, {
+    headers: { Accept: "application/json", Authorization: `Bearer ${token}` },
+  });
+  if (!response.ok) throw new Error("Registration requests could not be loaded.");
+  const body = await response.json();
+  if (!Array.isArray(body?.requests)) throw new Error("Registration request response was invalid.");
+  return body.requests;
+}
+
+export async function approveAdminRegistrationRequest({ env = globalThis, requestId, tableId, fetchImpl = env.fetch } = {}) {
+  const token = configuredAdminToken(env);
+  const base = apiBase(env);
+  if (!token || !base || typeof fetchImpl !== "function") throw new Error("Admin registration is not configured.");
+  const response = await fetchImpl(`${base}/admin/registration-requests/approve`, {
+    method: "POST",
+    headers: { Accept: "application/json", "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ requestId, tableId }),
+  });
+  if (!response.ok) throw new Error("Registration approval failed.");
+  return response.json();
+}

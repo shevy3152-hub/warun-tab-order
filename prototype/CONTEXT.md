@@ -75,3 +75,12 @@
 - 実行した検証と未検証事項
 - 残るリスク
 - 次に行う作業を1つ
+-
+## Device registration v2 handoff (2026-08-12)
+
+- A schema v2 migration adds `registration_requests` while preserving v1 rows and keeping `PRAGMA user_version=2` after initialization.
+- `/pairing.html` creates one customer registration request, stores the request secret in IndexedDB, and polls until explicit admin table approval.
+- The admin Devices screen lists public pending requests and approves an available table through the authenticated admin API. Claim creates the customer device and assignment in one transaction and returns the token only in the successful claim response.
+- Legacy pairing-code registration remains available. No real database, A90, pairing code, or real order was used for verification.
+- Verification: server 334/334, prototype 41/41, direct Vite build plus Sites packaging, focused migration/registration HTTP tests, and `git diff --check`.
+- Remaining risk: if the claim HTTP response is lost after the server commits the device, the token cannot be recovered from its hash; use the documented administrative recovery flow rather than automatic token reissue.

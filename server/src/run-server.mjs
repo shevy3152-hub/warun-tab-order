@@ -13,6 +13,7 @@ import { createSnapshotService } from "./events/snapshot-service.mjs";
 import { createHttpServer } from "./http/http-server.mjs";
 import { createOrderRepository } from "./orders/order-repository.mjs";
 import { createPairingService } from "./pairing/pairing-service.mjs";
+import { createRegistrationService } from "./registration/registration-service.mjs";
 import { ensureAdminRuntime } from "./bootstrap/admin-runtime.mjs";
 
 const DEFAULT_HOST = "0.0.0.0";
@@ -100,6 +101,7 @@ export function createWarunServer({ databasePath, now = Date.now } = {}) {
   const eventRepository = createEventRepository({ database });
   const orderRepository = createOrderRepository({ database, now });
   const pairingService = createPairingService({ database, now });
+  const registrationService = createRegistrationService({ database, now });
   const snapshotService = createSnapshotService({ catalog, eventRepository });
   const sseHub = createSseHub({ eventRepository });
   const server = createHttpServer({
@@ -112,6 +114,7 @@ export function createWarunServer({ databasePath, now = Date.now } = {}) {
     sseHub,
     now,
     pairingService,
+    registrationService,
   });
 
   const closeDependencies = () => {

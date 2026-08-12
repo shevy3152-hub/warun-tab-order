@@ -20,6 +20,10 @@ import {
   isPairingServiceError,
 } from '../pairing/pairing-service.mjs';
 import {
+  REGISTRATION_ERROR_CODES,
+  isRegistrationServiceError,
+} from '../registration/registration-service.mjs';
+import {
   SNAPSHOT_ERROR_CODES,
   isSnapshotServiceError,
 } from '../events/snapshot-errors.mjs';
@@ -64,6 +68,11 @@ const ROUTE_METHODS = new Map([
   ['/v1/admin/pairing-codes', 'POST'],
   ['/v1/pairings/claim', 'POST'],
   ['/v1/admin/devices/revoke', 'POST'],
+  ['/v1/registration-requests', 'POST'],
+  ['/v1/registration-requests/status', 'POST'],
+  ['/v1/registration-requests/claim', 'POST'],
+  ['/v1/admin/registration-requests', 'GET'],
+  ['/v1/admin/registration-requests/approve', 'POST'],
 ]);
 const READ_ONLY_ROUTE_METHODS = new Map([
   ['/v1/health', 'GET'],
@@ -251,7 +260,9 @@ function defaultServiceStateReader(database) {
       throw new Error('Service state is unavailable.');
     }
     return {
-      schemaVersion: row.schema_version,
+      // The health endpoint keeps the existing HTTP contract (schemaVersion 1).
+      // The database schema version is validated independently above.
+      schemaVersion: 1,
       eventEpoch: row.event_epoch,
       lastEventId: row.last_event_id,
     };
@@ -304,6 +315,25 @@ function mapApplicationError(error) {
       PAIRING_ERROR_CODES.DEVICE_CONFLICT,
     ].includes(error.code)) return createHttpError(HTTP_ERROR_CODES.PAIRING_CONFLICT);
     return createHttpError(HTTP_ERROR_CODES.PAIRING_INVALID);
+  }
+
+  if (isRegistrationServiceError(error)) {
+    if (error.code === REGISTRATION_ERROR_CODES.EXPIRED) return createHttpError(HTTP_ERROR_CODES.REGISTRATION_EXPIRED);
+    if (error.code === REGISTRATION_ERROR_CODES.DATABASE_FAILURE) {
+      return hasBusyCause(error)
+        ? createHttpError(HTTP_ERROR_CODES.SERVICE_UNAVAILABLE)
+        : createHttpError(HTTP_ERROR_CODES.INTERNAL_ERROR);
+    }
+    if ([
+      REGISTRATION_ERROR_CODES.NOT_FOUND,
+      REGISTRATION_ERROR_CODES.NOT_APPROVED,
+      REGISTRATION_ERROR_CODES.ALREADY_APPROVED,
+      REGISTRATION_ERROR_CODES.CLAIMED,
+      REGISTRATION_ERROR_CODES.CANCELLED,
+      REGISTRATION_ERROR_CODES.TABLE_CONFLICT,
+      REGISTRATION_ERROR_CODES.DEVICE_CONFLICT,
+    ].includes(error.code)) return createHttpError(HTTP_ERROR_CODES.REGISTRATION_CONFLICT);
+    return createHttpError(HTTP_ERROR_CODES.REGISTRATION_INVALID);
   }
 
   if (isCatalogRepositoryError(error)) {
@@ -490,6 +520,7 @@ function createConfiguredHttpServer({
   snapshotService = undefined,
   sseHub = undefined,
   pairingService = undefined,
+  registrationService = undefined,
   readServiceState = undefined,
   requestIdFactory = randomUUID,
   now = Date.now,
@@ -581,6 +612,42 @@ function createConfiguredHttpServer({
         return;
       }
 
+      if (target.path === '/v1/registration-requests') {
+        const registrations = requireService(registrationService, 'createRequestFromRequest');
+        const body = await readJsonBody(request);
+        const created = registrations.createRequestFromRequest({
+          requestSecret: body?.requestSecret,
+          deviceId: body?.deviceId,
+          displayName: body?.displayName,
+          appVersion: body?.appVersion,
+          role: body?.role,
+        });
+        writeJsonResponse(response, { statusCode: 201, body: created, requestId });
+        return;
+      }
+
+      if (target.path === '/v1/registration-requests/status') {
+        const registrations = requireService(registrationService, 'getStatusFromRequest');
+        const body = await readJsonBody(request);
+        const status = registrations.getStatusFromRequest({ requestId: body?.requestId, requestSecret: body?.requestSecret });
+        writeJsonResponse(response, { statusCode: 200, body: status, requestId });
+        return;
+      }
+
+      if (target.path === '/v1/registration-requests/claim') {
+        const registrations = requireService(registrationService, 'claimRequest');
+        const body = await readJsonBody(request);
+        const claim = registrations.claimRequest({ requestId: body?.requestId, requestSecret: body?.requestSecret });
+        const claimedPrincipal = authenticator.authenticateDeviceToken(claim.deviceToken);
+        const config = mapDeviceConfigResponse(catalog.getDeviceSettings(claimedPrincipal));
+        writeJsonResponse(response, {
+          statusCode: 201,
+          body: { deviceToken: claim.deviceToken, config },
+          requestId,
+        });
+        return;
+      }
+
       principal = authenticateRequest(request, authenticator);
 
       if (target.path === '/v1/orders') {
@@ -652,6 +719,25 @@ function createConfiguredHttpServer({
         }
         const revoked = pairings.revokeDeviceRequest({ deviceId: body?.deviceId, actorDeviceId: principal.deviceId });
         writeJsonResponse(response, { statusCode: 200, body: revoked, requestId });
+        return;
+      }
+
+      if (target.path === '/v1/admin/registration-requests') {
+        authorizeDeviceRole(principal, ['admin']);
+        const registrations = requireService(registrationService, 'listRequests');
+        writeJsonResponse(response, { statusCode: 200, body: { requests: registrations.listRequests() }, requestId });
+        return;
+      }
+
+      if (target.path === '/v1/admin/registration-requests/approve') {
+        authorizeDeviceRole(principal, ['admin']);
+        const registrations = requireService(registrationService, 'approveRequest');
+        const body = await readJsonBody(request);
+        const approved = registrations.approveRequest(
+          { requestId: body?.requestId, tableId: body?.tableId },
+          { approvedByDeviceId: principal.deviceId },
+        );
+        writeJsonResponse(response, { statusCode: 200, body: approved, requestId });
         return;
       }
 

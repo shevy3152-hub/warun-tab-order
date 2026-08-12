@@ -3,7 +3,8 @@ import { dirname, isAbsolute, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
 
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
+export const LEGACY_SCHEMA_VERSION = 1;
 
 export const REQUIRED_TABLES = Object.freeze([
   'system_state',
@@ -16,6 +17,7 @@ export const REQUIRED_TABLES = Object.freeze([
   'order_items',
   'staff_calls',
   'event_log',
+  'registration_requests',
 ]);
 
 export const REQUIRED_INDEXES = Object.freeze([
@@ -33,6 +35,8 @@ export const REQUIRED_INDEXES = Object.freeze([
   'idx_staff_calls_table_status',
   'idx_event_log_type_event',
   'idx_event_log_aggregate',
+  'idx_registration_requests_status_expiry',
+  'uq_registration_requests_approved_table',
 ]);
 
 export const REQUIRED_TRIGGERS = Object.freeze([
@@ -55,6 +59,14 @@ export const DEFAULT_SCHEMA_PATH = resolve(
   '..',
   'docs',
   'schema-v1.sql',
+);
+export const DEFAULT_MIGRATION_V2_PATH = resolve(
+  moduleDirectory,
+  '..',
+  '..',
+  '..',
+  'docs',
+  'schema-v2.sql',
 );
 
 export class DatabaseInitializationError extends Error {
@@ -125,9 +137,15 @@ function assertRequiredNames(actualNames, requiredNames, objectType) {
   }
 }
 
-function validateSchema(database) {
-  assertRequiredNames(schemaObjectNames(database, 'table'), REQUIRED_TABLES, 'tables');
-  assertRequiredNames(schemaObjectNames(database, 'index'), REQUIRED_INDEXES, 'indexes');
+function validateSchema(database, { version = SCHEMA_VERSION } = {}) {
+  const requiredTables = version === LEGACY_SCHEMA_VERSION
+    ? REQUIRED_TABLES.filter((name) => name !== 'registration_requests')
+    : REQUIRED_TABLES;
+  const requiredIndexes = version === LEGACY_SCHEMA_VERSION
+    ? REQUIRED_INDEXES.filter((name) => !name.startsWith('idx_registration_requests') && name !== 'uq_registration_requests_approved_table')
+    : REQUIRED_INDEXES;
+  assertRequiredNames(schemaObjectNames(database, 'table'), requiredTables, 'tables');
+  assertRequiredNames(schemaObjectNames(database, 'index'), requiredIndexes, 'indexes');
   assertRequiredNames(schemaObjectNames(database, 'trigger'), REQUIRED_TRIGGERS, 'triggers');
 
   const state = database
@@ -139,13 +157,13 @@ function validateSchema(database) {
     .get();
 
   if (
-    state?.schema_version !== SCHEMA_VERSION
+    state?.schema_version !== version
     || typeof state?.event_epoch !== 'string'
     || state.event_epoch.length !== 36
   ) {
     throw new DatabaseInitializationError(
       'SCHEMA_INCOMPLETE',
-      'Schema v1 system_state metadata is missing or invalid.',
+      'Schema v2 system_state metadata is missing or invalid.',
     );
   }
 
@@ -200,9 +218,15 @@ function safelyClose(database) {
   }
 }
 
-export function initializeDatabase({ databasePath, schemaPath = DEFAULT_SCHEMA_PATH } = {}) {
+function migrateV1ToV2(database, migrationPath) {
+  const migrationSql = readFileSync(migrationPath, 'utf8');
+  database.exec(migrationSql);
+}
+
+export function initializeDatabase({ databasePath, schemaPath = DEFAULT_SCHEMA_PATH, migrationV2Path = DEFAULT_MIGRATION_V2_PATH } = {}) {
   const resolvedDatabasePath = resolveFilePath(databasePath, 'databasePath');
   const resolvedSchemaPath = resolveFilePath(schemaPath, 'schemaPath');
+  const resolvedMigrationV2Path = resolveFilePath(migrationV2Path, 'migrationV2Path');
 
   mkdirSync(dirname(resolvedDatabasePath), { recursive: true });
 
@@ -218,6 +242,10 @@ export function initializeDatabase({ databasePath, schemaPath = DEFAULT_SCHEMA_P
       enableWriteAheadLogging(database);
       const schemaSql = readFileSync(resolvedSchemaPath, 'utf8');
       database.exec(schemaSql);
+      migrateV1ToV2(database, resolvedMigrationV2Path);
+    } else if (currentVersion === LEGACY_SCHEMA_VERSION) {
+      validateSchema(database, { version: LEGACY_SCHEMA_VERSION });
+      migrateV1ToV2(database, resolvedMigrationV2Path);
     } else if (currentVersion === SCHEMA_VERSION) {
       validateSchema(database);
       enableWriteAheadLogging(database);
@@ -229,7 +257,7 @@ export function initializeDatabase({ databasePath, schemaPath = DEFAULT_SCHEMA_P
     } else {
       throw new DatabaseInitializationError(
         'UNSUPPORTED_SCHEMA_VERSION',
-        `Unsupported SQLite schema version ${currentVersion}; expected ${SCHEMA_VERSION}.`,
+        `Unsupported SQLite schema version ${currentVersion}; expected ${LEGACY_SCHEMA_VERSION} or ${SCHEMA_VERSION}.`,
       );
     }
 

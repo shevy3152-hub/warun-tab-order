@@ -21,9 +21,9 @@ import {
   X,
 } from "@phosphor-icons/react";
 import { createCustomerOrderClient, resolveOrderApiConfig } from "./order-outbox.js";
-import { claimCustomerDevice, createIndexedDbCredentialStore, loadOrCreateCustomerDevice, runtimeForCustomerCredentials } from "./device-credentials.js";
+import { claimCustomerDevice, claimCustomerRegistration, createCustomerRegistrationRequest, createIndexedDbCredentialStore, fetchCustomerRegistrationStatus, loadOrCreateCustomerDevice, runtimeForCustomerCredentials } from "./device-credentials.js";
 import { customerOrderNoticeFromOutboxEvent } from "./customer-order-notice.js";
-import { configuredAdminToken, fetchAdminOrderHistory, issueCustomerPairingCode } from "./admin-pairing.js";
+import { approveAdminRegistrationRequest, configuredAdminToken, fetchAdminOrderHistory, fetchAdminRegistrationRequests, issueCustomerPairingCode } from "./admin-pairing.js";
 import { fetchKitchenOrders, kitchenApiConfigured, markKitchenItemServed } from "./kitchen-api.js";
 import { bootstrapCustomerOrderClient } from "./customer-bootstrap.js";
 import { pairingCodeQrSvg } from "./qr-code.js";
@@ -182,9 +182,10 @@ function navigate(route) {
 }
 
 function useRoute() {
-  const [route, setRoute] = useState(window.location.hash.slice(1) || "/");
+  const pageRoute = window.location.pathname === "/pairing.html" ? "/pairing" : null;
+  const [route, setRoute] = useState(pageRoute || window.location.hash.slice(1) || "/");
   useEffect(() => {
-    const handler = () => setRoute(window.location.hash.slice(1) || "/");
+    const handler = () => setRoute(window.location.pathname === "/pairing.html" ? "/pairing" : window.location.hash.slice(1) || "/");
     window.addEventListener("hashchange", handler);
     return () => window.removeEventListener("hashchange", handler);
   }, []);
@@ -667,6 +668,9 @@ function AdminScreen({ state, updateState, section = "menu" }) {
   const [pairingTableId, setPairingTableId] = useState("1");
   const [pairingQr, setPairingQr] = useState(null);
   const [pairingError, setPairingError] = useState(false);
+  const [registrationRequests, setRegistrationRequests] = useState([]);
+  const [registrationLoading, setRegistrationLoading] = useState(false);
+  const [registrationError, setRegistrationError] = useState(false);
   const categoriesById = Object.fromEntries(state.categories.map((category) => [category.id, category]));
   const editingMenu = state.menuItems.find((item) => item.id === editingMenuId) ?? null;
   const setMenuItem = (id, patch) => updateState((current) => ({ ...current, menuItems: current.menuItems.map((item) => item.id === id ? { ...item, ...patch } : item) }));
@@ -696,6 +700,36 @@ function AdminScreen({ state, updateState, section = "menu" }) {
     setShowAdd(false);
   };
   const sortedMenus = [...state.menuItems].sort((a, b) => (categoriesById[a.categoryId]?.sortOrder ?? 99) - (categoriesById[b.categoryId]?.sortOrder ?? 99) || a.sortOrder - b.sortOrder);
+  useEffect(() => {
+    if (section !== "devices") return undefined;
+    let cancelled = false;
+    const loadRequests = async () => {
+      try {
+        if (!cancelled) setRegistrationLoading(true);
+        const requests = await fetchAdminRegistrationRequests({ env: window });
+        if (!cancelled) {
+          setRegistrationRequests(requests);
+          setRegistrationError(false);
+        }
+      } catch {
+        if (!cancelled) setRegistrationError(true);
+      } finally {
+        if (!cancelled) setRegistrationLoading(false);
+      }
+    };
+    void loadRequests();
+    const timer = window.setInterval(loadRequests, 2_000);
+    return () => { cancelled = true; window.clearInterval(timer); };
+  }, [section]);
+
+  const approveRegistration = async (requestId, tableId) => {
+    try {
+      await approveAdminRegistrationRequest({ env: window, requestId, tableId: Number(tableId) });
+      setRegistrationRequests((current) => current.filter((request) => request.requestId !== requestId));
+    } catch {
+      setRegistrationError(true);
+    }
+  };
   const issuePairing = async () => {
     setPairingError(false);
     try {
@@ -725,6 +759,7 @@ function AdminScreen({ state, updateState, section = "menu" }) {
         </> : null}
 
         {section === "devices" ? <>
+          <div className="pairing-admin-panel registration-request-panel"><div><span className="section-kicker">DEVICE REGISTRATION</span><h2>登録待ち端末</h2><p>端末の登録要求を確認し、テーブルを選んで明示的に承認します。</p></div>{registrationLoading && registrationRequests.length === 0 ? <p>登録要求を読み込み中です。</p> : null}{registrationError ? <p role="alert">登録要求を取得できませんでした。</p> : null}{!registrationLoading && !registrationError && registrationRequests.length === 0 ? <p>登録待ち端末はありません。</p> : null}{registrationRequests.map((request) => <article className="registration-request" key={request.requestId}><div><b>{request.displayName}</b><small>端末ID: {request.deviceId}</small><small>アプリ: {request.appVersion}</small></div><label>テーブル<select defaultValue="" aria-label={`${request.displayName}のテーブル`} onChange={(event) => approveRegistration(request.requestId, event.target.value)}><option value="" disabled>選択</option>{[1, 2, 3, 4].map((tableId) => <option value={String(tableId)} key={tableId}>テーブル {tableId}</option>)}</select></label></article>)}</div>
           <div className="pairing-admin-panel"><div><span className="section-kicker">CUSTOMER PAIRING</span><h2>客席端末をQRで登録</h2><p>管理者だけが発行します。raw codeは文字表示・保存せず、A90のカメラでQRを読み取ってください。</p></div><label>テーブル<select value={pairingTableId} onChange={(event) => setPairingTableId(event.target.value)}>{[1, 2, 3, 4, 5, 6, 7, 8].map((tableId) => <option value={String(tableId)} key={tableId}>テーブル {tableId}</option>)}</select></label><button className="button button--primary" onClick={issuePairing}>QRを発行</button>{pairingError ? <p role="alert">QRを発行できませんでした。管理者API設定と空きテーブルを確認してください。</p> : null}{pairingQr ? <div className="pairing-qr" dangerouslySetInnerHTML={{ __html: pairingQr }} /> : null}</div>
           <div className="admin-toolbar"><div><span className="section-kicker">FIXED ASSIGNMENT</span><h2>客席端末とテーブル</h2><p>客席からは変更できません。端末を置き替えたときだけここで設定します。</p></div></div>
           <div className="device-admin-grid">{state.devices.map((device, index) => <article key={device.deviceId}><div className="device-admin-icon"><Monitor size={38} weight="duotone" /></div><div><small>端末 {String(index + 1).padStart(2, "0")}</small><h3>{device.label}</h3><code>{device.deviceId}</code></div><label>固定テーブル<select value={device.tableId} onChange={(event) => updateState((current) => ({ ...current, devices: current.devices.map((item) => item.deviceId === device.deviceId ? { ...item, tableId: event.target.value } : item) }))}>{[1, 2, 3, 4, 5, 6, 7, 8].map((tableId) => <option value={String(tableId)} key={tableId}>テーブル {tableId}</option>)}</select></label><ConnectionBadge online={!state.offlineDevices.includes(device.deviceId)} compact /></article>)}</div>
@@ -734,7 +769,7 @@ function AdminScreen({ state, updateState, section = "menu" }) {
   );
 }
 
-function PairingScreen({ onClaim, error }) {
+function PairingScreen({ onClaim, error, registrationState }) {
   const [pairingCode, setPairingCode] = useState("");
   const [displayName, setDisplayName] = useState("customer tablet");
   const [submitting, setSubmitting] = useState(false);
@@ -745,7 +780,7 @@ function PairingScreen({ onClaim, error }) {
     try { await onClaim({ pairingCode: pairingCode.trim(), displayName: displayName.trim() }); }
     finally { setSubmitting(false); }
   };
-  return <main className="customer-shell"><section className="empty-state"><h1>端末登録</h1><p>管理者から受け取ったペアリングコードを入力してください。</p><form className="inline-form" onSubmit={submit}><label>ペアリングコード<input value={pairingCode} onChange={(event) => setPairingCode(event.target.value)} autoComplete="off" required /></label><label>端末名<input value={displayName} onChange={(event) => setDisplayName(event.target.value)} maxLength={80} required /></label><button className="button button--primary" disabled={submitting}>{submitting ? "登録中" : "端末を登録"}</button></form>{error ? <p role="alert">ペアリングに失敗しました。管理者へコードの再発行を依頼してください。</p> : null}</section></main>;
+  return <main className="customer-shell"><section className="empty-state"><h1>端末登録</h1><p>登録要求を作成しました。PCの管理画面でテーブルを選んで承認してください。</p><p role="status">{registrationState?.status === "approved" ? "承認済みです。登録を完了しています。" : registrationState?.status === "starting" ? "登録要求を準備しています。" : registrationState?.status === "expired" ? "登録要求の期限が切れました。ページを再読み込みしてください。" : registrationState?.status === "cancelled" ? "登録要求は取り消されました。" : "管理者の承認を待っています。"}</p>{error ? <p role="alert">端末登録に失敗しました。管理画面の状態を確認してください。</p> : null}<details><summary>既存のペアリングコードを使用</summary><form className="inline-form" onSubmit={submit}><label>ペアリングコード<input value={pairingCode} onChange={(event) => setPairingCode(event.target.value)} autoComplete="off" required /></label><label>端末名<input value={displayName} onChange={(event) => setDisplayName(event.target.value)} maxLength={80} required /></label><button className="button button--primary" disabled={submitting}>{submitting ? "登録中" : "コードで登録"}</button></form></details></section></main>;
 }
 
 export function App() {
@@ -753,6 +788,7 @@ export function App() {
   const [orderClient, setOrderClient] = useState(null);
   const [kitchenApiState, setKitchenApiState] = useState(null);
   const [pairingError, setPairingError] = useState(false);
+  const [registrationState, setRegistrationState] = useState({ status: "starting" });
   const [state, setState] = useState(() => {
     try { return JSON.parse(localStorage.getItem(STORAGE_KEY)) || defaultState; } catch { return defaultState; }
   });
@@ -798,6 +834,42 @@ export function App() {
     void bootstrap().catch(() => { if (!cancelled) setPairingError(true); });
     return () => { cancelled = true; };
   }, []);
+
+  useEffect(() => {
+    const customerRoute = route === "/" || route === "/pairing" || route.startsWith("/customer/");
+    if (!customerRoute || window.WARUN_ORDER_MODE === "demo") return undefined;
+    let cancelled = false;
+    let timer;
+    const store = createIndexedDbCredentialStore({ indexedDB: window.indexedDB });
+    const baseUrl = new URL("/v1", window.location.origin).toString().replace(/\/+$/, "");
+    const poll = async () => {
+      const status = await fetchCustomerRegistrationStatus({ store, baseUrl });
+      if (cancelled || !status) return;
+      setRegistrationState(status);
+      if (status.status === "approved") {
+        await claimCustomerRegistration({ store, baseUrl });
+        const credentials = await store.load();
+        const runtime = runtimeForCustomerCredentials({ globalObject: window, baseUrl, token: credentials.token });
+        if (!cancelled) {
+          setOrderClient(createCustomerOrderClient({ global: runtime, indexedDB: window.indexedDB }));
+          setRegistrationState({ ...status, status: "claimed" });
+          if (window.location.pathname === "/pairing.html") window.location.assign("/");
+        }
+        if (timer) window.clearInterval(timer);
+      }
+    };
+    const begin = async () => {
+      const existing = await store.load();
+      if (existing?.token) return;
+      const device = await loadOrCreateCustomerDevice({ store, globalObject: window });
+      const request = await createCustomerRegistrationRequest({ store, baseUrl, deviceId: device.deviceId, displayName: existing?.displayName || "customer tablet", appVersion: "prototype", globalObject: window });
+      if (!cancelled) setRegistrationState(request);
+      await poll();
+      timer = window.setInterval(() => { void poll().catch(() => { if (!cancelled) setPairingError(true); }); }, 2_000);
+    };
+    void begin().catch(() => { if (!cancelled) setPairingError(true); });
+    return () => { cancelled = true; if (timer) window.clearInterval(timer); };
+  }, [route]);
 
   const claim = async ({ pairingCode, displayName }) => {
     const config = resolveOrderApiConfig({ ...window, location: window.location, navigator: window.navigator, WARUN_ORDER_MODE: "api" });
@@ -855,8 +927,8 @@ export function App() {
   }, [orderClient]);
 
   const content = useMemo(() => {
-    const isCustomerRoute = route === "/" || route.startsWith("/customer/");
-    if (isCustomerRoute && !orderClient) return <PairingScreen onClaim={claim} error={pairingError} />;
+    const isCustomerRoute = route === "/" || route === "/pairing" || route.startsWith("/customer/");
+    if (isCustomerRoute && !orderClient) return <PairingScreen onClaim={claim} error={pairingError} registrationState={registrationState} />;
     if (route === "/") return <CustomerScreen state={state} updateState={updateState} deviceId="customer-03" orderClient={orderClient} />;
     if (route.startsWith("/customer/")) return <CustomerScreen state={state} updateState={updateState} deviceId={route.split("/")[2]} orderClient={orderClient} />;
     if (route === "/kitchen") return <KitchenScreen state={state} updateState={updateState} apiState={kitchenApiState} onServe={serveKitchenItem} />;
@@ -864,7 +936,7 @@ export function App() {
     if (route.startsWith("/admin/")) return <AdminScreen state={state} updateState={updateState} section={route.split("/")[2] || "menu"} />;
     if (route === "/devices") return <Launcher state={state} updateState={updateState} />;
     return <CustomerScreen state={state} updateState={updateState} deviceId="customer-03" orderClient={orderClient} />;
-  }, [route, state, orderClient, kitchenApiState, pairingError]);
+  }, [route, state, orderClient, kitchenApiState, pairingError, registrationState]);
 
   return content;
 }
