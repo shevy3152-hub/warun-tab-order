@@ -1,5 +1,24 @@
 # LAN access
 
+## Windows one-command startup
+
+For a local store setup, double-click `server/start-windows.cmd` or run it from
+an ordinary Command Prompt. It installs missing prototype dependencies, builds
+the client, prepares the same-origin Web/API server, creates the operational
+SQLite directory, and starts the server in the foreground.
+
+On the first run, the launcher (and the direct server command unless
+`WARUN_AUTO_PROVISION_ADMIN=0` is set) creates an admin credential in the ignored
+`server/var/admin-token` file and registers its hash in SQLite. The raw token
+is not printed or put in the URL. The admin page receives it only through the
+server-side runtime injection. Tables 1 through 4 are created if they do not
+already exist; existing rows are preserved.
+
+Keep the Command Prompt window open while the store is operating. Press
+`Ctrl+C` in that window only when stopping the service. If ports 5173 or 8787
+are already occupied, stop the existing Warun server first; the launcher does
+not kill unrelated Windows processes.
+
 The browser uses the same-origin `/v1` path. During prototype development, Vite proxies `/v1` to `WARUN_API_ORIGIN` or `http://127.0.0.1:8787`, so each tablet opens only the Web URL and does not enter an API URL.
 
 Build the prototype and start the combined Web/API server with a database that has already been provisioned:

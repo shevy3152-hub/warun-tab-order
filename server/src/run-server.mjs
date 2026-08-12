@@ -13,6 +13,7 @@ import { createSnapshotService } from "./events/snapshot-service.mjs";
 import { createHttpServer } from "./http/http-server.mjs";
 import { createOrderRepository } from "./orders/order-repository.mjs";
 import { createPairingService } from "./pairing/pairing-service.mjs";
+import { ensureAdminRuntime } from "./bootstrap/admin-runtime.mjs";
 
 const DEFAULT_HOST = "0.0.0.0";
 const DEFAULT_PORT = 8787;
@@ -41,7 +42,18 @@ function injectAdminRuntime(html, adminRuntimeToken) {
     : html.replace("</head>", `${injection}</head>`);
 }
 
-export function lanIPv4Addresses(interfaces = networkInterfaces()) {
+function safeNetworkInterfaces() {
+  try {
+    return networkInterfaces();
+  } catch {
+    // Some restricted Windows service hosts and sandboxes deny interface
+    // enumeration. Loopback remains usable and the API/Web servers still
+    // start; LAN discovery simply returns no advertised address.
+    return {};
+  }
+}
+
+export function lanIPv4Addresses(interfaces = safeNetworkInterfaces()) {
   return Object.values(interfaces)
     .flatMap((entries) => entries || [])
     .filter((entry) => entry?.family === "IPv4" && !entry.internal)
@@ -73,10 +85,11 @@ export function resolveOperationalPath({ value, fallback, name, requireExplicit 
     throw new Error(`${name} must be an absolute path in production mode.`);
   }
   const selected = configured || fallback;
-  if (!isAbsolute(selected)) {
+  const windowsAbsolute = /^[A-Za-z]:[\\/]/.test(selected);
+  if (!isAbsolute(selected) && !windowsAbsolute) {
     throw new Error(`${name} must be an absolute path.`);
   }
-  return resolve(selected);
+  return windowsAbsolute && process.platform !== "win32" ? selected : resolve(selected);
 }
 
 export function createWarunServer({ databasePath, now = Date.now } = {}) {
@@ -107,7 +120,7 @@ export function createWarunServer({ databasePath, now = Date.now } = {}) {
     catalog.close();
     eventRepository.close();
     orderRepository.close();
-    snapshotService.close();
+    snapshotService.close?.();
     connection.close();
   };
 
@@ -176,13 +189,25 @@ async function main() {
     requireExplicit: productionMode,
   });
   const application = createWarunServer({ databasePath });
+  const adminTokenFile = resolveOperationalPath({
+    value: process.env.WARUN_ADMIN_TOKEN_FILE,
+    fallback: resolve(SERVER_SOURCE_DIRECTORY, '..', 'var', 'admin-token'),
+    name: "WARUN_ADMIN_TOKEN_FILE",
+    requireExplicit: productionMode && process.env.WARUN_AUTO_PROVISION_ADMIN !== "0",
+  });
+  const adminRuntime = ensureAdminRuntime({
+    database: application.connection.database,
+    tokenFilePath: adminTokenFile,
+    configuredToken: process.env.WARUN_ADMIN_API_TOKEN || "",
+    autoProvision: process.env.WARUN_AUTO_PROVISION_ADMIN !== "0",
+  });
   const webRoot = resolveOperationalPath({
     value: process.env.WARUN_WEB_ROOT,
     fallback: DEFAULT_WEB_ROOT,
     name: "WARUN_WEB_ROOT",
     requireExplicit: productionMode,
   });
-  const webServer = createSameOriginWebServer({ apiServer: application.server, webRoot, adminRuntimeToken: process.env.WARUN_ADMIN_API_TOKEN || "" });
+  const webServer = createSameOriginWebServer({ apiServer: application.server, webRoot, adminRuntimeToken: adminRuntime.token });
   const address = await listen(application.server, { host, port });
   const webAddress = await listen(webServer, { host, port: webPort });
   const urls = accessUrls({ host, port: address.port, webPort: webAddress.port });

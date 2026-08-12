@@ -3,6 +3,7 @@ prototype/node_modules/
 prototype/dist/
 server/data/
 server/tmp/
+server/var/
 
 # Local visual-QA working files
 prototype/qa-*.png
