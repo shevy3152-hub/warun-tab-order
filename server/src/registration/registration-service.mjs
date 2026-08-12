@@ -130,6 +130,7 @@ export function createRegistrationService({ database, now = Date.now, idFactory 
     }
     const currentTime = now();
     const expiresAtMs = currentTime + REQUEST_LIFETIME_MS;
+    const requestSecretHash = hashSecret(requestSecret);
     return withTransaction(database, () => {
       expireRequests(currentTime);
       if (database.prepare('SELECT device_id FROM devices WHERE device_id = ?').get(deviceId)) {
@@ -152,6 +153,14 @@ export function createRegistrationService({ database, now = Date.now, idFactory 
         }
         throw registrationError(REGISTRATION_ERROR_CODES.DEVICE_CONFLICT, 'Device registration is already pending.');
       }
+      if (database.prepare(`
+        SELECT request_id
+        FROM registration_requests
+        WHERE request_secret_hash = ? AND status IN ('pending', 'approved')
+        LIMIT 1
+      `).get(requestSecretHash)) {
+        throw registrationError(REGISTRATION_ERROR_CODES.DEVICE_CONFLICT, 'Registration secret is already in use.');
+      }
       const requestId = idFactory();
       if (!validUuid(requestId)) throw registrationError(REGISTRATION_ERROR_CODES.DATABASE_FAILURE, 'Registration identifier generation failed.');
       database.prepare(`
@@ -159,7 +168,7 @@ export function createRegistrationService({ database, now = Date.now, idFactory 
           request_id, request_secret_hash, device_id, display_name, app_version,
           role, status, created_at_ms, expires_at_ms
         ) VALUES (?, ?, ?, ?, ?, 'customer', 'pending', ?, ?)
-      `).run(requestId, hashSecret(requestSecret), deviceId, displayName.trim(), appVersion.trim(), currentTime, expiresAtMs);
+      `).run(requestId, requestSecretHash, deviceId, displayName.trim(), appVersion.trim(), currentTime, expiresAtMs);
       return Object.freeze({ requestId, deviceId, status: 'pending', expiresAtMs });
     });
   }

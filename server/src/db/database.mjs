@@ -36,6 +36,8 @@ export const REQUIRED_INDEXES = Object.freeze([
   'idx_event_log_type_event',
   'idx_event_log_aggregate',
   'idx_registration_requests_status_expiry',
+  'uq_registration_requests_live_device',
+  'uq_registration_requests_live_secret_hash',
   'uq_registration_requests_approved_table',
 ]);
 
@@ -142,7 +144,7 @@ function validateSchema(database, { version = SCHEMA_VERSION } = {}) {
     ? REQUIRED_TABLES.filter((name) => name !== 'registration_requests')
     : REQUIRED_TABLES;
   const requiredIndexes = version === LEGACY_SCHEMA_VERSION
-    ? REQUIRED_INDEXES.filter((name) => !name.startsWith('idx_registration_requests') && name !== 'uq_registration_requests_approved_table')
+    ? REQUIRED_INDEXES.filter((name) => !name.startsWith('idx_registration_requests') && !name.startsWith('uq_registration_requests_live_') && name !== 'uq_registration_requests_approved_table')
     : REQUIRED_INDEXES;
   assertRequiredNames(schemaObjectNames(database, 'table'), requiredTables, 'tables');
   assertRequiredNames(schemaObjectNames(database, 'index'), requiredIndexes, 'indexes');

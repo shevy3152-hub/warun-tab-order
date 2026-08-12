@@ -41,9 +41,9 @@ CREATE TABLE registration_requests (
       AND request_id = lower(request_id)
       AND request_id NOT GLOB '*[^0-9a-f-]*'
     ),
-  request_secret_hash TEXT NOT NULL UNIQUE
+  request_secret_hash TEXT NOT NULL
     CHECK (length(request_secret_hash) = 64 AND request_secret_hash NOT GLOB '*[^0-9a-f]*'),
-  device_id TEXT NOT NULL UNIQUE
+  device_id TEXT NOT NULL
     CHECK (
       length(device_id) = 36
       AND substr(device_id, 9, 1) = '-'
@@ -76,6 +76,12 @@ CREATE TABLE registration_requests (
 
 CREATE INDEX idx_registration_requests_status_expiry
   ON registration_requests (status, expires_at_ms, created_at_ms);
+CREATE UNIQUE INDEX uq_registration_requests_live_device
+  ON registration_requests (device_id)
+  WHERE status IN ('pending', 'approved');
+CREATE UNIQUE INDEX uq_registration_requests_live_secret_hash
+  ON registration_requests (request_secret_hash)
+  WHERE status IN ('pending', 'approved');
 CREATE UNIQUE INDEX uq_registration_requests_approved_table
   ON registration_requests (table_id)
   WHERE status = 'approved' AND table_id IS NOT NULL;

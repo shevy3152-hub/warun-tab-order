@@ -38,6 +38,8 @@ const EXPECTED_INDEXES = [
   'idx_event_log_type_event',
   'idx_event_log_aggregate',
   'idx_registration_requests_status_expiry',
+  'uq_registration_requests_live_device',
+  'uq_registration_requests_live_secret_hash',
   'uq_registration_requests_approved_table',
 ];
 

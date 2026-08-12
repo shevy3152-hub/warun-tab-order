@@ -104,6 +104,29 @@ test('expired requests cannot be approved or claimed', async () => {
   });
 });
 
+test('expired requests remain auditable and the same device can create a fresh request', async () => {
+  await fixture(({ db, service, setTime }) => {
+    const first = service.createRequest({ requestSecret: SECRET_A, deviceId: CUSTOMER_ID, displayName: 'A90', appVersion: 'test' });
+    setTime(first.expiresAtMs);
+    const second = service.createRequest({ requestSecret: SECRET_A, deviceId: CUSTOMER_ID, displayName: 'A90 retry', appVersion: 'test' });
+    assert.notEqual(second.requestId, first.requestId);
+    assert.equal(second.status, 'pending');
+    assert.equal(db.prepare('SELECT status FROM registration_requests WHERE request_id = ?').get(first.requestId).status, 'expired');
+    assert.equal(db.prepare('SELECT COUNT(*) AS count FROM registration_requests').get().count, 2);
+  });
+});
+
+test('cancelled requests remain auditable and can be recreated with the same secret', async () => {
+  await fixture(({ db, service }) => {
+    const first = service.createRequest({ requestSecret: SECRET_A, deviceId: CUSTOMER_ID, displayName: 'A90', appVersion: 'test' });
+    db.prepare("UPDATE registration_requests SET status = 'cancelled' WHERE request_id = ?").run(first.requestId);
+    const second = service.createRequest({ requestSecret: SECRET_A, deviceId: CUSTOMER_ID, displayName: 'A90 retry', appVersion: 'test' });
+    assert.notEqual(second.requestId, first.requestId);
+    assert.equal(second.status, 'pending');
+    assert.equal(db.prepare('SELECT status FROM registration_requests WHERE request_id = ?').get(first.requestId).status, 'cancelled');
+  });
+});
+
 test('table conflict is checked during approval and claim', async () => {
   await fixture(({ db, service }) => {
     const request = service.createRequest({ requestSecret: SECRET_A, deviceId: CUSTOMER_ID, displayName: 'A90', appVersion: 'test' });
@@ -117,6 +140,30 @@ test('device ids cannot create or claim duplicate registrations', async () => {
   await fixture(({ service }) => {
     service.createRequest({ requestSecret: SECRET_A, deviceId: CUSTOMER_ID, displayName: 'A90', appVersion: 'test' });
     assert.throws(() => service.createRequest({ requestSecret: SECRET_B, deviceId: CUSTOMER_ID, displayName: 'A90 again', appVersion: 'test' }), (error) => error.code === REGISTRATION_ERROR_CODES.DEVICE_CONFLICT);
+  });
+});
+
+test('claimed device ids cannot create a new registration request', async () => {
+  await fixture(({ service }) => {
+    const request = service.createRequest({ requestSecret: SECRET_A, deviceId: CUSTOMER_ID, displayName: 'A90', appVersion: 'test' });
+    service.approveRequest({ requestId: request.requestId, tableId: 1 }, { approvedByDeviceId: ADMIN_ID });
+    service.claimRequest({ requestId: request.requestId, requestSecret: SECRET_A });
+    assert.throws(
+      () => service.createRequest({ requestSecret: SECRET_B, deviceId: CUSTOMER_ID, displayName: 'A90 again', appVersion: 'test' }),
+      (error) => error.code === REGISTRATION_ERROR_CODES.DEVICE_CONFLICT,
+    );
+  });
+});
+
+test('concurrent retry attempts leave one live request for a device', async () => {
+  await fixture(async ({ service, db }) => {
+    const results = await Promise.allSettled([
+      Promise.resolve().then(() => service.createRequest({ requestSecret: SECRET_A, deviceId: CUSTOMER_ID, displayName: 'A90 one', appVersion: 'test' })),
+      Promise.resolve().then(() => service.createRequest({ requestSecret: SECRET_B, deviceId: CUSTOMER_ID, displayName: 'A90 two', appVersion: 'test' })),
+    ]);
+    assert.equal(results.filter((result) => result.status === 'fulfilled').length, 1);
+    assert.equal(results.filter((result) => result.status === 'rejected' && result.reason.code === REGISTRATION_ERROR_CODES.DEVICE_CONFLICT).length, 1);
+    assert.equal(db.prepare("SELECT COUNT(*) AS count FROM registration_requests WHERE status IN ('pending', 'approved')").get().count, 1);
   });
 });
 
