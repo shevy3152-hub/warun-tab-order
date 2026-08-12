@@ -25,7 +25,8 @@ import { claimCustomerDevice, claimCustomerRegistration, createCustomerRegistrat
 import { customerOrderNoticeFromOutboxEvent } from "./customer-order-notice.js";
 import { approveAdminRegistrationRequest, configuredAdminToken, fetchAdminOrderHistory, fetchAdminRegistrationRequests, issueCustomerPairingCode } from "./admin-pairing.js";
 import { fetchKitchenOrders, kitchenApiConfigured, markKitchenItemServed } from "./kitchen-api.js";
-import { bootstrapCustomerOrderClient } from "./customer-bootstrap.js";
+import { bootstrapCustomerOrderSession } from "./customer-bootstrap.js";
+import { customerCatalogErrorCode, fetchCustomerCatalog } from "./customer-catalog.js";
 import { pairingCodeQrSvg } from "./qr-code.js";
 
 const STORAGE_KEY = "izakaya-order-prototype-v3";
@@ -301,11 +302,24 @@ function Launcher({ state, updateState }) {
   );
 }
 
-function CustomerScreen({ state, updateState, deviceId, orderClient }) {
-  const device = state.devices.find((item) => item.deviceId === deviceId) ?? state.devices[0];
+function CustomerScreen({ state: sourceState, updateState, deviceId, orderClient, customerCatalog }) {
   const apiMode = orderClient.mode === "api";
-  const online = apiMode ? typeof navigator === "undefined" || navigator.onLine !== false : !state.offlineDevices.includes(device.deviceId);
-  const categories = [...state.categories].filter((category) => category.isVisible).sort((a, b) => a.sortOrder - b.sortOrder);
+  const catalogReady = !apiMode || customerCatalog?.status === "ready";
+  const apiState = apiMode ? {
+    ...sourceState,
+    categories: customerCatalog?.data?.categories || [],
+    menuItems: customerCatalog?.data?.menuItems || [],
+    devices: [{
+      deviceId: customerCatalog?.data?.deviceId || deviceId,
+      tableId: customerCatalog?.data?.tableId || "",
+    }],
+  } : sourceState;
+  const state = apiState;
+  const device = apiMode
+    ? apiState.devices[0]
+    : apiState.devices.find((item) => item.deviceId === deviceId) ?? apiState.devices[0];
+  const online = apiMode ? typeof navigator === "undefined" || navigator.onLine !== false : !sourceState.offlineDevices.includes(device.deviceId);
+  const categories = [...apiState.categories].filter((category) => category.isVisible).sort((a, b) => a.sortOrder - b.sortOrder);
   const [categoryId, setCategoryId] = useState(categories[0]?.id ?? "recommended");
   const [cart, setCart] = useState({});
   const [modal, setModal] = useState(null);
@@ -316,13 +330,19 @@ function CustomerScreen({ state, updateState, deviceId, orderClient }) {
   const confirmOpenLock = useRef(false);
   const featuredIds = ["edamame", "dashimaki", "beer", "lemon", "karaage"];
   const currentItems = categoryId === "recommended"
-    ? featuredIds.map((id) => state.menuItems.find((item) => item.id === id)).filter(Boolean)
-    : [...state.menuItems].filter((item) => item.categoryId === categoryId).sort((a, b) => a.sortOrder - b.sortOrder);
-  const cartRows = Object.entries(cart).map(([menuItemId, quantity]) => ({ item: state.menuItems.find((menu) => menu.id === menuItemId), quantity })).filter((row) => row.item && row.quantity > 0);
+    ? featuredIds.map((id) => apiState.menuItems.find((item) => item.id === id)).filter(Boolean)
+    : [...apiState.menuItems].filter((item) => item.categoryId === categoryId).sort((a, b) => a.sortOrder - b.sortOrder);
+  const cartRows = Object.entries(cart).map(([menuItemId, quantity]) => ({ item: apiState.menuItems.find((menu) => menu.id === menuItemId), quantity })).filter((row) => row.item && row.quantity > 0);
   const cartCount = cartRows.reduce((sum, row) => sum + row.quantity, 0);
   const customerHistory = (apiMode ? apiOrders : state.orders)
     .filter((order) => order.tableId === device.tableId)
     .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+
+  useEffect(() => {
+    if (categories.length && !categories.some((category) => category.id === categoryId)) {
+      setCategoryId(categories[0].id);
+    }
+  }, [categories, categoryId]);
 
   useEffect(() => {
     if (modal !== "confirm") confirmOpenLock.current = false;
@@ -359,7 +379,7 @@ function CustomerScreen({ state, updateState, deviceId, orderClient }) {
   }, [apiMode, customerHistory, state.orders]);
 
   const changeQuantity = (menuItemId, delta) => {
-    const item = state.menuItems.find((menu) => menu.id === menuItemId);
+    const item = apiState.menuItems.find((menu) => menu.id === menuItemId);
     if (!item || item.isSoldOut) return;
     setCart((current) => ({ ...current, [menuItemId]: Math.max(0, (current[menuItemId] ?? 0) + delta) }));
   };
@@ -437,7 +457,7 @@ function CustomerScreen({ state, updateState, deviceId, orderClient }) {
   };
 
   const openConfirm = () => {
-    if (!cartCount || submitting || confirmOpenLock.current) return;
+    if (!catalogReady || !cartCount || submitting || confirmOpenLock.current) return;
     confirmOpenLock.current = true;
     setModal("confirm");
   };
@@ -478,7 +498,7 @@ function CustomerScreen({ state, updateState, deviceId, orderClient }) {
           <section className="menu-panel">
             <div className="menu-heading"><span className="section-kicker">RECOMMENDED</span><h1>{state.categories.find((category) => category.id === categoryId)?.name}</h1><p>まずはこれ。<br />当店自慢の人気メニューをどうぞ。</p></div>
             <div className="menu-list">
-              {currentItems.length ? currentItems.map((item, index) => {
+              {!catalogReady ? <div className="empty-state" role={customerCatalog?.status === "error" ? "alert" : "status"}><ListBullets size={42} /><p>{customerCatalog?.status === "error" ? "メニューを取得できません。注文を開始できません。" : "メニューを読み込み中です。"}</p></div> : currentItems.length ? currentItems.map((item, index) => {
                 return (
                   <article className={`menu-row ${item.isSoldOut ? "is-sold-out" : ""}`} key={item.id}>
                     <div className="menu-row__index">{String(index + 1).padStart(2, "0")}</div>
@@ -786,6 +806,7 @@ function PairingScreen({ onClaim, error, registrationState }) {
 export function App() {
   const route = useRoute();
   const [orderClient, setOrderClient] = useState(null);
+  const [customerCatalog, setCustomerCatalog] = useState({ status: "loading", data: null, errorCode: null });
   const [kitchenApiState, setKitchenApiState] = useState(null);
   const [pairingError, setPairingError] = useState(false);
   const [registrationState, setRegistrationState] = useState({ status: "starting" });
@@ -828,8 +849,16 @@ export function App() {
   useEffect(() => {
     let cancelled = false;
     const bootstrap = async () => {
-      const client = await bootstrapCustomerOrderClient({ globalObject: window });
-      if (!cancelled && client) setOrderClient(client);
+      const session = await bootstrapCustomerOrderSession({ globalObject: window, loadCatalog: fetchCustomerCatalog });
+      if (cancelled) return;
+      if (session.client) setOrderClient(session.client);
+      if (session.mode === "api") {
+        setCustomerCatalog(session.catalog
+          ? { status: "ready", data: session.catalog, errorCode: null }
+          : { status: "error", data: null, errorCode: session.catalogErrorCode || customerCatalogErrorCode(new Error()) });
+      } else if (session.mode === "demo") {
+        setCustomerCatalog({ status: "ready", data: null, errorCode: null });
+      }
     };
     void bootstrap().catch(() => { if (!cancelled) setPairingError(true); });
     return () => { cancelled = true; };
@@ -852,6 +881,12 @@ export function App() {
         const runtime = runtimeForCustomerCredentials({ globalObject: window, baseUrl, token: credentials.token });
         if (!cancelled) {
           setOrderClient(createCustomerOrderClient({ global: runtime, indexedDB: window.indexedDB }));
+          try {
+            const catalog = await fetchCustomerCatalog({ globalObject: runtime });
+            if (!cancelled) setCustomerCatalog({ status: "ready", data: catalog, errorCode: null });
+          } catch (error) {
+            if (!cancelled) setCustomerCatalog({ status: "error", data: null, errorCode: customerCatalogErrorCode(error) });
+          }
           setRegistrationState({ ...status, status: "claimed" });
           if (window.location.pathname === "/pairing.html") window.location.assign("/");
         }
@@ -880,6 +915,12 @@ export function App() {
     const runtime = runtimeForCustomerCredentials({ globalObject: window, baseUrl: config.baseUrl || new URL("/v1", window.location.origin).toString(), token: credentials.token });
     setPairingError(false);
     setOrderClient(createCustomerOrderClient({ global: runtime, indexedDB: window.indexedDB }));
+    try {
+      const catalog = await fetchCustomerCatalog({ globalObject: runtime });
+      setCustomerCatalog({ status: "ready", data: catalog, errorCode: null });
+    } catch (error) {
+      setCustomerCatalog({ status: "error", data: null, errorCode: customerCatalogErrorCode(error) });
+    }
   };
 
   useEffect(() => {
@@ -929,14 +970,14 @@ export function App() {
   const content = useMemo(() => {
     const isCustomerRoute = route === "/" || route === "/pairing" || route.startsWith("/customer/");
     if (isCustomerRoute && !orderClient) return <PairingScreen onClaim={claim} error={pairingError} registrationState={registrationState} />;
-    if (route === "/") return <CustomerScreen state={state} updateState={updateState} deviceId="customer-03" orderClient={orderClient} />;
-    if (route.startsWith("/customer/")) return <CustomerScreen state={state} updateState={updateState} deviceId={route.split("/")[2]} orderClient={orderClient} />;
+    if (route === "/") return <CustomerScreen state={state} updateState={updateState} deviceId="customer-03" orderClient={orderClient} customerCatalog={customerCatalog} />;
+    if (route.startsWith("/customer/")) return <CustomerScreen state={state} updateState={updateState} deviceId={route.split("/")[2]} orderClient={orderClient} customerCatalog={customerCatalog} />;
     if (route === "/kitchen") return <KitchenScreen state={state} updateState={updateState} apiState={kitchenApiState} onServe={serveKitchenItem} />;
     if (route === "/history") return <HistoryScreen state={state} apiMode={Boolean(configuredAdminToken(window))} />;
     if (route.startsWith("/admin/")) return <AdminScreen state={state} updateState={updateState} section={route.split("/")[2] || "menu"} />;
     if (route === "/devices") return <Launcher state={state} updateState={updateState} />;
     return <CustomerScreen state={state} updateState={updateState} deviceId="customer-03" orderClient={orderClient} />;
-  }, [route, state, orderClient, kitchenApiState, pairingError, registrationState]);
+  }, [route, state, orderClient, customerCatalog, kitchenApiState, pairingError, registrationState]);
 
   return content;
 }

@@ -22,7 +22,7 @@ test("API customer orders stay in memory instead of localStorage state", () => {
 test("customer starts with an empty cart and opens one confirmation flow", () => {
   assert.match(customerScreen, /useState\(\{\}\)/);
   assert.match(customerScreen, /const confirmOpenLock = useRef\(false\)/);
-  assert.match(customerScreen, /if \(!cartCount \|\| submitting \|\| confirmOpenLock\.current\) return/);
+  assert.match(customerScreen, /if \(!catalogReady \|\| !cartCount \|\| submitting \|\| confirmOpenLock\.current\) return/);
   assert.match(customerScreen, /onClick=\{openConfirm\}/);
 });
 
