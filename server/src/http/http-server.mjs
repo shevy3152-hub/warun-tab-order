@@ -39,6 +39,7 @@ import {
   mapEventReplayResponse,
   mapHealthResponse,
   mapMenuResponse,
+  mapOrderHistoryResponse,
   mapOrderReceiptResponse,
   mapSnapshotResponse,
   writeJsonResponse,
@@ -55,6 +56,8 @@ const ROUTE_METHODS = new Map([
   ['/v1/device/config', 'GET'],
   ['/v1/menu', 'GET'],
   ['/v1/orders', 'POST'],
+  ['/v1/kitchen/order-items/serve', 'POST'],
+  ['/v1/admin/order-history', 'GET'],
   ['/v1/snapshot', 'GET'],
   ['/v1/events', 'GET'],
   ['/v1/events/replay', 'GET'],
@@ -340,6 +343,9 @@ function mapApplicationError(error) {
     if (error.code === ORDER_ERROR_CODES.ORDER_CONFLICT) {
       return createHttpError(HTTP_ERROR_CODES.ORDER_CONFLICT);
     }
+    if (error.code === ORDER_ERROR_CODES.ORDER_NOT_FOUND) {
+      return createHttpError(HTTP_ERROR_CODES.ORDER_NOT_FOUND);
+    }
     if (error.code === ORDER_ERROR_CODES.DATABASE_FAILURE && hasBusyCause(error)) {
       return createHttpError(HTTP_ERROR_CODES.SERVICE_UNAVAILABLE);
     }
@@ -504,6 +510,8 @@ function createConfiguredHttpServer({
     && (
       !orderRepository
       || typeof orderRepository.createOrder !== 'function'
+      || typeof orderRepository.getHistory !== 'function'
+      || typeof orderRepository.markItemServed !== 'function'
       || !eventRepository
       || typeof eventRepository.replay !== 'function'
       || typeof eventRepository.readCommittedForPrincipal !== 'function'
@@ -595,6 +603,36 @@ function createConfiguredHttpServer({
           body: receipt,
           requestId,
           headers: { 'Idempotency-Result': result.idempotencyResult },
+        });
+        return;
+      }
+
+      if (target.path === '/v1/kitchen/order-items/serve') {
+        authorizeDeviceRole(principal, ['kitchen', 'admin']);
+        const orders = requireService(orderRepository, 'markItemServed');
+        const body = await readJsonBody(request);
+        const result = orders.markItemServed({
+          principal,
+          orderId: body?.orderId,
+          orderItemId: body?.orderItemId,
+        });
+        await notifyCommittedSafely(sseHub, result);
+        if (response.destroyed) return;
+        writeJsonResponse(response, {
+          statusCode: 200,
+          body: mapOrderHistoryResponse([result.order]),
+          requestId,
+        });
+        return;
+      }
+
+      if (target.path === '/v1/admin/order-history') {
+        authorizeDeviceRole(principal, ['admin']);
+        const orders = requireService(orderRepository, 'getHistory');
+        writeJsonResponse(response, {
+          statusCode: 200,
+          body: mapOrderHistoryResponse(orders.getHistory(principal)),
+          requestId,
         });
         return;
       }

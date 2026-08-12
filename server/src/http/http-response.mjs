@@ -358,6 +358,11 @@ export function mapOrderReceiptResponse(result) {
   };
 }
 
+export function mapOrderHistoryResponse(orders) {
+  if (!Array.isArray(orders)) throw invalidDto();
+  return { orders: orders.map(mapStaffOrder) };
+}
+
 export function mapEventReplayResponse(replay) {
   requireObject(replay);
   const audience = requireOneOf(replay.audience, DEVICE_ROLES);

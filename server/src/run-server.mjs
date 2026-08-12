@@ -1,7 +1,7 @@
 import { createServer as createNodeServer } from "node:http";
 import { readFile } from "node:fs/promises";
 import { networkInterfaces } from "node:os";
-import { extname, isAbsolute, relative, resolve } from "node:path";
+import { dirname, extname, isAbsolute, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { createDeviceAuthenticator } from "./auth/device-auth.mjs";
@@ -17,6 +17,9 @@ import { createPairingService } from "./pairing/pairing-service.mjs";
 const DEFAULT_HOST = "0.0.0.0";
 const DEFAULT_PORT = 8787;
 const DEFAULT_WEB_PORT = 5173;
+const SERVER_SOURCE_DIRECTORY = dirname(fileURLToPath(import.meta.url));
+export const DEFAULT_DATABASE_PATH = resolve(SERVER_SOURCE_DIRECTORY, '..', 'var', 'warun.sqlite3');
+export const DEFAULT_WEB_ROOT = resolve(SERVER_SOURCE_DIRECTORY, '..', '..', 'prototype', 'dist', 'client');
 const CONTENT_TYPES = Object.freeze({
   ".css": "text/css; charset=utf-8",
   ".html": "text/html; charset=utf-8",
@@ -168,14 +171,14 @@ async function main() {
   const productionMode = process.env.WARUN_ENV === "production" || process.env.NODE_ENV === "production";
   const databasePath = resolveOperationalPath({
     value: process.env.WARUN_DB_PATH,
-    fallback: resolve("var/warun.sqlite3"),
+    fallback: DEFAULT_DATABASE_PATH,
     name: "WARUN_DB_PATH",
     requireExplicit: productionMode,
   });
   const application = createWarunServer({ databasePath });
   const webRoot = resolveOperationalPath({
     value: process.env.WARUN_WEB_ROOT,
-    fallback: resolve("../prototype/dist/client"),
+    fallback: DEFAULT_WEB_ROOT,
     name: "WARUN_WEB_ROOT",
     requireExplicit: productionMode,
   });
@@ -198,11 +201,21 @@ async function main() {
       if (shuttingDown) return;
       shuttingDown = true;
       clearInterval(keepAlive);
-      webServer.close(() => application.server.close(() => {
+      const closeServer = (target, callback) => {
+        target.close(callback);
+        target.closeIdleConnections?.();
+        target.closeAllConnections?.();
+      };
+      closeServer(webServer, () => closeServer(application.server, () => {
         application.closeDependencies();
         resolveShutdown();
       }));
     };
+    if (typeof process.send === "function") {
+      process.once("message", (message) => {
+        if (message?.type === "shutdown") shutdown();
+      });
+    }
     process.once("SIGINT", shutdown);
     process.once("SIGTERM", shutdown);
     keepAlive = setInterval(() => {}, 60_000);

@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 
+import { authorizeDeviceRole } from '../auth/device-auth.mjs';
 import { ORDER_ERROR_CODES, OrderRepositoryError } from './order-errors.mjs';
 
 const FINGERPRINT_VERSION = 1;
@@ -230,6 +231,72 @@ export function createOrderRepository({ database, now = Date.now, idFactory = ra
         FROM order_items
         WHERE order_id = ?
         ORDER BY line_index
+      `),
+      findHistoryOrders: database.prepare(`
+        SELECT
+          order_id,
+          client_order_id,
+          request_fingerprint,
+          canonical_request_json,
+          customer_device_id,
+          table_id,
+          table_number_snapshot,
+          status,
+          total_amount_yen,
+          accepted_at_ms,
+          completed_at_ms,
+          version
+        FROM orders
+        WHERE status = 'completed'
+        ORDER BY completed_at_ms DESC, order_id DESC
+      `),
+      findServingOrder: database.prepare(`
+        SELECT
+          order_id,
+          client_order_id,
+          request_fingerprint,
+          canonical_request_json,
+          customer_device_id,
+          table_id,
+          table_number_snapshot,
+          status,
+          total_amount_yen,
+          accepted_at_ms,
+          completed_at_ms,
+          version
+        FROM orders
+        WHERE order_id = ?
+      `),
+      findServingItem: database.prepare(`
+        SELECT order_item_id, order_id, is_served
+        FROM order_items
+        WHERE order_item_id = ? AND order_id = ?
+      `),
+      countUnservedItems: database.prepare(`
+        SELECT COUNT(*) AS count
+        FROM order_items
+        WHERE order_id = ? AND is_served = 0
+      `),
+      markItemServed: database.prepare(`
+        UPDATE order_items
+        SET is_served = 1, served_at_ms = ?, served_by_device_id = ?, updated_at_ms = ?
+        WHERE order_item_id = ? AND order_id = ?
+      `),
+      updateServingOrder: database.prepare(`
+        UPDATE orders
+        SET status = ?, completed_at_ms = ?, version = version + 1
+        WHERE order_id = ?
+      `),
+      insertOrderUpdateEvent: database.prepare(`
+        INSERT INTO event_log (
+          event_epoch,
+          event_type,
+          aggregate_type,
+          aggregate_id,
+          actor_device_id,
+          payload_json,
+          created_at_ms
+        ) VALUES (?, ?, 'order', ?, ?, ?, ?)
       `),
       findDevice: database.prepare(`
         SELECT device_id, role, status
@@ -571,8 +638,99 @@ export function createOrderRepository({ database, now = Date.now, idFactory = ra
     }
   }
 
+  function getHistory(principal) {
+    if (closed) {
+      throw repositoryError(
+        ORDER_ERROR_CODES.DATABASE_FAILURE,
+        'The order repository is closed.',
+      );
+    }
+
+    authorizeDeviceRole(principal, ['admin']);
+    let transactionOpen = false;
+    try {
+      database.exec('BEGIN;');
+      transactionOpen = true;
+      const history = statements.findHistoryOrders.all().map(loadOrder);
+      database.exec('COMMIT;');
+      transactionOpen = false;
+      return history;
+    } catch (error) {
+      if (transactionOpen) {
+        try { database.exec('ROLLBACK;'); } catch {}
+      }
+      if (error instanceof OrderRepositoryError) throw error;
+      throw repositoryError(
+        ORDER_ERROR_CODES.DATABASE_FAILURE,
+        'The order history could not be read.',
+        { cause: error },
+      );
+    }
+  }
+
+  function markItemServed({ principal, orderId, orderItemId } = {}) {
+    if (closed) {
+      throw repositoryError(ORDER_ERROR_CODES.DATABASE_FAILURE, 'The order repository is closed.');
+    }
+    authorizeDeviceRole(principal, ['kitchen', 'admin']);
+    const normalizedOrderId = normalizeUuid(orderId, 'orderId');
+    if (!Number.isSafeInteger(orderItemId) || orderItemId < 1) {
+      throw repositoryError(ORDER_ERROR_CODES.INVALID_ORDER_REQUEST, 'orderItemId must be a positive integer.');
+    }
+
+    let transactionOpen = false;
+    try {
+      database.exec('BEGIN IMMEDIATE;');
+      transactionOpen = true;
+      const order = statements.findServingOrder.get(normalizedOrderId);
+      if (!order) throw repositoryError(ORDER_ERROR_CODES.ORDER_NOT_FOUND, 'The order was not found.');
+      if (order.status === 'completed') throw repositoryError(ORDER_ERROR_CODES.ORDER_CONFLICT, 'The order is already completed.');
+      const item = statements.findServingItem.get(orderItemId, normalizedOrderId);
+      if (!item) throw repositoryError(ORDER_ERROR_CODES.INVALID_ORDER_REQUEST, 'The order item was not found.');
+      if (item.is_served === 1) {
+        database.exec('COMMIT;');
+        transactionOpen = false;
+        return { idempotencyResult: 'replayed', order: loadOrder(order), event: null };
+      }
+
+      const servedAtMs = now();
+      statements.markItemServed.run(servedAtMs, principal.deviceId, servedAtMs, orderItemId, normalizedOrderId);
+      const remaining = Number(statements.countUnservedItems.get(normalizedOrderId).count);
+      const completed = remaining === 0;
+      statements.updateServingOrder.run(completed ? 'completed' : 'active', completed ? servedAtMs : null, normalizedOrderId);
+      const systemState = statements.findSystemState.get();
+      if (!systemState?.event_epoch) throw repositoryError(ORDER_ERROR_CODES.DATABASE_FAILURE, 'Current event epoch is unavailable.');
+      const eventType = completed ? 'order.completed' : 'order.updated';
+      const eventPayloadJson = JSON.stringify({ orderId: normalizedOrderId, tableId: order.table_id, completed });
+      const eventInsertion = statements.insertOrderUpdateEvent.run(
+        systemState.event_epoch,
+        eventType,
+        normalizedOrderId,
+        principal.deviceId,
+        eventPayloadJson,
+        servedAtMs,
+      );
+      const updated = statements.findServingOrder.get(normalizedOrderId);
+      database.exec('COMMIT;');
+      transactionOpen = false;
+      return {
+        idempotencyResult: 'created',
+        order: loadOrder(updated),
+        event: { eventEpoch: systemState.event_epoch, eventId: Number(eventInsertion.lastInsertRowid) },
+      };
+    } catch (error) {
+      if (transactionOpen) {
+        try { database.exec('ROLLBACK;'); } catch {}
+      }
+      if (error instanceof OrderRepositoryError) throw error;
+      throw repositoryError(ORDER_ERROR_CODES.DATABASE_FAILURE, 'The order serving update failed.', { cause: error });
+    }
+  }
+
   return Object.freeze({
     createOrder,
+    getHistory,
+    markItemServed,
     close() {
       closed = true;
     },
