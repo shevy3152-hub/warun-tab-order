@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { issueCustomerPairingCode } from "../src/admin-pairing.js";
 import { pairingCodeQrSvg } from "../src/qr-code.js";
 
 const CODE = "A".repeat(43);
 const TOKEN = "runtime-admin-token-is-not-in-the-qr";
+const appSource = await readFile(new URL("../src/App.jsx", import.meta.url), "utf8");
 
 test("pairing QR contains only a generated QR image, not the raw code", () => {
   const svg = pairingCodeQrSvg(CODE);
@@ -42,4 +44,28 @@ test("admin pairing reuses the existing runtime API token path", async () => {
     },
   });
   assert.equal(authorization, `Bearer ${TOKEN}`);
+});
+
+test("admin pairing 201 success transitions to visible QR without an error", async () => {
+  let request;
+  const response = await issueCustomerPairingCode({
+    env: { location: { origin: "http://localhost" }, WARUN_RUNTIME_CONFIG: { apiToken: TOKEN } },
+    tableId: 3,
+    expiresAtMs: Date.now() + 600000,
+    fetchImpl: async (url, options) => {
+      request = { url, options };
+      return {
+        ok: true,
+        status: 201,
+        async json() { return { code: CODE, role: "customer", tableId: 3, expiresAtMs: Date.now() + 600000 }; },
+      };
+    },
+  });
+  const svg = pairingCodeQrSvg(response.code);
+  assert.equal(request.url, "http://localhost/v1/admin/pairing-codes");
+  assert.equal(request.options.headers.Authorization, `Bearer ${TOKEN}`);
+  assert.match(svg, /^<svg /);
+  assert.match(appSource, /import \{ pairingCodeQrSvg \} from "\.\/qr-code\.js";/);
+  assert.match(appSource, /setPairingQr\(pairingCodeQrSvg\(result\.code\)\)/);
+  assert.doesNotMatch(appSource, /setPairingError\(true\).*setPairingQr\(pairingCodeQrSvg/);
 });
