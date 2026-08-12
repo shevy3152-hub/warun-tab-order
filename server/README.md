@@ -243,3 +243,11 @@ schema v1では`event_log`を削除・pruneしません。cursor行の欠落とe
 HTTP serverの`close()`はSSE hubのtimer・streamを先に終了してlistenerを閉じます。注入されたauthenticator、catalog、order/event repository、snapshot service、SQLite接続は閉じません。終了時はserver、各repository・authenticator、最後にDBの順で呼び出し側が閉じます。
 
 クライアントと同一originで配信する前提であり、broad CORSや`Access-Control-Allow-Origin: *`は実装しません。HTTPS、客席IndexedDB送信待ち、管理更新、提供済み更新、スタッフ呼び出しPOST、ペアリング、token更新、Windows service化、React接続は未実装です。このHTTP基盤はローカル統合試験用であり、現段階のまま本番公開またはインターネット公開してはいけません。
+
+### Pending device registration (schema v2)
+
+Customer tablets should normally open `/pairing.html`. The page creates one random registration request and retains its request secret only in IndexedDB. The admin Devices screen lists pending requests; an administrator must select an available table and explicitly approve the request. The tablet polls the request status, claims it once after approval, stores the returned credential in IndexedDB, and then enters customer API mode.
+
+The server persists only the request-secret hash. The request status and admin list never include the secret, and a successful claim returns the device token once only. Table availability is checked inside the approval/claim transaction. The existing pairing-code endpoints remain supported for recovery and backward compatibility.
+
+The request-and-approve API is documented in `docs/openapi-v1.yaml` under `/v1/registration-requests` and `/v1/admin/registration-requests`. Do not copy request secrets, pairing codes, device tokens, or order payloads into URLs, logs, screenshots, or support messages. Plain HTTP is for local verification only; store operation requires HTTPS.

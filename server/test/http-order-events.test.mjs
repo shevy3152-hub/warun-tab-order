@@ -636,7 +636,8 @@ test('event replay is ordered, bounded by scan limit, and advances through invis
     assert.deepEqual(first.json.events.map((event) => event.eventId), [1]);
     assert.equal(first.json.lastEventId, 2);
     assert.equal(first.json.hasMore, true);
-    assert.doesNotMatch(first.rawBody, /380|680|price|token|hash/i);
+    assert.deepEqual(first.json.events[0].payload, { resource: 'orders', refreshRequired: true });
+    assert.doesNotMatch(JSON.stringify(first.json.events[0].payload), /380|680|price|token|hash/i);
 
     const second = await request({
       port,

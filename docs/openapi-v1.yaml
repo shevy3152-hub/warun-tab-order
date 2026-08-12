@@ -16,6 +16,7 @@ servers:
 tags:
   - name: System
   - name: Pairing
+  - name: Registration
   - name: Device
   - name: Menu
   - name: Orders
@@ -106,6 +107,128 @@ paths:
                 $ref: '#/components/schemas/Problem'
         '500':
           $ref: '#/components/responses/InternalError'
+
+  /v1/registration-requests:
+    post:
+      tags: [Registration]
+      summary: 管理者承認待ちの端末登録要求を作成する
+      description: 端末はrequest secretをIndexedDBへ保存し、サーバーにはhashだけを保存する。secretはレスポンスへ返さない。
+      operationId: createRegistrationRequest
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateRegistrationRequest'
+      responses:
+        '201':
+          description: 登録要求を作成した
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RegistrationRequestStatus'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '409':
+          $ref: '#/components/responses/AssignmentConflict'
+
+  /v1/registration-requests/status:
+    post:
+      tags: [Registration]
+      summary: 登録要求の承認状態を確認する
+      operationId: getRegistrationRequestStatus
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegistrationRequestCredential'
+      responses:
+        '200':
+          description: 登録要求の公開状態
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RegistrationRequestStatus'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '410':
+          $ref: '#/components/responses/RegistrationExpired'
+
+  /v1/registration-requests/claim:
+    post:
+      tags: [Registration]
+      summary: 管理者承認済みの登録要求を一度だけclaimする
+      description: device tokenはclaim成功時のレスポンスに一度だけ含まれ、再claimでは返さない。
+      operationId: claimRegistrationRequest
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegistrationRequestCredential'
+      responses:
+        '201':
+          description: customer deviceを登録した
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RegistrationClaimResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '409':
+          $ref: '#/components/responses/AssignmentConflict'
+        '410':
+          $ref: '#/components/responses/RegistrationExpired'
+
+  /v1/admin/registration-requests:
+    get:
+      tags: [Admin, Registration]
+      summary: 登録待ち端末一覧を取得する
+      operationId: listRegistrationRequests
+      responses:
+        '200':
+          description: secretを含まない登録要求一覧
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RegistrationRequestList'
+        '401':
+          $ref: '#/components/responses/AuthenticationFailed'
+        '403':
+          $ref: '#/components/responses/PermissionDenied'
+
+  /v1/admin/registration-requests/approve:
+    post:
+      tags: [Admin, Registration]
+      summary: 登録要求へtableを割り当てて明示承認する
+      operationId: approveRegistrationRequest
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ApproveRegistrationRequest'
+      responses:
+        '200':
+          description: 承認済みの登録要求
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RegistrationRequestStatus'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/AuthenticationFailed'
+        '403':
+          $ref: '#/components/responses/PermissionDenied'
+        '409':
+          $ref: '#/components/responses/AssignmentConflict'
 
   /v1/device/config:
     get:
@@ -845,6 +968,12 @@ components:
         application/problem+json:
           schema:
             $ref: '#/components/schemas/Problem'
+    RegistrationExpired:
+      description: Registration request expired.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
     InvalidOrder:
       description: |
         注文内容を受け付けられない。
@@ -1100,6 +1229,104 @@ components:
           minLength: 43
           maxLength: 128
           description: 256-bit以上のランダム値。平文はこの応答でだけ返す。
+        config:
+          $ref: '#/components/schemas/DeviceConfig'
+    CreateRegistrationRequest:
+      type: object
+      additionalProperties: false
+      required: [requestSecret, deviceId, displayName, appVersion, role]
+      properties:
+        requestSecret:
+          type: string
+          pattern: '^[A-Za-z0-9_-]{43}$'
+          description: Temporary device secret retained in IndexedDB; never persisted by the server in plaintext.
+        deviceId:
+          $ref: '#/components/schemas/Uuid'
+        displayName:
+          type: string
+          minLength: 1
+          maxLength: 80
+        appVersion:
+          type: string
+          minLength: 1
+          maxLength: 40
+        role:
+          type: string
+          const: customer
+    RegistrationRequestCredential:
+      type: object
+      additionalProperties: false
+      required: [requestId, requestSecret]
+      properties:
+        requestId:
+          $ref: '#/components/schemas/Uuid'
+        requestSecret:
+          type: string
+          pattern: '^[A-Za-z0-9_-]{43}$'
+    ApproveRegistrationRequest:
+      type: object
+      additionalProperties: false
+      required: [requestId, tableId]
+      properties:
+        requestId:
+          $ref: '#/components/schemas/Uuid'
+        tableId:
+          type: integer
+          minimum: 1
+    RegistrationRequestStatus:
+      type: object
+      additionalProperties: false
+      required: [requestId, deviceId, status, expiresAtMs]
+      properties:
+        requestId:
+          $ref: '#/components/schemas/Uuid'
+        deviceId:
+          $ref: '#/components/schemas/Uuid'
+        displayName:
+          type: string
+        appVersion:
+          type: string
+        role:
+          type: string
+          const: customer
+        tableId:
+          type: integer
+          minimum: 1
+          nullable: true
+        status:
+          type: string
+          enum: [pending, approved, claimed, expired, cancelled]
+        createdAtMs:
+          $ref: '#/components/schemas/TimestampMs'
+        expiresAtMs:
+          $ref: '#/components/schemas/TimestampMs'
+        approvedAtMs:
+          allOf:
+            - $ref: '#/components/schemas/TimestampMs'
+          nullable: true
+        claimedAtMs:
+          allOf:
+            - $ref: '#/components/schemas/TimestampMs'
+          nullable: true
+    RegistrationRequestList:
+      type: object
+      additionalProperties: false
+      required: [requests]
+      properties:
+        requests:
+          type: array
+          items:
+            $ref: '#/components/schemas/RegistrationRequestStatus'
+    RegistrationClaimResponse:
+      type: object
+      additionalProperties: false
+      required: [deviceToken, config]
+      properties:
+        deviceToken:
+          type: string
+          minLength: 43
+          maxLength: 43
+          description: Returned once after a successful claim and never re-displayed.
         config:
           $ref: '#/components/schemas/DeviceConfig'
     DeviceConfig:

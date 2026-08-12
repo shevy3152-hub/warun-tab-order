@@ -20,6 +20,9 @@ export const HTTP_ERROR_CODES = Object.freeze({
   PAIRING_EXPIRED: 'PAIRING_EXPIRED',
   TOO_MANY_REQUESTS: 'TOO_MANY_REQUESTS',
   DEVICE_NOT_FOUND: 'DEVICE_NOT_FOUND',
+  REGISTRATION_INVALID: 'REGISTRATION_INVALID',
+  REGISTRATION_CONFLICT: 'REGISTRATION_CONFLICT',
+  REGISTRATION_EXPIRED: 'REGISTRATION_EXPIRED',
 });
 
 const DEFINITIONS = Object.freeze({
@@ -92,6 +95,9 @@ const DEFINITIONS = Object.freeze({
   [HTTP_ERROR_CODES.PAIRING_EXPIRED]: Object.freeze({ statusCode: 410, message: 'Pairing code expired.' }),
   [HTTP_ERROR_CODES.TOO_MANY_REQUESTS]: Object.freeze({ statusCode: 429, message: 'Too many pairing attempts.' }),
   [HTTP_ERROR_CODES.DEVICE_NOT_FOUND]: Object.freeze({ statusCode: 404, message: 'Device was not found.' }),
+  [HTTP_ERROR_CODES.REGISTRATION_INVALID]: Object.freeze({ statusCode: 400, message: 'Registration request is invalid.' }),
+  [HTTP_ERROR_CODES.REGISTRATION_CONFLICT]: Object.freeze({ statusCode: 409, message: 'Registration request conflicts with the current device or table state.' }),
+  [HTTP_ERROR_CODES.REGISTRATION_EXPIRED]: Object.freeze({ statusCode: 410, message: 'Registration request expired.' }),
 });
 
 export class ReadOnlyHttpError extends Error {

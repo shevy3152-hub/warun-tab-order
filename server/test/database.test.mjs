@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict';
-import { existsSync, renameSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import test from 'node:test';
 import { DatabaseSync } from 'node:sqlite';
 
-import { initializeDatabase } from '../src/db/database.mjs';
+import { DEFAULT_SCHEMA_PATH, initializeDatabase } from '../src/db/database.mjs';
 
 const EXPECTED_TABLES = [
   'system_state',
@@ -19,6 +19,7 @@ const EXPECTED_TABLES = [
   'order_items',
   'staff_calls',
   'event_log',
+  'registration_requests',
 ];
 
 const EXPECTED_INDEXES = [
@@ -36,6 +37,10 @@ const EXPECTED_INDEXES = [
   'idx_staff_calls_table_status',
   'idx_event_log_type_event',
   'idx_event_log_aggregate',
+  'idx_registration_requests_status_expiry',
+  'uq_registration_requests_live_device',
+  'uq_registration_requests_live_secret_hash',
+  'uq_registration_requests_approved_table',
 ];
 
 const EXPECTED_TRIGGERS = [
@@ -57,7 +62,22 @@ async function withTemporaryDatabase(run) {
   try {
     await run({ directory, databasePath });
   } finally {
-    await rm(directory, { recursive: true, force: true });
+    await removeDirectoryWithRetry(directory);
+  }
+}
+
+async function removeDirectoryWithRetry(directory) {
+  const maxAttempts = 10;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      await rm(directory, { recursive: true, force: true, maxRetries: 0 });
+      return;
+    } catch (error) {
+      if (!['EBUSY', 'EPERM'].includes(error.code) || attempt === maxAttempts) {
+        throw error;
+      }
+      await new Promise((resolve) => setTimeout(resolve, attempt * 50));
+    }
   }
 }
 
@@ -126,19 +146,19 @@ function insertOrder(
   `);
 }
 
-test('new database creates its parent directory and applies schema v1', async () => {
+test('new database creates its parent directory and applies schema v2', async () => {
   await withTemporaryDatabase(({ databasePath }) => {
     const connection = initializeDatabase({ databasePath });
     assert.equal(existsSync(databasePath), true);
-    assert.equal(connection.schemaVersion, 1);
+    assert.equal(connection.schemaVersion, 2);
     connection.close();
   });
 });
 
-test('new database records PRAGMA user_version = 1', async () => {
+test('new database records PRAGMA user_version = 2', async () => {
   await withTemporaryDatabase(({ databasePath }) => {
     const connection = initializeDatabase({ databasePath });
-    assert.equal(pragmaValue(connection.database, 'user_version'), 1);
+    assert.equal(pragmaValue(connection.database, 'user_version'), 2);
     connection.close();
   });
 });
@@ -202,16 +222,16 @@ test('synchronous mode is FULL', async () => {
   });
 });
 
-test('a valid schema v1 database can be closed and reopened', async () => {
+test('a valid schema v2 database can be closed and reopened', async () => {
   await withTemporaryDatabase(({ databasePath }) => {
     initializeDatabase({ databasePath }).close();
     const reopened = initializeDatabase({ databasePath });
-    assert.equal(reopened.schemaVersion, 1);
+    assert.equal(reopened.schemaVersion, 2);
     reopened.close();
   });
 });
 
-test('reopening schema v1 preserves existing data', async () => {
+test('reopening schema v2 preserves existing data', async () => {
   await withTemporaryDatabase(({ databasePath }) => {
     const first = initializeDatabase({ databasePath });
     first.database.exec(`
@@ -294,11 +314,11 @@ test('invalid item quantities are rejected by CHECK constraints', async () => {
   });
 });
 
-test('schema versions newer than v1 are rejected without migration', async () => {
+test('schema versions newer than v2 are rejected without migration', async () => {
   await withTemporaryDatabase(({ directory }) => {
-    const databasePath = join(directory, 'version-2.sqlite3');
+    const databasePath = join(directory, 'version-3.sqlite3');
     const raw = new DatabaseSync(databasePath);
-    raw.exec('PRAGMA user_version = 2;');
+    raw.exec('PRAGMA user_version = 3;');
     raw.close();
 
     assert.throws(
@@ -350,6 +370,80 @@ test('a schema application failure closes the database file', async () => {
     assert.doesNotThrow(() => renameSync(databasePath, movedPath));
     const raw = new DatabaseSync(movedPath);
     raw.close();
+  });
+});
+
+test('v1 data is preserved when the v2 migration is applied', async () => {
+  await withTemporaryDatabase(({ databasePath }) => {
+    mkdirSync(dirname(databasePath), { recursive: true });
+    const legacy = new DatabaseSync(databasePath);
+    legacy.exec(readFileSync(DEFAULT_SCHEMA_PATH, 'utf8'));
+    seedOrderParents(legacy);
+    insertOrder(legacy);
+    const eventEpoch = legacy.prepare('SELECT event_epoch FROM system_state WHERE singleton_id = 1').get().event_epoch;
+    legacy.prepare(`
+      INSERT INTO event_log (
+        event_epoch, event_type, aggregate_type, aggregate_id,
+        actor_device_id, payload_json, created_at_ms
+      ) VALUES (?, 'order.created', 'order', ?, ?, '{}', 2000)
+    `).run(eventEpoch, ORDER_ID, CUSTOMER_DEVICE_ID);
+    legacy.close();
+
+    const migrated = initializeDatabase({ databasePath });
+    assert.equal(migrated.schemaVersion, 2);
+    assert.equal(pragmaValue(migrated.database, 'user_version'), 2);
+    assert.equal(migrated.database.prepare('SELECT COUNT(*) AS count FROM devices').get().count, 1);
+    assert.equal(migrated.database.prepare('SELECT COUNT(*) AS count FROM tables').get().count, 1);
+    assert.equal(migrated.database.prepare('SELECT COUNT(*) AS count FROM orders').get().count, 1);
+    assert.equal(migrated.database.prepare('SELECT COUNT(*) AS count FROM event_log').get().count, 1);
+    assert.equal(migrated.database.prepare('SELECT COUNT(*) AS count FROM registration_requests').get().count, 0);
+    migrated.close();
+  });
+});
+
+test('v2 migration is idempotent after the first successful application', async () => {
+  await withTemporaryDatabase(({ databasePath }) => {
+    mkdirSync(dirname(databasePath), { recursive: true });
+    const legacy = new DatabaseSync(databasePath);
+    legacy.exec(readFileSync(DEFAULT_SCHEMA_PATH, 'utf8'));
+    legacy.close();
+
+    initializeDatabase({ databasePath }).close();
+    const reopened = initializeDatabase({ databasePath });
+    assert.equal(reopened.schemaVersion, 2);
+    assert.equal(pragmaValue(reopened.database, 'user_version'), 2);
+    assert.equal(reopened.database.prepare('SELECT COUNT(*) AS count FROM registration_requests').get().count, 0);
+    reopened.close();
+  });
+});
+
+test('a failed v2 migration rolls back and can be retried safely', async () => {
+  await withTemporaryDatabase(({ directory, databasePath }) => {
+    mkdirSync(dirname(databasePath), { recursive: true });
+    const legacy = new DatabaseSync(databasePath);
+    legacy.exec(readFileSync(DEFAULT_SCHEMA_PATH, 'utf8'));
+    legacy.close();
+
+    const invalidMigrationPath = join(directory, 'invalid-v2.sql');
+    writeFileSync(
+      invalidMigrationPath,
+      'BEGIN IMMEDIATE; CREATE TABLE migration_marker (id INTEGER); THIS IS INVALID SQL; COMMIT;',
+    );
+
+    assert.throws(
+      () => initializeDatabase({ databasePath, migrationV2Path: invalidMigrationPath }),
+      (error) => error.code === 'INITIALIZATION_FAILED',
+    );
+
+    const afterFailure = new DatabaseSync(databasePath);
+    assert.equal(pragmaValue(afterFailure, 'user_version'), 1);
+    assert.equal(schemaNames(afterFailure, 'table').has('migration_marker'), false);
+    assert.equal(schemaNames(afterFailure, 'table').has('registration_requests'), false);
+    afterFailure.close();
+
+    const retried = initializeDatabase({ databasePath });
+    assert.equal(retried.schemaVersion, 2);
+    retried.close();
   });
 });
 
