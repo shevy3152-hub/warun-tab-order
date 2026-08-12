@@ -76,9 +76,9 @@ test("LAN access URLs are derived without changing the API contract", () => {
 
 test("Windows launcher resolves the repository root and validates the Web root", async () => {
   const launcher = await readFile(new URL("../start-windows.cmd", import.meta.url), "utf8");
-  assert.match(launcher, /for %%I in \("%SERVER_DIR%\.\."\) do set "REPO_DIR=%%~fI"/);
+  assert.match(launcher, /set "REPO_DIR=%SERVER_DIR%\.\."/);
   assert.match(launcher, /set "WARUN_WEB_ROOT=%REPO_DIR%\\prototype\\dist\\client"/);
-  assert.match(launcher, /if not exist "%WARUN_WEB_ROOT%\\" \(/);
+  assert.match(launcher, /if not exist "%WARUN_WEB_ROOT%\\index\.html" \(/);
   assert.match(launcher, /echo Web root not found: %WARUN_WEB_ROOT%/);
 });
 
