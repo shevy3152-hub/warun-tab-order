@@ -13,10 +13,10 @@
 
 ## 現在地と目標
 
-- ルート作業ツリーは `feature/sqlite-foundation`、HEAD は `18e68f0`。
-- `origin/feature/sqlite-foundation` に対して behind 10。作業ツリーは dirty で、既存変更を保護する必要がある。
-- 現在の目標は、客席注文をSQLiteへ保存し、厨房で提供済みに更新し、completed注文を管理履歴で確認できるP0経路を安全に整理すること。
-- このファイル作成ではコード、DB、サーバー、A90、pairing、commit、pushを変更していない。
+- ルート作業ツリーは `feature/sqlite-foundation`。1クリック起動作業の開始基準HEADは `25ae7e9`。
+- 作業開始時点で `origin/feature/sqlite-foundation` に対して ahead 1 / behind 16。originの変更は取り込まず、作業ツリーの既存dirty変更を保護している。
+- 客席注文から永続SQLite、厨房snapshot、未完了2件・新着2件・テーブル1表示まで実機受入済み。現在の目標はWindowsサーバーPCの再起動後もデスクトップアイコン1回で同じ状態へ復帰できること。
+- SQLite、注文、履歴、event_log、schema、既存端末、Windows User環境変数の値は今回変更していない。
 
 ## 完了している内容
 
@@ -63,7 +63,7 @@
 ## 既知の問題・未確認事項
 
 - ルート作業ツリーには多数の既存変更・未追跡ファイルがあり、今回の実装変更との完全なGit分離はまだ完了していない。
-- ルートHEADはoriginより10件遅れている。origin側の後続実装をルートへ取り込んだ状態ではない。
+- 1クリック起動作業の開始時点でルートHEADはoriginに対してahead 1 / behind 16。origin側の後続実装をルートへ取り込んだ状態ではない。
 - A90 ChromeでQRペアリング、メニュー表示、注文、厨房反映、提供済み履歴への移動まで確認済み。Braveの端末登録失敗、今回のサーバー割当表示差異、標準カメラによるQR読取、本番DB・本番注文は引き続き未確認。
 - `prototype/CONTEXT.md` と一部READMEには過去時点の実装・テスト件数が残っており、現行コードとの差分整理が必要。
 - `pnpm` buildは既存記録上、esbuildの承認制限で完走しなかった。承認設定は変更せず、直接Viteで代替検証した。
@@ -91,7 +91,20 @@
 - サーバーログにはリクエスト単位のaccess logが実装されていなかったため既存ログから過去のChrome要求有無は判定できなかった。一方、実HTTPでは認証なしWeb proxyが401、認証付きWeb proxy/APIが200で、snapshotは未完了2件と18:42注文を返した。実装中の`fetchKitchenOrders`でも同じLAN URLを解析し、2件・テーブル1・対象注文を確認した。
 - 原因は`prototype/src/App.jsx`の`useMemo`依存配列から`kitchenApiState`が漏れ、取得後stateが画面へ再反映されなかったこと。最小修正として依存配列へ追加し、取得失敗時の表示を「注文情報を取得できません。」へ変更した。DB・注文・履歴・schemaは変更していない。
 - 修正後の配信bundleは更新済み。admin.htmlの厨房meta/runtime注入、customer HTMLの非注入、bundleの平文トークン不在を再確認した。prototype対象テスト10/10、直接Vite build PASS。
-- A90実機の修正後表示PASSはまだ取得していない。追加の再注文・提供操作は不要で、次回の厨房画面確認へ進む。
+- 修正後の実機受入で、未完了注文2件、新着バッジ2件、テーブル1への集約表示を確認済み。追加の再注文・提供操作は不要。
+
+## 2026-08-15 Windows 1クリック起動
+
+- `server/start-windows.ps1` と `server/start-windows.cmd` を追加した。既存の正規起動エントリ `node src/run-server.mjs` を使用し、Windows User環境変数の厨房トークンをプロセス環境へ継承する。値は引数・ログ・ファイルへ保存しない。
+- 起動前にIP `192.168.1.10`、5173/8787のlisten状態、同一PID、Node実行ファイル、`src/run-server.mjs`、health/admin固有署名を照合する。正常稼働中は再利用し、競合やプロジェクト判定不能時はプロセスを終了せず日本語エラーで停止する。
+- 未起動時は黒いコンソールを常時表示しないhidden Nodeプロセスとして起動し、45秒のtimeout内にhealth ready、ローカル/LAN Web・API 200、認証snapshot 200、admin限定トークン注入を確認してからChromeを開く。Chromeがなければ既定ブラウザーを使う。
+- デスクトップへPC固有の `C:\Users\user\Desktop\わるん注文・厨房.lnk` を作成した。URLショートカットではなく起動PowerShellを実行し、Git管理対象外である。
+- 稼働中実行ではPID 14620を再利用して二重起動なし。厳格に特定した同PIDだけを制御停止後、アイコンからPID 15728の単一プロセスとして復帰し、再実行でも二重起動なし。最終状態はPID 3972、health ready、schemaVersion 1。
+- ローカル/LAN health・WebはすべてHTTP 200。LAN認証snapshotは200、audience kitchen、activeOrders 2。admin shellだけがruntime tokenを含み、customer HTMLと配信bundleは含まない。
+- 作業前後とも `orders=5`（new 2 / completed 3）、`order_items=12`、`event_log=14`、schemaVersion 1、端末role件数はadmin 1 / customer 2 / kitchen 1で一致した。DB初期化、seed、migration、注文操作は行っていない。
+- 実トークンとの完全一致検査で、起動ファイル、テスト、デスクトップショートカット、停止後の実起動ログ、配信client bundle、Git差分に秘密値がないことを確認した。
+- 検証はserver 322/322、prototype関連23/23、直接Vite production build、PowerShell構文解析、`git diff --check`。`npm.ps1`の実行ポリシー拒否とpnpm非TTY依存確認はテスト本体実行前の環境制約だったため、設定を変更せず `npm.cmd` と直接nodeで同等検証した。
+- ショートカットからChromeが開くことはプロセス増加で確認した。CodexのChrome拡張接続が利用できずDOMの自動目視検査はできないため、厨房表示内容は直前の実機PASS、認証snapshot 2件、frontend無変更を根拠に維持判定した。
 
 ## 失敗した方案
 
@@ -100,6 +113,4 @@
 
 ## 次の一手
 
-1. dirtyなルートを変更せず、clean worktreeでoriginとの差分を取り込み対象と今回の既存変更へ分離する。
-2. そのworktreeで直接Vite build、Sites、P0自動受入を再確認し、ドキュメントの古い件数・前提を同期する。
-3. 分離できた変更だけをレビュー対象にし、A90実機受入は最後に一度だけ行う。
+1. WindowsサーバーPCを再起動後、デスクトップの「わるん注文・厨房」を1回押し、厨房画面にテーブル1の未完了注文2件と新着2件が表示されることを確認する。
