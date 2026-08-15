@@ -1,10 +1,12 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 
-const CODE_BYTES = 32;
+const PAIRING_CODE_LENGTH = 12;
+const PAIRING_CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const TOKEN_BYTES = 32;
 const TOKEN_LENGTH = 43;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/;
+const PAIRING_CODE_PATTERN = /^[A-HJ-NP-Z2-9]{12}$/;
 const MAX_CLAIM_ATTEMPTS = 5;
 const MAX_PAIRING_LIFETIME_MS = 24 * 60 * 60 * 1000;
 const MIN_PAIRING_LIFETIME_MS = 60 * 1000;
@@ -68,6 +70,22 @@ function rawSecret(bytes) {
   return randomBytes(bytes).toString('base64url');
 }
 
+function rawPairingCode() {
+  let code = '';
+  while (code.length < PAIRING_CODE_LENGTH) {
+    for (const byte of randomBytes(32)) {
+      if (byte >= 224) continue;
+      code += PAIRING_CODE_ALPHABET[byte % PAIRING_CODE_ALPHABET.length];
+      if (code.length === PAIRING_CODE_LENGTH) break;
+    }
+  }
+  return code;
+}
+
+function validPairingCode(value) {
+  return typeof value === 'string' && PAIRING_CODE_PATTERN.test(value);
+}
+
 function withTransaction(database, callback) {
   database.exec('BEGIN IMMEDIATE');
   try {
@@ -115,7 +133,7 @@ export function createPairingService({ database, now = Date.now, idFactory = ran
       if (!table || table.is_active !== 1 || table.assigned_customer_device_id !== null) {
         throw pairingError(PAIRING_ERROR_CODES.TABLE_CONFLICT, 'The table is not available for pairing.');
       }
-      const code = rawSecret(CODE_BYTES);
+      const code = rawPairingCode();
       const codeHash = hashPairingSecret(code);
       database.prepare(`
         INSERT INTO pairing_codes (
@@ -132,7 +150,7 @@ export function createPairingService({ database, now = Date.now, idFactory = ran
   }
 
   function claimPairingCode({ pairingCode, deviceId, displayName, appVersion } = {}) {
-    if (!validToken(pairingCode) || !validUuid(deviceId) || !validLabel(displayName) || !validAppVersion(appVersion)) {
+    if (!validPairingCode(pairingCode) || !validUuid(deviceId) || !validLabel(displayName) || !validAppVersion(appVersion)) {
       throw pairingError(PAIRING_ERROR_CODES.INVALID_REQUEST, 'Pairing claim is invalid.');
     }
     const codeHash = hashPairingSecret(pairingCode);

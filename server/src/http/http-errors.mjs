@@ -6,6 +6,7 @@ export const HTTP_ERROR_CODES = Object.freeze({
   PAYLOAD_TOO_LARGE: 'PAYLOAD_TOO_LARGE',
   UNSUPPORTED_MEDIA_TYPE: 'UNSUPPORTED_MEDIA_TYPE',
   ORDER_CONFLICT: 'ORDER_CONFLICT',
+  ORDER_NOT_FOUND: 'ORDER_NOT_FOUND',
   MENU_ITEM_NOT_FOUND: 'MENU_ITEM_NOT_FOUND',
   MENU_ITEM_SOLD_OUT: 'MENU_ITEM_SOLD_OUT',
   EVENT_HISTORY_UNAVAILABLE: 'EVENT_HISTORY_UNAVAILABLE',
@@ -49,6 +50,10 @@ const DEFINITIONS = Object.freeze({
   [HTTP_ERROR_CODES.ORDER_CONFLICT]: Object.freeze({
     statusCode: 409,
     message: 'Order conflicts with an existing request.',
+  }),
+  [HTTP_ERROR_CODES.ORDER_NOT_FOUND]: Object.freeze({
+    statusCode: 404,
+    message: 'Order was not found.',
   }),
   [HTTP_ERROR_CODES.MENU_ITEM_NOT_FOUND]: Object.freeze({
     statusCode: 422,

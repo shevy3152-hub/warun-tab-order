@@ -23,10 +23,19 @@ import {
 import { createCustomerOrderClient, resolveOrderApiConfig } from "./order-outbox.js";
 import { claimCustomerDevice, createIndexedDbCredentialStore, loadOrCreateCustomerDevice, runtimeForCustomerCredentials } from "./device-credentials.js";
 import { customerOrderNoticeFromOutboxEvent } from "./customer-order-notice.js";
-import { issueCustomerPairingCode } from "./admin-pairing.js";
-import { pairingCodeQrSvg } from "./qr-code.js";
+import { configuredAdminToken, fetchAdminOrderHistory, issueCustomerPairingCode } from "./admin-pairing.js";
+import { fetchKitchenOrders, kitchenApiConfigured, markKitchenItemServed } from "./kitchen-api.js";
+import { bootstrapCustomerOrderClient } from "./customer-bootstrap.js";
 
 const STORAGE_KEY = "izakaya-order-prototype-v3";
+
+function formatPairingCode(code) {
+  return code.match(/.{1,4}/g)?.join("-") ?? code;
+}
+
+function normalizePairingCode(code) {
+  return code.replace(/[\s-]/g, "").toUpperCase();
+}
 
 const DEFAULT_KITCHEN_MENU_ALIASES = {
   edamame: "枝豆",
@@ -298,15 +307,21 @@ function Launcher({ state, updateState }) {
   );
 }
 
-function CustomerScreen({ state, updateState, deviceId, orderClient }) {
-  const device = state.devices.find((item) => item.deviceId === deviceId) ?? state.devices[0];
+function CustomerScreen({ state, updateState, deviceId, orderClient, customerDeviceConfig }) {
+  const localDevice = state.devices.find((item) => item.deviceId === deviceId) ?? state.devices[0];
   const apiMode = orderClient.mode === "api";
+  const assignedTableId = apiMode && Number.isSafeInteger(customerDeviceConfig?.tableId) ? String(customerDeviceConfig.tableId) : null;
+  const device = assignedTableId
+    ? { ...localDevice, tableId: assignedTableId, label: customerDeviceConfig.tableLabel || localDevice.label }
+    : localDevice;
   const online = apiMode ? typeof navigator === "undefined" || navigator.onLine !== false : !state.offlineDevices.includes(device.deviceId);
   const categories = [...state.categories].filter((category) => category.isVisible).sort((a, b) => a.sortOrder - b.sortOrder);
   const [categoryId, setCategoryId] = useState(categories[0]?.id ?? "recommended");
   const [cart, setCart] = useState({ edamame: 1, dashimaki: 1, beer: 2, lemon: 1, karaage: 1, yakitori: 2, otoshi: 2 });
   const [modal, setModal] = useState(null);
   const [notice, setNotice] = useState(null);
+  const [apiOrders, setApiOrders] = useState([]);
+  const [submitting, setSubmitting] = useState(false);
   const submitLock = useRef(false);
   const featuredIds = ["edamame", "dashimaki", "beer", "lemon", "karaage"];
   const currentItems = categoryId === "recommended"
@@ -314,16 +329,30 @@ function CustomerScreen({ state, updateState, deviceId, orderClient }) {
     : [...state.menuItems].filter((item) => item.categoryId === categoryId).sort((a, b) => a.sortOrder - b.sortOrder);
   const cartRows = Object.entries(cart).map(([menuItemId, quantity]) => ({ item: state.menuItems.find((menu) => menu.id === menuItemId), quantity })).filter((row) => row.item && row.quantity > 0);
   const cartCount = cartRows.reduce((sum, row) => sum + row.quantity, 0);
-  const customerHistory = state.orders.filter((order) => order.tableId === device.tableId).sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+  const customerHistory = (apiMode ? apiOrders : state.orders)
+    .filter((order) => order.tableId === device.tableId)
+    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 
   useEffect(() => {
     const unsubscribe = orderClient.subscribe((event) => {
       const nextNotice = customerOrderNoticeFromOutboxEvent(event);
       if (!nextNotice) return;
       setNotice((current) => current?.kind === nextNotice.kind && current?.message === nextNotice.message ? current : nextNotice);
+      if (apiMode) {
+        setApiOrders((current) => current.map((order) => {
+          if (order.clientOrderId !== event.clientOrderId) return order;
+          return {
+            ...order,
+            status: event.state === "synced" ? "new" : event.state === "rejected" ? "rejected" : event.state === "pending" ? "queued_offline" : order.status,
+            transportState: event.displayState || event.state,
+            transportErrorCode: event.lastErrorCode || null,
+            syncedAt: event.state === "synced" ? new Date().toISOString() : order.syncedAt,
+          };
+        }));
+      }
     });
     return unsubscribe;
-  }, [orderClient]);
+  }, [apiMode, orderClient]);
 
   useEffect(() => {
     if (!apiMode) return;
@@ -346,6 +375,7 @@ function CustomerScreen({ state, updateState, deviceId, orderClient }) {
   const submitOrder = async () => {
     if (!cartRows.length || submitLock.current) return;
     submitLock.current = true;
+    setSubmitting(true);
     const now = new Date().toISOString();
     const items = cartRows.map((row) => ({
       id: makeId("item"),
@@ -373,7 +403,7 @@ function CustomerScreen({ state, updateState, deviceId, orderClient }) {
           completedAt: null,
           items,
         };
-        updateState((current) => ({ ...current, orders: [...current.orders, order] }));
+        setApiOrders((current) => [...current, order]);
         setCart({});
         setModal(null);
         const result = await orderClient.flush({ clientOrderId: outboxRecord.clientOrderId });
@@ -409,6 +439,7 @@ function CustomerScreen({ state, updateState, deviceId, orderClient }) {
       setNotice({ kind: "failed", message: "注文を保存できませんでした。もう一度お試しください。" });
     } finally {
       submitLock.current = false;
+      setSubmitting(false);
     }
   };
 
@@ -472,7 +503,7 @@ function CustomerScreen({ state, updateState, deviceId, orderClient }) {
         <footer className="customer-footer"><b>INFORMATION</b><span>アレルギー・原材料についてはスタッフまでお尋ねください。</span><strong>店内禁煙</strong></footer>
       </section>
 
-      {modal === "confirm" ? <Modal title="注文内容の確認" onClose={() => setModal(null)}><div className="confirm-list">{cartRows.map((row) => <div key={row.item.id}><b>{row.item.name}</b><span>{row.quantity}点</span></div>)}</div><p className="price-hidden-note">内容をご確認のうえ、注文を送信してください。</p><div className="modal-actions"><button className="button button--quiet" onClick={() => setModal(null)}>戻る</button><button className="button button--primary button--large" onClick={submitOrder}>{online ? "注文を送信" : "送信待ちに保存"}</button></div></Modal> : null}
+      {modal === "confirm" ? <Modal title="注文内容の確認" onClose={() => { if (!submitting) setModal(null); }}><div className="confirm-list">{cartRows.map((row) => <div key={row.item.id}><b>{row.item.name}</b><span>{row.quantity}点</span></div>)}</div><p className="price-hidden-note">内容をご確認のうえ、注文を送信してください。</p><div className="modal-actions"><button className="button button--quiet" onClick={() => setModal(null)} disabled={submitting}>戻る</button><button className="button button--primary button--large" onClick={submitOrder} disabled={submitting}>{submitting ? "送信中" : online ? "注文を送信" : "送信待ちに保存"}</button></div></Modal> : null}
       {modal === "staff" ? <Modal title="スタッフを呼びますか？" onClose={() => setModal(null)}><p className="modal-lead">テーブル {device.tableId} からスタッフへお知らせします。</p><div className="modal-actions"><button className="button button--quiet" onClick={() => setModal(null)}>やめる</button><button className="button button--primary button--large" onClick={callStaff}><Bell size={22} weight="bold" /> 呼び出す</button></div></Modal> : null}
       {modal === "feature" ? <Modal title="確認" onClose={() => setModal(null)}><p className="modal-lead">この機能は次の実装段階で接続します。</p><div className="modal-actions"><button className="button button--primary" onClick={() => setModal(null)}>閉じる</button></div></Modal> : null}
       {modal === "history" ? <Modal title="これまでのご注文" onClose={() => setModal(null)} wide><div className="customer-history">{customerHistory.length ? customerHistory.map((order) => <article key={order.id}><header><b>{formatTime(order.createdAt)} のご注文</b><span className={`status-chip status-${order.status}`}>{customerTransportLabel(order)}</span></header>{order.items.map((item) => <div key={item.id}><span>{item.nameSnapshot}</span><b>{item.quantity}点</b></div>)}</article>) : <div className="empty-state"><ClipboardText size={42} /><p>注文履歴はまだありません。</p></div>}</div></Modal> : null}
@@ -493,8 +524,7 @@ const adminNavItems = [
   { route: "/admin/devices", label: "設定", icon: Gear },
 ];
 
-function StaffShell({ route, title, subtitle, state, children, right }) {
-  const activeCalls = state.staffCalls.filter((call) => !call.resolvedAt).length;
+function StaffShell({ route, title, subtitle, state, children, right, newOrderCount = 0 }) {
   const isKitchen = route === "/kitchen";
   const isAdmin = route.startsWith("/admin");
   const navItems = isAdmin ? adminNavItems : staffNavItems;
@@ -502,7 +532,7 @@ function StaffShell({ route, title, subtitle, state, children, right }) {
     <div className={`staff-app ${isKitchen ? "staff-app--kitchen" : ""} ${isAdmin ? "staff-app--admin" : ""}`}>
       <aside className="staff-sidebar">
         <Brand />
-        <nav>{navItems.map((item) => <button key={item.route} className={route.startsWith(item.route) ? "is-active" : ""} onClick={() => navigate(item.route)}><item.icon size={30} weight="bold" /><span>{item.label}</span>{item.route === "/kitchen" && activeCalls ? <b className="badge">{activeCalls}</b> : null}</button>)}</nav>
+        <nav>{navItems.map((item) => <button key={item.route} className={route.startsWith(item.route) ? "is-active" : ""} onClick={() => navigate(item.route)}><item.icon size={30} weight="bold" /><span>{item.label}</span>{item.route === "/kitchen" && newOrderCount ? <b className="badge">{newOrderCount}</b> : null}</button>)}</nav>
         <div className="hours"><b>本日の営業時間</b><span>17:00 — 24:00</span><small>ラストオーダー 23:30</small></div>
       </aside>
       <main className="staff-main">
@@ -527,14 +557,20 @@ function StaffShell({ route, title, subtitle, state, children, right }) {
   );
 }
 
-function KitchenScreen({ state, updateState }) {
+function KitchenScreen({ state, updateState, apiState, onServe }) {
   const [callPanel, setCallPanel] = useState(false);
-  const activeOrders = state.orders.filter((order) => order.status === "new" || order.status === "active");
+  const apiMode = Boolean(apiState);
+  const sourceOrders = apiMode ? apiState.orders : state.orders;
+  const activeOrders = sourceOrders.filter((order) => order.status === "new" || order.status === "active");
   const tables = [...new Set(activeOrders.map((order) => order.tableId))].sort((a, b) => Number(a) - Number(b));
   const activeCalls = state.staffCalls.filter((call) => !call.resolvedAt);
   const kitchenAliases = Object.fromEntries(state.menuItems.map((item) => [item.id, item.kitchenAlias?.trim()]));
 
   const toggleServed = (orderId, itemId) => {
+    if (apiMode) {
+      void onServe(orderId, itemId);
+      return;
+    }
     updateState((current) => {
       const now = new Date().toISOString();
       const orders = current.orders.map((order) => {
@@ -551,10 +587,10 @@ function KitchenScreen({ state, updateState }) {
   const resolveCall = (callId) => updateState((current) => ({ ...current, staffCalls: current.staffCalls.map((call) => call.id === callId ? { ...call, resolvedAt: new Date().toISOString() } : call) }));
 
   return (
-    <StaffShell route="/kitchen" title="新着注文" subtitle="新しいご注文を確認してください。提供済みのテーブルは自動的に履歴へ移動します。" state={state} right={<div className="staff-topbar__right"><button className="staff-call-button" onClick={() => setCallPanel(true)}><Bell size={26} weight="fill" /> スタッフ呼出 {activeCalls.length ? <b>{activeCalls.length}</b> : null}</button><ConnectionBadge online /><time className="kitchen-clock">{formatTime(new Date())}</time></div>}>
+    <StaffShell route="/kitchen" title="新着注文" subtitle="新しいご注文を確認してください。提供済みのテーブルは自動的に履歴へ移動します。" state={state} newOrderCount={activeOrders.length} right={<div className="staff-topbar__right"><button className="staff-call-button" onClick={() => setCallPanel(true)}><Bell size={26} weight="fill" /> スタッフ呼出 {activeCalls.length ? <b>{activeCalls.length}</b> : null}</button><ConnectionBadge online /><time className="kitchen-clock">{formatTime(new Date())}</time></div>}>
       <section className="kitchen-content">
         <div className="table-scroll">
-          {tables.length ? tables.map((tableId) => {
+          {apiMode && apiState.loading ? <div className="kitchen-empty"><p>注文を読み込み中です。</p></div> : apiMode && apiState.error ? <div className="kitchen-empty"><p>注文情報を取得できません。</p></div> : tables.length ? tables.map((tableId) => {
             const orders = activeOrders.filter((order) => order.tableId === tableId);
             const rows = orders.flatMap((order) => order.items.map((item) => ({ ...item, orderId: order.id, createdAt: order.createdAt }))).sort((a, b) => Number(a.isServed) - Number(b.isServed));
             const total = orders.reduce((sum, order) => sum + order.totalAmount, 0);
@@ -579,18 +615,47 @@ function KitchenScreen({ state, updateState }) {
   );
 }
 
-function HistoryScreen({ state }) {
-  const completed = state.orders.filter((order) => order.status === "completed").sort((a, b) => new Date(b.completedAt) - new Date(a.completedAt));
+function HistoryScreen({ state, apiMode = false }) {
+  const [remoteState, setRemoteState] = useState({ loading: apiMode, error: false, orders: [] });
+  useEffect(() => {
+    if (!apiMode) return undefined;
+    let cancelled = false;
+    setRemoteState({ loading: true, error: false, orders: [] });
+    void fetchAdminOrderHistory({ env: window }).then((orders) => {
+      if (!cancelled) setRemoteState({ loading: false, error: false, orders });
+    }).catch(() => {
+      if (!cancelled) setRemoteState({ loading: false, error: true, orders: [] });
+    });
+    return () => { cancelled = true; };
+  }, [apiMode]);
+  const sourceOrders = apiMode ? remoteState.orders.map((order) => ({
+    id: order.orderId,
+    tableId: String(order.tableId),
+    createdAt: new Date(order.acceptedAtMs).toISOString(),
+    completedAt: order.completedAtMs ? new Date(order.completedAtMs).toISOString() : null,
+    status: order.status,
+    totalAmount: order.totalAmountYen,
+    items: order.items.map((item) => ({
+      id: String(item.orderItemId),
+      nameSnapshot: item.formalNameSnapshot,
+      unitPriceSnapshot: item.unitPriceYenSnapshot,
+      quantity: item.quantity,
+    })),
+  })) : state.orders;
+  const completed = sourceOrders.filter((order) => order.status === "completed").sort((a, b) => new Date(b.completedAt) - new Date(a.completedAt));
   return (
     <StaffShell route="/history" title="提供済み（履歴）" subtitle="完了した注文を、注文時点の品名と単価で確認できます。" state={state} right={<ConnectionBadge online />}>
       <section className="history-content">
         <div className="history-summary"><div><small>本日の提供済み</small><b>{completed.length}</b><span>件</span></div><div><small>履歴合計</small><b>{yen(completed.reduce((sum, order) => sum + order.totalAmount, 0))}</b></div></div>
-        <div className="history-table-wrap">
+        {apiMode && remoteState.loading ? <div className="empty-state"><p>注文履歴を読み込み中です。</p></div> : null}
+        {apiMode && remoteState.error ? <div className="empty-state"><p>注文履歴を取得できませんでした。</p></div> : null}
+        {(!apiMode || (!remoteState.loading && !remoteState.error)) && completed.length === 0 ? <div className="empty-state"><p>注文履歴はありません。</p></div> : null}
+        {(!apiMode || (!remoteState.loading && !remoteState.error)) && completed.length > 0 && <div className="history-table-wrap">
           <table className="history-table">
             <thead><tr><th>注文番号</th><th>テーブル</th><th>受付</th><th>完了</th><th>品目</th><th>合計</th></tr></thead>
             <tbody>{completed.map((order) => <tr key={order.id}><td><b>{order.id}</b></td><td><span className="table-pill">T{order.tableId}</span></td><td>{formatDateTime(order.createdAt)}</td><td>{formatDateTime(order.completedAt)}</td><td><div className="history-items">{order.items.map((item) => <span key={item.id}>{item.nameSnapshot} <b>{item.quantity}点</b> <small>{yen(item.unitPriceSnapshot)}</small></span>)}</div></td><td className="history-total">{yen(order.totalAmount)}</td></tr>)}</tbody>
           </table>
-        </div>
+        </div>}
       </section>
     </StaffShell>
   );
@@ -606,7 +671,7 @@ function AdminScreen({ state, updateState, section = "menu" }) {
   const [showAdd, setShowAdd] = useState(false);
   const [editingMenuId, setEditingMenuId] = useState(null);
   const [pairingTableId, setPairingTableId] = useState("1");
-  const [pairingQr, setPairingQr] = useState(null);
+  const [pairingCode, setPairingCode] = useState(null);
   const [pairingError, setPairingError] = useState(false);
   const categoriesById = Object.fromEntries(state.categories.map((category) => [category.id, category]));
   const editingMenu = state.menuItems.find((item) => item.id === editingMenuId) ?? null;
@@ -641,9 +706,9 @@ function AdminScreen({ state, updateState, section = "menu" }) {
     setPairingError(false);
     try {
       const result = await issueCustomerPairingCode({ tableId: Number(pairingTableId), expiresAtMs: Date.now() + 10 * 60 * 1000 });
-      setPairingQr(pairingCodeQrSvg(result.code));
+      setPairingCode(result.code);
     } catch {
-      setPairingQr(null);
+      setPairingCode(null);
       setPairingError(true);
     }
   };
@@ -666,7 +731,7 @@ function AdminScreen({ state, updateState, section = "menu" }) {
         </> : null}
 
         {section === "devices" ? <>
-          <div className="pairing-admin-panel"><div><span className="section-kicker">CUSTOMER PAIRING</span><h2>客席端末をQRで登録</h2><p>管理者だけが発行します。raw codeは文字表示・保存せず、A90のカメラでQRを読み取ってください。</p></div><label>テーブル<select value={pairingTableId} onChange={(event) => setPairingTableId(event.target.value)}>{[1, 2, 3, 4, 5, 6, 7, 8].map((tableId) => <option value={String(tableId)} key={tableId}>テーブル {tableId}</option>)}</select></label><button className="button button--primary" onClick={issuePairing}>QRを発行</button>{pairingError ? <p role="alert">QRを発行できませんでした。管理者API設定と空きテーブルを確認してください。</p> : null}{pairingQr ? <div className="pairing-qr" dangerouslySetInnerHTML={{ __html: pairingQr }} /> : null}</div>
+          <div className="pairing-admin-panel"><div><span className="section-kicker">CUSTOMER PAIRING</span><h2>客席端末を登録</h2><p>管理者が発行したコードをA90の登録画面へ入力してください。</p></div><label>テーブル<select value={pairingTableId} onChange={(event) => setPairingTableId(event.target.value)}>{[1, 2, 3, 4, 5, 6, 7, 8].map((tableId) => <option value={String(tableId)} key={tableId}>テーブル {tableId}</option>)}</select></label><button className="button button--primary" onClick={issuePairing}>コードを発行</button>{pairingError ? <p role="alert">コードを発行できませんでした。管理者API設定と空きテーブルを確認してください。</p> : null}{pairingCode ? <div className="pairing-code-display"><span>入力コード</span><code>{formatPairingCode(pairingCode)}</code></div> : null}</div>
           <div className="admin-toolbar"><div><span className="section-kicker">FIXED ASSIGNMENT</span><h2>客席端末とテーブル</h2><p>客席からは変更できません。端末を置き替えたときだけここで設定します。</p></div></div>
           <div className="device-admin-grid">{state.devices.map((device, index) => <article key={device.deviceId}><div className="device-admin-icon"><Monitor size={38} weight="duotone" /></div><div><small>端末 {String(index + 1).padStart(2, "0")}</small><h3>{device.label}</h3><code>{device.deviceId}</code></div><label>固定テーブル<select value={device.tableId} onChange={(event) => updateState((current) => ({ ...current, devices: current.devices.map((item) => item.deviceId === device.deviceId ? { ...item, tableId: event.target.value } : item) }))}>{[1, 2, 3, 4, 5, 6, 7, 8].map((tableId) => <option value={String(tableId)} key={tableId}>テーブル {tableId}</option>)}</select></label><ConnectionBadge online={!state.offlineDevices.includes(device.deviceId)} compact /></article>)}</div>
         </> : null}
@@ -683,7 +748,7 @@ function PairingScreen({ onClaim, error }) {
     event.preventDefault();
     if (submitting || !pairingCode.trim()) return;
     setSubmitting(true);
-    try { await onClaim({ pairingCode: pairingCode.trim(), displayName: displayName.trim() }); }
+    try { await onClaim({ pairingCode: normalizePairingCode(pairingCode), displayName: displayName.trim() }); }
     finally { setSubmitting(false); }
   };
   return <main className="customer-shell"><section className="empty-state"><h1>端末登録</h1><p>管理者から受け取ったペアリングコードを入力してください。</p><form className="inline-form" onSubmit={submit}><label>ペアリングコード<input value={pairingCode} onChange={(event) => setPairingCode(event.target.value)} autoComplete="off" required /></label><label>端末名<input value={displayName} onChange={(event) => setDisplayName(event.target.value)} maxLength={80} required /></label><button className="button button--primary" disabled={submitting}>{submitting ? "登録中" : "端末を登録"}</button></form>{error ? <p role="alert">ペアリングに失敗しました。管理者へコードの再発行を依頼してください。</p> : null}</section></main>;
@@ -692,6 +757,8 @@ function PairingScreen({ onClaim, error }) {
 export function App() {
   const route = useRoute();
   const [orderClient, setOrderClient] = useState(null);
+  const [customerDeviceConfig, setCustomerDeviceConfig] = useState(null);
+  const [kitchenApiState, setKitchenApiState] = useState(null);
   const [pairingError, setPairingError] = useState(false);
   const [state, setState] = useState(() => {
     try { return JSON.parse(localStorage.getItem(STORAGE_KEY)) || defaultState; } catch { return defaultState; }
@@ -700,19 +767,44 @@ export function App() {
   const updateState = (updater) => setState((current) => typeof updater === "function" ? updater(current) : updater);
 
   useEffect(() => {
+    if (route !== "/kitchen") {
+      setKitchenApiState(null);
+      return undefined;
+    }
+    if (!kitchenApiConfigured(window)) {
+      setKitchenApiState(window.WARUN_ORDER_MODE === "demo" ? null : { loading: false, error: true, orders: [] });
+      return undefined;
+    }
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const orders = await fetchKitchenOrders({ env: window });
+        if (!cancelled) setKitchenApiState({ loading: false, error: false, orders });
+      } catch {
+        if (!cancelled) setKitchenApiState({ loading: false, error: true, orders: [] });
+      }
+    };
+    setKitchenApiState({ loading: true, error: false, orders: [] });
+    void load();
+    const timer = window.setInterval(load, 2_000);
+    return () => { cancelled = true; window.clearInterval(timer); };
+  }, [route]);
+
+  const serveKitchenItem = async (orderId, orderItemId) => {
+    try {
+      await markKitchenItemServed({ env: window, orderId, orderItemId });
+      const orders = await fetchKitchenOrders({ env: window });
+      setKitchenApiState({ loading: false, error: false, orders });
+    } catch {
+      setKitchenApiState((current) => current ? { ...current, error: true } : current);
+    }
+  };
+
+  useEffect(() => {
     let cancelled = false;
     const bootstrap = async () => {
-      const config = resolveOrderApiConfig(window);
-      if (config.mode === "demo" || config.enabled) {
-        if (!cancelled) setOrderClient(createCustomerOrderClient());
-        return;
-      }
-      const store = createIndexedDbCredentialStore({ indexedDB: window.indexedDB });
-      const credentials = await loadOrCreateCustomerDevice({ store, globalObject: window });
-      if (cancelled) return;
-      if (!credentials.token) return;
-      const runtime = runtimeForCustomerCredentials({ globalObject: window, baseUrl: config.baseUrl, token: credentials.token });
-      setOrderClient(createCustomerOrderClient({ global: runtime, indexedDB: window.indexedDB }));
+      const client = await bootstrapCustomerOrderClient({ globalObject: window, onConfig: (config) => { if (!cancelled) setCustomerDeviceConfig(config); } });
+      if (!cancelled && client) setOrderClient(client);
     };
     void bootstrap().catch(() => { if (!cancelled) setPairingError(true); });
     return () => { cancelled = true; };
@@ -724,6 +816,7 @@ export function App() {
     const device = await loadOrCreateCustomerDevice({ store, globalObject: window });
     await claimCustomerDevice({ store, baseUrl: config.baseUrl || new URL("/v1", window.location.origin).toString(), pairingCode, deviceId: device.deviceId, displayName, appVersion: "prototype" });
     const credentials = await store.load();
+    setCustomerDeviceConfig(credentials.config ?? null);
     const runtime = runtimeForCustomerCredentials({ globalObject: window, baseUrl: config.baseUrl || new URL("/v1", window.location.origin).toString(), token: credentials.token });
     setPairingError(false);
     setOrderClient(createCustomerOrderClient({ global: runtime, indexedDB: window.indexedDB }));
@@ -774,15 +867,16 @@ export function App() {
   }, [orderClient]);
 
   const content = useMemo(() => {
-    if (!orderClient) return <PairingScreen onClaim={claim} error={pairingError} />;
-    if (route === "/") return <CustomerScreen state={state} updateState={updateState} deviceId="customer-03" orderClient={orderClient} />;
-    if (route.startsWith("/customer/")) return <CustomerScreen state={state} updateState={updateState} deviceId={route.split("/")[2]} orderClient={orderClient} />;
-    if (route === "/kitchen") return <KitchenScreen state={state} updateState={updateState} />;
-    if (route === "/history") return <HistoryScreen state={state} />;
+    const isCustomerRoute = route === "/" || route.startsWith("/customer/");
+    if (isCustomerRoute && !orderClient) return <PairingScreen onClaim={claim} error={pairingError} />;
+    if (route === "/") return <CustomerScreen state={state} updateState={updateState} deviceId="customer-03" orderClient={orderClient} customerDeviceConfig={customerDeviceConfig} />;
+    if (route.startsWith("/customer/")) return <CustomerScreen state={state} updateState={updateState} deviceId={route.split("/")[2]} orderClient={orderClient} customerDeviceConfig={customerDeviceConfig} />;
+    if (route === "/kitchen") return <KitchenScreen state={state} updateState={updateState} apiState={kitchenApiState} onServe={serveKitchenItem} />;
+    if (route === "/history") return <HistoryScreen state={state} apiMode={Boolean(configuredAdminToken(window))} />;
     if (route.startsWith("/admin/")) return <AdminScreen state={state} updateState={updateState} section={route.split("/")[2] || "menu"} />;
     if (route === "/devices") return <Launcher state={state} updateState={updateState} />;
-    return <CustomerScreen state={state} updateState={updateState} deviceId="customer-03" orderClient={orderClient} />;
-  }, [route, state, orderClient, pairingError]);
+    return <CustomerScreen state={state} updateState={updateState} deviceId="customer-03" orderClient={orderClient} customerDeviceConfig={customerDeviceConfig} />;
+  }, [route, state, orderClient, customerDeviceConfig, kitchenApiState, pairingError]);
 
   return content;
 }

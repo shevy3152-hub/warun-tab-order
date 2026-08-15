@@ -1,7 +1,7 @@
 import { createServer as createNodeServer } from "node:http";
 import { readFile } from "node:fs/promises";
 import { networkInterfaces } from "node:os";
-import { extname, isAbsolute, relative, resolve } from "node:path";
+import { dirname, extname, isAbsolute, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { createDeviceAuthenticator } from "./auth/device-auth.mjs";
@@ -17,6 +17,9 @@ import { createPairingService } from "./pairing/pairing-service.mjs";
 const DEFAULT_HOST = "0.0.0.0";
 const DEFAULT_PORT = 8787;
 const DEFAULT_WEB_PORT = 5173;
+const SERVER_SOURCE_DIRECTORY = dirname(fileURLToPath(import.meta.url));
+export const DEFAULT_DATABASE_PATH = resolve(SERVER_SOURCE_DIRECTORY, '..', 'var', 'warun.sqlite3');
+export const DEFAULT_WEB_ROOT = resolve(SERVER_SOURCE_DIRECTORY, '..', '..', 'prototype', 'dist', 'client');
 const CONTENT_TYPES = Object.freeze({
   ".css": "text/css; charset=utf-8",
   ".html": "text/html; charset=utf-8",
@@ -26,12 +29,19 @@ const CONTENT_TYPES = Object.freeze({
   ".ttf": "font/ttf",
 });
 
-function injectAdminRuntime(html, adminRuntimeToken) {
+function injectAdminRuntime(html, adminRuntimeToken, kitchenRuntimeToken) {
   const adminRouteScript = '<script>if (!window.location.hash) window.location.hash="/admin/devices";</script>';
-  const runtimeScript = adminRuntimeToken
-    ? `<script>window.WARUN_RUNTIME_CONFIG=Object.assign({},window.WARUN_RUNTIME_CONFIG||{},{apiToken:${JSON.stringify(adminRuntimeToken)}});</script>`
+  const kitchenMeta = kitchenRuntimeToken
+    ? `<meta name="warun-kitchen-token" content="${kitchenRuntimeToken}">`
     : '';
-  const injection = `${adminRouteScript}${runtimeScript}`;
+  const runtimeConfig = [
+    adminRuntimeToken ? `apiToken:${JSON.stringify(adminRuntimeToken)}` : '',
+    kitchenRuntimeToken ? `kitchenToken:${JSON.stringify(kitchenRuntimeToken)}` : '',
+  ].filter(Boolean).join(',');
+  const runtimeScript = runtimeConfig
+    ? `<script>window.WARUN_RUNTIME_CONFIG=Object.assign({},window.WARUN_RUNTIME_CONFIG||{},{${runtimeConfig}});</script>`
+    : '';
+  const injection = `${adminRouteScript}${kitchenMeta}${runtimeScript}`;
   const moduleScript = /<script\b[^>]*\btype=["']module["'][^>]*>/i;
   return moduleScript.test(html)
     ? html.replace(moduleScript, (tag) => `${injection}${tag}`)
@@ -104,14 +114,14 @@ export function createWarunServer({ databasePath, now = Date.now } = {}) {
     catalog.close();
     eventRepository.close();
     orderRepository.close();
-    snapshotService.close();
+    snapshotService.close?.();
     connection.close();
   };
 
   return { server, closeDependencies, connection };
 }
 
-export function createSameOriginWebServer({ apiServer, webRoot, adminRuntimeToken = "" }) {
+export function createSameOriginWebServer({ apiServer, webRoot, adminRuntimeToken = "", kitchenRuntimeToken = "" }) {
   if (!apiServer || typeof apiServer.listeners !== "function") throw new TypeError("An API server is required.");
   const apiHandler = apiServer.listeners("request")[0];
   if (typeof apiHandler !== "function") throw new TypeError("The API server has no request handler.");
@@ -132,14 +142,14 @@ export function createSameOriginWebServer({ apiServer, webRoot, adminRuntimeToke
     const filePath = safePath ? candidate : resolve(resolvedWebRoot, "index.html");
     try {
       let body = await readFile(filePath);
-      if (adminShell) body = injectAdminRuntime(body.toString("utf8"), adminRuntimeToken);
+      if (adminShell) body = injectAdminRuntime(body.toString("utf8"), adminRuntimeToken, kitchenRuntimeToken);
       response.writeHead(200, { "Cache-Control": "no-store", "Content-Type": CONTENT_TYPES[extname(filePath)] || "application/octet-stream" });
       response.end(body);
     } catch {
       if (filePath !== resolve(resolvedWebRoot, "index.html")) {
         try {
         let body = await readFile(resolve(resolvedWebRoot, "index.html"));
-        if (adminShell) body = injectAdminRuntime(body.toString("utf8"), adminRuntimeToken);
+        if (adminShell) body = injectAdminRuntime(body.toString("utf8"), adminRuntimeToken, kitchenRuntimeToken);
           response.writeHead(200, { "Cache-Control": "no-store", "Content-Type": CONTENT_TYPES[".html"] });
           response.end(body);
           return;
@@ -168,18 +178,23 @@ async function main() {
   const productionMode = process.env.WARUN_ENV === "production" || process.env.NODE_ENV === "production";
   const databasePath = resolveOperationalPath({
     value: process.env.WARUN_DB_PATH,
-    fallback: resolve("var/warun.sqlite3"),
+    fallback: DEFAULT_DATABASE_PATH,
     name: "WARUN_DB_PATH",
     requireExplicit: productionMode,
   });
   const application = createWarunServer({ databasePath });
   const webRoot = resolveOperationalPath({
     value: process.env.WARUN_WEB_ROOT,
-    fallback: resolve("../prototype/dist/client"),
+    fallback: DEFAULT_WEB_ROOT,
     name: "WARUN_WEB_ROOT",
     requireExplicit: productionMode,
   });
-  const webServer = createSameOriginWebServer({ apiServer: application.server, webRoot, adminRuntimeToken: process.env.WARUN_ADMIN_API_TOKEN || "" });
+  const webServer = createSameOriginWebServer({
+    apiServer: application.server,
+    webRoot,
+    adminRuntimeToken: process.env.WARUN_ADMIN_API_TOKEN || "",
+    kitchenRuntimeToken: process.env.WARUN_KITCHEN_API_TOKEN || "",
+  });
   const address = await listen(application.server, { host, port });
   const webAddress = await listen(webServer, { host, port: webPort });
   const urls = accessUrls({ host, port: address.port, webPort: webAddress.port });

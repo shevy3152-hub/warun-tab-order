@@ -10,12 +10,14 @@ import { spawn } from "node:child_process";
 import test from "node:test";
 
 import { initializeDatabase } from "../src/db/database.mjs";
-import { accessUrls, createSameOriginWebServer, lanIPv4Addresses, resolveOperationalPath } from "../src/run-server.mjs";
+import { accessUrls, createSameOriginWebServer, DEFAULT_DATABASE_PATH, DEFAULT_WEB_ROOT, lanIPv4Addresses, resolveOperationalPath } from "../src/run-server.mjs";
 
 test("operational paths are absolute and production paths are explicit", () => {
   assert.equal(resolveOperationalPath({ value: "C:\\warun\\data\\warun.sqlite3", fallback: "C:\\fallback.sqlite3", name: "WARUN_DB_PATH" }), "C:\\warun\\data\\warun.sqlite3");
   assert.throws(() => resolveOperationalPath({ value: "var/warun.sqlite3", fallback: "C:\\fallback.sqlite3", name: "WARUN_DB_PATH" }), /absolute path/);
   assert.throws(() => resolveOperationalPath({ value: "", fallback: "C:\\fallback.sqlite3", name: "WARUN_DB_PATH", requireExplicit: true }), /absolute path/);
+  assert.match(DEFAULT_DATABASE_PATH, /server[\\/]var[\\/]warun\.sqlite3$/);
+  assert.match(DEFAULT_WEB_ROOT, /prototype[\\/]dist[\\/]client$/);
 });
 
 test("LAN access URLs are derived without changing the API contract", () => {
@@ -52,6 +54,30 @@ test("admin runtime is injected only into the admin shell", async () => {
     assert.match(adminHtml, /window\.location\.hash="\/admin\/devices"/);
     assert.ok(adminHtml.indexOf('window.location.hash="/admin/devices"') < adminHtml.indexOf('type="module"'));
     assert.ok(adminHtml.indexOf("WARUN_RUNTIME_CONFIG") < adminHtml.indexOf('type="module"'));
+  } finally {
+    await new Promise((resolve) => webServer?.close(resolve));
+    apiServer.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("kitchen runtime is injected only into the admin shell", async () => {
+  const root = await mkdtemp(join(tmpdir(), "warun-kitchen-runtime-"));
+  const apiServer = createServer((_request, response) => response.end());
+  const token = "test-kitchen-runtime-token";
+  let webServer;
+  try {
+    await writeFile(join(root, "index.html"), '<!doctype html><html><head><script type="module">window.app = true;</script></head><body></body></html>');
+    webServer = createSameOriginWebServer({ apiServer, webRoot: root, kitchenRuntimeToken: token });
+    await new Promise((resolve, reject) => { webServer.once("error", reject); webServer.listen(0, "127.0.0.1", resolve); });
+    const { port } = webServer.address();
+    const fetchHtml = (path) => fetch(`http://127.0.0.1:${port}${path}`).then((response) => response.text());
+    const customerHtml = await fetchHtml("/");
+    const adminHtml = await fetchHtml("/admin.html");
+    assert.doesNotMatch(customerHtml, /WARUN_RUNTIME_CONFIG|test-kitchen-runtime-token/);
+    assert.match(adminHtml, /kitchenToken/);
+    assert.match(adminHtml, /warun-kitchen-token/);
+    assert.match(adminHtml, /test-kitchen-runtime-token/);
   } finally {
     await new Promise((resolve) => webServer?.close(resolve));
     apiServer.close();

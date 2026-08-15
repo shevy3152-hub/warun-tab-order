@@ -345,6 +345,58 @@ test('created order is safely acknowledged, committed atomically, and then wakes
   });
 });
 
+test('admin order history reads completed SQLite orders without exposing internal fields', async () => {
+  await withFixture(async ({ port, database }) => {
+    const clientOrderId = uuid(1_101);
+    const created = await postOrder(port, CUSTOMER_A_TOKEN, orderBody(clientOrderId));
+    assert.equal(created.statusCode, 201);
+    database.prepare("UPDATE orders SET status = 'completed', completed_at_ms = ? WHERE client_order_id = ?")
+      .run(1_800_000_002_000, clientOrderId);
+
+    const response = await request({
+      port,
+      path: '/v1/admin/order-history',
+      headers: bearer(ADMIN_TOKEN),
+    });
+    assert.equal(response.statusCode, 200);
+    assert.equal(response.json.orders.length, 1);
+    assert.equal(response.json.orders[0].clientOrderId, clientOrderId);
+    assert.equal(response.json.orders[0].items.length, 1);
+    assert.doesNotMatch(response.rawBody, /requestFingerprint|canonicalRequest|authenticatedDeviceId|token/i);
+
+    const customerResponse = await request({
+      port,
+      path: '/v1/admin/order-history',
+      headers: bearer(CUSTOMER_A_TOKEN),
+    });
+    assertError(customerResponse, 403, 'AUTHORIZATION_FAILED');
+  });
+});
+
+test('kitchen can serve items, complete orders, and expose them to admin history', async () => {
+  await withFixture(async ({ port, database }) => {
+    const created = await postOrder(port, CUSTOMER_A_TOKEN, orderBody(uuid(1_102)));
+    assert.equal(created.statusCode, 201);
+    const stored = database.prepare('SELECT order_id FROM orders LIMIT 1').get();
+    const item = database.prepare('SELECT order_item_id FROM order_items WHERE order_id = ?').get(stored.order_id);
+    const served = await request({
+      port,
+      path: '/v1/kitchen/order-items/serve',
+      method: 'POST',
+      headers: { ...bearer(KITCHEN_TOKEN), ...JSON_HEADERS },
+      body: JSON.stringify({ orderId: stored.order_id, orderItemId: item.order_item_id }),
+    });
+    assert.equal(served.statusCode, 200);
+    assert.equal(served.json.orders[0].status, 'completed');
+    assert.equal(database.prepare('SELECT status FROM orders WHERE order_id = ?').get(stored.order_id).status, 'completed');
+    assert.equal(database.prepare("SELECT event_type FROM event_log WHERE aggregate_id = ? ORDER BY event_id DESC LIMIT 1").get(stored.order_id).event_type, 'order.completed');
+
+    const history = await request({ port, path: '/v1/admin/order-history', headers: bearer(ADMIN_TOKEN) });
+    assert.equal(history.statusCode, 200);
+    assert.equal(history.json.orders[0].orderId, stored.order_id);
+  });
+});
+
 test('same intent replays without rows or notification; changed quantity or item conflicts', async () => {
   await withFixture(async ({ port, database }) => {
     const stream = await openSse({ port, token: KITCHEN_TOKEN });
