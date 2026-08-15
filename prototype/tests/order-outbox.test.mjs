@@ -9,6 +9,7 @@ import {
   createMemoryOutbox,
   createOrderOutbox,
   createOrderPayload,
+  fetchCustomerOrderHistory,
   resolveOrderApiConfig,
   retryDelayForAttempt,
 } from "../src/order-outbox.js";
@@ -333,6 +334,58 @@ test("network errors do not include runtime tokens in the result", async () => {
   const result = await transport.send(createOrderPayload({ clientOrderId: uuid(15), items: [{ menuItemId: ITEM_ID, quantity: 1 }] }));
   assert.equal(result.errorCode, "NETWORK_ERROR");
   assert.equal(JSON.stringify(result).includes(token), false);
+});
+
+test("customer history uses the browser customer token without putting it in the URL or result", async () => {
+  const token = "runtime-customer-secret";
+  const env = {
+    WARUN_ORDER_MODE: "api",
+    WARUN_API_BASE: "https://api.example.test/v1",
+    WARUN_API_TOKEN: token,
+    location: { origin: "https://tablet.example.test" },
+    navigator: { onLine: true },
+  };
+  let request;
+  const orders = [{ orderId: uuid(20), clientOrderId: uuid(21), status: "completed", items: [] }];
+  const result = await fetchCustomerOrderHistory({
+    config: resolveOrderApiConfig(env),
+    env,
+    fetchImpl: async (url, options) => {
+      request = { url, options };
+      return { status: 200, json: async () => ({ orders }) };
+    },
+  });
+
+  assert.equal(request.url, "https://api.example.test/v1/customer/order-history");
+  assert.equal(request.options.method, "GET");
+  assert.equal(request.options.headers.Authorization, `Bearer ${token}`);
+  assert.deepEqual(result, orders);
+  assert.equal(request.url.includes(token), false);
+  assert.equal(JSON.stringify(result).includes(token), false);
+});
+
+test("API customer client exposes authenticated history through its existing runtime credentials", async () => {
+  const token = "runtime-customer-secret";
+  const global = {
+    WARUN_ORDER_MODE: "api",
+    WARUN_API_BASE: "https://api.example.test/v1",
+    WARUN_API_TOKEN: token,
+    location: { origin: "https://tablet.example.test" },
+    navigator: { onLine: true },
+  };
+  let authorization;
+  const client = createCustomerOrderClient({
+    global,
+    store: createMemoryOutbox(),
+    autoRetry: false,
+    fetchImpl: async (_url, options) => {
+      authorization = options.headers.Authorization;
+      return { status: 200, json: async () => ({ orders: [] }) };
+    },
+  });
+
+  assert.deepEqual(await client.getHistory(), []);
+  assert.equal(authorization, `Bearer ${token}`);
 });
 
 test("API mode without runtime configuration is safe and does not use demo transport", async () => {

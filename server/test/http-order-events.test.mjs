@@ -370,6 +370,62 @@ test('admin order history reads completed SQLite orders without exposing interna
       headers: bearer(CUSTOMER_A_TOKEN),
     });
     assertError(customerResponse, 403, 'AUTHORIZATION_FAILED');
+
+    const kitchenResponse = await request({
+      port,
+      path: '/v1/kitchen/order-history',
+      headers: bearer(KITCHEN_TOKEN),
+    });
+    assert.equal(kitchenResponse.statusCode, 200);
+    assert.equal(kitchenResponse.json.orders.length, 1);
+    assert.equal(kitchenResponse.json.orders[0].clientOrderId, clientOrderId);
+
+    const kitchenOnAdminRoute = await request({
+      port,
+      path: '/v1/admin/order-history',
+      headers: bearer(KITCHEN_TOKEN),
+    });
+    assertError(kitchenOnAdminRoute, 403, 'AUTHORIZATION_FAILED');
+  });
+});
+
+test('customer order history returns only orders owned by the authenticated device', async () => {
+  await withFixture(async ({ port, database }) => {
+    const customerAOrder = uuid(1_111);
+    const customerBOrder = uuid(1_112);
+    assert.equal((await postOrder(port, CUSTOMER_A_TOKEN, orderBody(customerAOrder))).statusCode, 201);
+    assert.equal((await postOrder(port, CUSTOMER_B_TOKEN, orderBody(customerBOrder, [{ menuItemId: 'beer', quantity: 1 }]))).statusCode, 201);
+    database.prepare("UPDATE order_items SET is_served = 1, served_at_ms = ?, served_by_device_id = ? WHERE order_id = (SELECT order_id FROM orders WHERE client_order_id = ?)")
+      .run(1_800_000_001_999, KITCHEN_ID, customerAOrder);
+    database.prepare("UPDATE orders SET status = 'completed', completed_at_ms = ? WHERE client_order_id = ?")
+      .run(1_800_000_002_000, customerAOrder);
+
+    const customerAResponse = await request({
+      port,
+      path: '/v1/customer/order-history',
+      headers: bearer(CUSTOMER_A_TOKEN),
+    });
+    assert.equal(customerAResponse.statusCode, 200);
+    assert.deepEqual(customerAResponse.json.orders.map((order) => order.clientOrderId), [customerAOrder]);
+    assert.equal(customerAResponse.json.orders[0].status, 'completed');
+    assert.equal(customerAResponse.json.orders[0].items[0].isServed, true);
+    assert.doesNotMatch(customerAResponse.rawBody, /price|total|kitchenAlias|tableId|customerDevice|fingerprint|canonical|token/i);
+
+    const customerBResponse = await request({
+      port,
+      path: '/v1/customer/order-history',
+      headers: bearer(CUSTOMER_B_TOKEN),
+    });
+    assert.equal(customerBResponse.statusCode, 200);
+    assert.deepEqual(customerBResponse.json.orders.map((order) => order.clientOrderId), [customerBOrder]);
+    assert.equal(customerBResponse.rawBody.includes(customerAOrder), false);
+
+    const kitchenResponse = await request({
+      port,
+      path: '/v1/customer/order-history',
+      headers: bearer(KITCHEN_TOKEN),
+    });
+    assertError(kitchenResponse, 403, 'AUTHORIZATION_FAILED');
   });
 });
 

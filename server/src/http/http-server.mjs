@@ -35,6 +35,7 @@ import {
 import {
   createErrorResponse,
   createEventHistoryUnavailableResponse,
+  mapCustomerOrderHistoryResponse,
   mapDeviceConfigResponse,
   mapEventReplayResponse,
   mapHealthResponse,
@@ -56,7 +57,9 @@ const ROUTE_METHODS = new Map([
   ['/v1/device/config', 'GET'],
   ['/v1/menu', 'GET'],
   ['/v1/orders', 'POST'],
+  ['/v1/customer/order-history', 'GET'],
   ['/v1/kitchen/order-items/serve', 'POST'],
+  ['/v1/kitchen/order-history', 'GET'],
   ['/v1/admin/order-history', 'GET'],
   ['/v1/snapshot', 'GET'],
   ['/v1/events', 'GET'],
@@ -510,6 +513,7 @@ function createConfiguredHttpServer({
     && (
       !orderRepository
       || typeof orderRepository.createOrder !== 'function'
+      || typeof orderRepository.getCustomerHistory !== 'function'
       || typeof orderRepository.getHistory !== 'function'
       || typeof orderRepository.markItemServed !== 'function'
       || !eventRepository
@@ -626,12 +630,23 @@ function createConfiguredHttpServer({
         return;
       }
 
-      if (target.path === '/v1/admin/order-history') {
-        authorizeDeviceRole(principal, ['admin']);
+      if (target.path === '/v1/kitchen/order-history' || target.path === '/v1/admin/order-history') {
+        authorizeDeviceRole(principal, target.path === '/v1/kitchen/order-history' ? ['kitchen', 'admin'] : ['admin']);
         const orders = requireService(orderRepository, 'getHistory');
         writeJsonResponse(response, {
           statusCode: 200,
           body: mapOrderHistoryResponse(orders.getHistory(principal)),
+          requestId,
+        });
+        return;
+      }
+
+      if (target.path === '/v1/customer/order-history') {
+        authorizeDeviceRole(principal, ['customer']);
+        const orders = requireService(orderRepository, 'getCustomerHistory');
+        writeJsonResponse(response, {
+          statusCode: 200,
+          body: mapCustomerOrderHistoryResponse(orders.getCustomerHistory(principal)),
           requestId,
         });
         return;

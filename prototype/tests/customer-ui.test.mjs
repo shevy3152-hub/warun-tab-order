@@ -16,7 +16,17 @@ test("API customer orders stay in memory instead of localStorage state", () => {
   assert.match(apiBranch, /setApiOrders/);
   assert.doesNotMatch(apiBranch, /updateState/);
   assert.match(customerScreen, /const customerHistory = \(apiMode \? apiOrders : state\.orders\)/);
+  assert.match(customerScreen, /\.filter\(\(order\) => apiMode \|\| order\.tableId === device\.tableId\)/);
   assert.match(customerScreen, /disabled=\{submitting\}/);
+});
+
+test("production customer history loads authenticated SQLite data and fails closed", () => {
+  assert.match(customerScreen, /modal !== "history"/);
+  assert.match(customerScreen, /orderClient\.getHistory\(\)/);
+  assert.match(customerScreen, /orders\.map\(mapCustomerHistoryOrder\)/);
+  assert.match(customerScreen, /apiMode && apiHistoryState\.error/);
+  assert.match(customerScreen, /注文履歴を取得できません。/);
+  assert.match(appSource, /order\.status === "completed" \? "提供済み"/);
 });
 
 test("API customer display uses the server-assigned table", () => {
@@ -44,4 +54,15 @@ test("kitchen does not present local fallback as a persisted empty state", () =>
 test("kitchen API state changes reach the memoized screen", () => {
   assert.match(appSource, /customerDeviceConfig, kitchenApiState, pairingError/);
   assert.match(appSource, /注文情報を取得できません。/);
+});
+
+test("production history requires an authenticated API and never falls back to local state", () => {
+  const historyScreen = appSource.slice(appSource.indexOf("function HistoryScreen"), appSource.indexOf("const adminTabs"));
+  const historyRoute = appSource.slice(appSource.indexOf('if (route === "/history")'), appSource.indexOf('if (route.startsWith("/admin/"))'));
+  assert.match(historyScreen, /apiMode \? remoteState\.orders/);
+  assert.match(historyScreen, /typeof loadHistory !== "function"/);
+  assert.match(historyRoute, /WARUN_ORDER_MODE === "demo"/);
+  assert.match(historyRoute, /fetchKitchenOrderHistory/);
+  assert.match(historyRoute, /apiMode=\{!explicitDemo\}/);
+  assert.match(historyScreen, /completedToday\.length/);
 });

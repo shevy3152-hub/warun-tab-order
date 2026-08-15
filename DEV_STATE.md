@@ -111,6 +111,23 @@
 - `pnpm run build`をそのまま使う方法は、依存復元後のesbuild build script承認制限で完走しなかった。設定変更や`pnpm approve-builds`は行わず、直接Vite buildへ切り替えた。
 - 実機・本番DBを使った確認は、未分離のdirty rootと本番データ保護のため、この状態文書の検証には使用していない。
 
+## 2026-08-15 厨房・客席履歴とproduction白画面の実機受入
+
+- 厨房でテーブル1の未完了2注文・3明細をすべて提供済みにし、新着バッジが2から0になって新着画面からカードが消えることを実機確認した。SQLite上も対象2注文は`completed`、3明細は`served`である。
+- 厨房履歴を認証済みSQLite/APIへ接続し、productionではlocalStorage/demo履歴へフォールバックしないようにした。実機で提供済み履歴が正しく表示されることを確認した。
+- customer端末自身のdevice IDで注文を限定する認証済み履歴APIを追加し、価格・合計・厨房向け情報・他端末の注文を返さない境界にした。客席履歴は実機で18:36・18:42の2注文を「提供済み」として表示できた。
+- production build後のcustomer HTMLで、inline module内の相対importがHTML基準へずれてJavaScriptではなくSPA fallbackのHTMLを読む不具合を修正した。修正後はA90で白画面にならず正常描画することを実機確認した。
+- production Chrome smokeを追加し、一時profileと架空credentialだけを使用して、画面描画、completed履歴表示、API成功・401・403・通信切断時に画面全体がクラッシュしないことを確認した。
+- 最終検証はserver 324/324、prototype 48/48、production build、`git diff --check`がPASS。実トークンはGit差分・source・bundle・ログへ含まれていない。
+- 永続SQLiteは`orders=5`、`completed=5`、`order_items=12`、`served=12`、`event_log=17`、devices 4、schemaVersion 1で、注文の消失・重複・schema変更はない。
+
+## 未完了・次回対応
+
+1. 現在の客席履歴は同じcustomer端末に紐づく過去客の注文も表示する。客席セッション境界は未実装。
+2. 客席履歴を「現在の来店」だけに区切るセッション管理と、会計後の席リセットが必要。
+3. 緊急時にQRで代替タブレットへ切り替える運用・実装は後回し。
+4. Windows再起動後の1クリック起動を、最新のinline module修正を含むproduction buildで最終再確認する必要がある。
+
 ## 次の一手
 
-1. WindowsサーバーPCを再起動後、デスクトップの「わるん注文・厨房」を1回押し、厨房画面にテーブル1の未完了注文2件と新着2件が表示されることを確認する。
+1. WindowsサーバーPCを再起動後、デスクトップの「わるん注文・厨房」を1回押し、最新production画面と認証済み厨房履歴が復帰することを確認する。

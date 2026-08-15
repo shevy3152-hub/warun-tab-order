@@ -222,6 +222,42 @@ function mapStaffOrder(order) {
   return response;
 }
 
+function mapCustomerOrderItem(item) {
+  requireObject(item);
+  const response = {
+    orderItemId: requireInteger(item.orderItemId, 1),
+    formalNameSnapshot: requireString(item.formalNameSnapshot),
+    quantity: requireInteger(item.quantity, 1),
+    isServed: requireBoolean(item.isServed),
+  };
+  if (response.quantity > 99) throw invalidDto();
+  if (Object.hasOwn(item, 'menuItemId')) {
+    response.menuItemId = requireOpaqueId(item.menuItemId);
+  }
+  if (Object.hasOwn(item, 'servedAtMs') && item.servedAtMs !== null) {
+    response.servedAtMs = requireInteger(item.servedAtMs);
+  }
+  return response;
+}
+
+function mapCustomerOrder(order) {
+  requireObject(order);
+  const items = requireArray(order.items);
+  if (items.length === 0) throw invalidDto();
+  const response = {
+    orderId: requireUuid(order.orderId),
+    clientOrderId: requireUuid(order.clientOrderId),
+    tableNumberSnapshot: requireInteger(order.tableNumberSnapshot, 1),
+    status: requireOneOf(order.status, ORDER_STATUSES),
+    acceptedAtMs: requireInteger(order.acceptedAtMs),
+    items: items.map(mapCustomerOrderItem),
+  };
+  if (Object.hasOwn(order, 'completedAtMs') && order.completedAtMs !== null) {
+    response.completedAtMs = requireInteger(order.completedAtMs);
+  }
+  return response;
+}
+
 function mapStaffCall(call) {
   requireObject(call);
   const response = {
@@ -361,6 +397,11 @@ export function mapOrderReceiptResponse(result) {
 export function mapOrderHistoryResponse(orders) {
   if (!Array.isArray(orders)) throw invalidDto();
   return { orders: orders.map(mapStaffOrder) };
+}
+
+export function mapCustomerOrderHistoryResponse(orders) {
+  if (!Array.isArray(orders)) throw invalidDto();
+  return { orders: orders.map(mapCustomerOrder) };
 }
 
 export function mapEventReplayResponse(replay) {

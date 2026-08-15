@@ -8,6 +8,7 @@ import {
 import {
   createErrorResponse,
   createEventHistoryUnavailableResponse,
+  mapCustomerOrderHistoryResponse,
   mapEventReplayResponse,
   mapOrderReceiptResponse,
   mapSnapshotResponse,
@@ -272,6 +273,40 @@ test('order receipt accepts replayed and rejects malformed repository results', 
     { idempotencyResult: 'created', order: { ...staffOrder(), orderId: 'bad' } },
     { idempotencyResult: 'created', order: { ...staffOrder(), acceptedAtMs: -1 } },
   ]) assertInternalError(() => mapOrderReceiptResponse(invalid));
+});
+
+test('customer order history is an exact customer-safe allow-list', () => {
+  const item = {
+    ...staffOrder().items[0],
+    isServed: true,
+    servedAtMs: 2900,
+  };
+  const response = mapCustomerOrderHistoryResponse([staffOrder({
+    status: 'completed',
+    completedAtMs: 3000,
+    items: [item],
+  })]);
+
+  assert.deepEqual(response, {
+    orders: [{
+      orderId: uuid(10),
+      clientOrderId: uuid(11),
+      tableNumberSnapshot: 1,
+      status: 'completed',
+      acceptedAtMs: 2000,
+      completedAtMs: 3000,
+      items: [{
+        orderItemId: 1,
+        menuItemId: 'edamame',
+        formalNameSnapshot: 'Edamame',
+        quantity: 2,
+        isServed: true,
+        servedAtMs: 2900,
+      }],
+    }],
+  });
+  assertNoForbidden(response);
+  assert.doesNotMatch(JSON.stringify(response), /price|total|kitchenAlias|tableId/i);
 });
 
 test('role-scoped replay emits the exact safe event envelope', () => {

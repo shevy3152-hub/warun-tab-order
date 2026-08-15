@@ -332,6 +332,47 @@ export function createApiOrderTransport({
   };
 }
 
+export async function fetchCustomerOrderHistory({
+  config,
+  env = globalThis,
+  fetchImpl = env.fetch,
+} = {}) {
+  const endpoint = config?.baseUrl ? `${config.baseUrl}/customer/order-history` : null;
+  if (!config?.enabled || !endpoint || typeof fetchImpl !== "function") {
+    throw new Error("Customer order history API is not configured.");
+  }
+  if (env?.navigator?.onLine === false) {
+    throw new Error("Customer order history API is offline.");
+  }
+
+  let response;
+  try {
+    response = await fetchImpl(endpoint, {
+      method: "GET",
+      headers: {
+        Accept: "application/json",
+        Authorization: `Bearer ${config.token}`,
+      },
+    });
+  } catch {
+    throw new Error("Customer order history request failed.");
+  }
+  if (response.status !== 200) {
+    throw new Error("Customer order history request failed.");
+  }
+
+  let body;
+  try {
+    body = await response.json();
+  } catch {
+    throw new Error("Customer order history response is invalid.");
+  }
+  if (!body || !Array.isArray(body.orders)) {
+    throw new Error("Customer order history response is invalid.");
+  }
+  return body.orders;
+}
+
 export function createLocalDemoTransport() {
   return {
     kind: "demo",
@@ -524,6 +565,7 @@ export function createCustomerOrderClient({
       async stop() {},
       subscribe() { return () => {}; },
       get() { return Promise.resolve(null); },
+      getHistory() { return Promise.resolve([]); },
       list() { return Promise.resolve([]); },
     };
   }
@@ -542,5 +584,12 @@ export function createCustomerOrderClient({
     mode: "api",
     configured: Boolean(config.enabled && hasDurableStore),
     configReason: hasDurableStore ? config.reason : "INDEXEDDB_UNAVAILABLE",
+    getHistory() {
+      return fetchCustomerOrderHistory({
+        config,
+        env: global,
+        fetchImpl: options.fetchImpl || global.fetch,
+      });
+    },
   };
 }

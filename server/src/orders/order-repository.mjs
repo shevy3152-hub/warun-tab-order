@@ -250,6 +250,24 @@ export function createOrderRepository({ database, now = Date.now, idFactory = ra
         WHERE status = 'completed'
         ORDER BY completed_at_ms DESC, order_id DESC
       `),
+      findCustomerHistoryOrders: database.prepare(`
+        SELECT
+          order_id,
+          client_order_id,
+          request_fingerprint,
+          canonical_request_json,
+          customer_device_id,
+          table_id,
+          table_number_snapshot,
+          status,
+          total_amount_yen,
+          accepted_at_ms,
+          completed_at_ms,
+          version
+        FROM orders
+        WHERE customer_device_id = ?
+        ORDER BY accepted_at_ms DESC, order_id DESC
+      `),
       findServingOrder: database.prepare(`
         SELECT
           order_id,
@@ -646,7 +664,7 @@ export function createOrderRepository({ database, now = Date.now, idFactory = ra
       );
     }
 
-    authorizeDeviceRole(principal, ['admin']);
+    authorizeDeviceRole(principal, ['kitchen', 'admin']);
     let transactionOpen = false;
     try {
       database.exec('BEGIN;');
@@ -663,6 +681,36 @@ export function createOrderRepository({ database, now = Date.now, idFactory = ra
       throw repositoryError(
         ORDER_ERROR_CODES.DATABASE_FAILURE,
         'The order history could not be read.',
+        { cause: error },
+      );
+    }
+  }
+
+  function getCustomerHistory(principal) {
+    if (closed) {
+      throw repositoryError(
+        ORDER_ERROR_CODES.DATABASE_FAILURE,
+        'The order repository is closed.',
+      );
+    }
+
+    authorizeDeviceRole(principal, ['customer']);
+    let transactionOpen = false;
+    try {
+      database.exec('BEGIN;');
+      transactionOpen = true;
+      const history = statements.findCustomerHistoryOrders.all(principal.deviceId).map(loadOrder);
+      database.exec('COMMIT;');
+      transactionOpen = false;
+      return history;
+    } catch (error) {
+      if (transactionOpen) {
+        try { database.exec('ROLLBACK;'); } catch {}
+      }
+      if (error instanceof OrderRepositoryError) throw error;
+      throw repositoryError(
+        ORDER_ERROR_CODES.DATABASE_FAILURE,
+        'The customer order history could not be read.',
         { cause: error },
       );
     }
@@ -729,6 +777,7 @@ export function createOrderRepository({ database, now = Date.now, idFactory = ra
 
   return Object.freeze({
     createOrder,
+    getCustomerHistory,
     getHistory,
     markItemServed,
     close() {

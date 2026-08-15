@@ -2,6 +2,8 @@ import { readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { rewriteInlineModuleSpecifiers } from "./inline-module-paths.mjs";
+
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const clientDir = resolve(scriptDir, "../dist/client");
 const indexPath = resolve(clientDir, "index.html");
@@ -19,9 +21,10 @@ const [javascript, stylesheet] = await Promise.all([
   readFile(assetPath(scriptTag[1]), "utf8"),
   readFile(assetPath(styleTag[1]), "utf8"),
 ]);
+const inlineJavascript = rewriteInlineModuleSpecifiers(javascript, scriptTag[1]);
 
 html = html
   .replace(styleTag[0], () => `<style>${stylesheet.replaceAll("</style", "<\\/style")}</style>`)
-  .replace(scriptTag[0], () => `<script type="module">${javascript.replaceAll("</script", "<\\/script")}</script>`);
+  .replace(scriptTag[0], () => `<script type="module">${inlineJavascript.replaceAll("</script", "<\\/script")}</script>`);
 
 await writeFile(indexPath, html, "utf8");

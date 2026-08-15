@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { fetchKitchenOrders, kitchenApiConfigured, markKitchenItemServed } from "../src/kitchen-api.js";
+import { fetchKitchenOrderHistory, fetchKitchenOrders, kitchenApiConfigured, markKitchenItemServed } from "../src/kitchen-api.js";
 
 const TOKEN = "fixture-kitchen-runtime-token";
 
@@ -52,6 +52,19 @@ test("kitchen serving update uses the same runtime token", async () => {
   assert.equal(calls[0].url, "http://192.168.1.10:5173/v1/kitchen/order-items/serve");
   assert.equal(calls[0].options.headers.Authorization, `Bearer ${TOKEN}`);
   assert.deepEqual(JSON.parse(calls[0].options.body), { orderId: "order-1", orderItemId: 11 });
+});
+
+test("kitchen history uses the kitchen runtime token and SQLite API route", async () => {
+  const calls = [];
+  const env = environment(async (url, options) => {
+    calls.push({ url, options });
+    return { ok: true, async json() { return { orders: [{ orderId: "completed-order-1" }] }; } };
+  });
+
+  const orders = await fetchKitchenOrderHistory({ env });
+  assert.equal(orders[0].orderId, "completed-order-1");
+  assert.equal(calls[0].url, "http://192.168.1.10:5173/v1/kitchen/order-history");
+  assert.equal(calls[0].options.headers.Authorization, `Bearer ${TOKEN}`);
 });
 
 test("kitchen API is not configured without an explicit runtime token", () => {

@@ -24,7 +24,7 @@ import { createCustomerOrderClient, resolveOrderApiConfig } from "./order-outbox
 import { claimCustomerDevice, createIndexedDbCredentialStore, loadOrCreateCustomerDevice, runtimeForCustomerCredentials } from "./device-credentials.js";
 import { customerOrderNoticeFromOutboxEvent } from "./customer-order-notice.js";
 import { configuredAdminToken, fetchAdminOrderHistory, issueCustomerPairingCode } from "./admin-pairing.js";
-import { fetchKitchenOrders, kitchenApiConfigured, markKitchenItemServed } from "./kitchen-api.js";
+import { fetchKitchenOrderHistory, fetchKitchenOrders, kitchenApiConfigured, markKitchenItemServed } from "./kitchen-api.js";
 import { bootstrapCustomerOrderClient } from "./customer-bootstrap.js";
 
 const STORAGE_KEY = "izakaya-order-prototype-v3";
@@ -168,6 +168,14 @@ function formatDateTime(value) {
   return new Intl.DateTimeFormat("ja-JP", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date(value));
 }
 
+function isSameLocalDate(value, reference = new Date()) {
+  const date = new Date(value);
+  return Number.isFinite(date.valueOf())
+    && date.getFullYear() === reference.getFullYear()
+    && date.getMonth() === reference.getMonth()
+    && date.getDate() === reference.getDate();
+}
+
 function yen(value) {
   return new Intl.NumberFormat("ja-JP", { style: "currency", currency: "JPY", maximumFractionDigits: 0 }).format(value);
 }
@@ -182,6 +190,25 @@ function customerTransportLabel(order) {
     case "failed": return "送信失敗";
     default: return order.status === "completed" ? "提供済み" : order.status === "queued_offline" ? "送信待ち" : "準備中";
   }
+}
+
+function mapCustomerHistoryOrder(order) {
+  return {
+    id: order.orderId,
+    clientOrderId: order.clientOrderId,
+    tableId: String(order.tableNumberSnapshot),
+    createdAt: new Date(order.acceptedAtMs).toISOString(),
+    completedAt: order.completedAtMs == null ? null : new Date(order.completedAtMs).toISOString(),
+    status: order.status,
+    items: order.items.map((item) => ({
+      id: String(item.orderItemId),
+      menuItemId: item.menuItemId,
+      nameSnapshot: item.formalNameSnapshot,
+      quantity: item.quantity,
+      isServed: item.isServed,
+      servedAt: item.servedAtMs == null ? null : new Date(item.servedAtMs).toISOString(),
+    })),
+  };
 }
 
 function navigate(route) {
@@ -321,6 +348,7 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
   const [modal, setModal] = useState(null);
   const [notice, setNotice] = useState(null);
   const [apiOrders, setApiOrders] = useState([]);
+  const [apiHistoryState, setApiHistoryState] = useState({ loading: false, error: false });
   const [submitting, setSubmitting] = useState(false);
   const submitLock = useRef(false);
   const featuredIds = ["edamame", "dashimaki", "beer", "lemon", "karaage"];
@@ -330,8 +358,25 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
   const cartRows = Object.entries(cart).map(([menuItemId, quantity]) => ({ item: state.menuItems.find((menu) => menu.id === menuItemId), quantity })).filter((row) => row.item && row.quantity > 0);
   const cartCount = cartRows.reduce((sum, row) => sum + row.quantity, 0);
   const customerHistory = (apiMode ? apiOrders : state.orders)
-    .filter((order) => order.tableId === device.tableId)
+    .filter((order) => apiMode || order.tableId === device.tableId)
     .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+
+  useEffect(() => {
+    if (!apiMode || modal !== "history") return undefined;
+    let cancelled = false;
+    setApiHistoryState({ loading: true, error: false });
+    void orderClient.getHistory()
+      .then((orders) => {
+        if (cancelled) return;
+        setApiOrders(orders.map(mapCustomerHistoryOrder));
+        setApiHistoryState({ loading: false, error: false });
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setApiHistoryState({ loading: false, error: true });
+      });
+    return () => { cancelled = true; };
+  }, [apiMode, modal, orderClient]);
 
   useEffect(() => {
     const unsubscribe = orderClient.subscribe((event) => {
@@ -506,7 +551,7 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
       {modal === "confirm" ? <Modal title="注文内容の確認" onClose={() => { if (!submitting) setModal(null); }}><div className="confirm-list">{cartRows.map((row) => <div key={row.item.id}><b>{row.item.name}</b><span>{row.quantity}点</span></div>)}</div><p className="price-hidden-note">内容をご確認のうえ、注文を送信してください。</p><div className="modal-actions"><button className="button button--quiet" onClick={() => setModal(null)} disabled={submitting}>戻る</button><button className="button button--primary button--large" onClick={submitOrder} disabled={submitting}>{submitting ? "送信中" : online ? "注文を送信" : "送信待ちに保存"}</button></div></Modal> : null}
       {modal === "staff" ? <Modal title="スタッフを呼びますか？" onClose={() => setModal(null)}><p className="modal-lead">テーブル {device.tableId} からスタッフへお知らせします。</p><div className="modal-actions"><button className="button button--quiet" onClick={() => setModal(null)}>やめる</button><button className="button button--primary button--large" onClick={callStaff}><Bell size={22} weight="bold" /> 呼び出す</button></div></Modal> : null}
       {modal === "feature" ? <Modal title="確認" onClose={() => setModal(null)}><p className="modal-lead">この機能は次の実装段階で接続します。</p><div className="modal-actions"><button className="button button--primary" onClick={() => setModal(null)}>閉じる</button></div></Modal> : null}
-      {modal === "history" ? <Modal title="これまでのご注文" onClose={() => setModal(null)} wide><div className="customer-history">{customerHistory.length ? customerHistory.map((order) => <article key={order.id}><header><b>{formatTime(order.createdAt)} のご注文</b><span className={`status-chip status-${order.status}`}>{customerTransportLabel(order)}</span></header>{order.items.map((item) => <div key={item.id}><span>{item.nameSnapshot}</span><b>{item.quantity}点</b></div>)}</article>) : <div className="empty-state"><ClipboardText size={42} /><p>注文履歴はまだありません。</p></div>}</div></Modal> : null}
+      {modal === "history" ? <Modal title="これまでのご注文" onClose={() => setModal(null)} wide><div className="customer-history">{apiMode && apiHistoryState.loading ? <div className="empty-state"><ClipboardText size={42} /><p>注文履歴を読み込んでいます。</p></div> : apiMode && apiHistoryState.error ? <div className="empty-state"><ClipboardText size={42} /><p>注文履歴を取得できません。</p></div> : customerHistory.length ? customerHistory.map((order) => <article key={order.id}><header><b>{formatTime(order.createdAt)} のご注文</b><span className={`status-chip status-${order.status}`}>{customerTransportLabel(order)}</span></header>{order.items.map((item) => <div key={item.id}><span>{item.nameSnapshot}</span><b>{item.quantity}点</b></div>)}</article>) : <div className="empty-state"><ClipboardText size={42} /><p>注文履歴はまだありません。</p></div>}</div></Modal> : null}
     </div>
   );
 }
@@ -615,19 +660,23 @@ function KitchenScreen({ state, updateState, apiState, onServe }) {
   );
 }
 
-function HistoryScreen({ state, apiMode = false }) {
+function HistoryScreen({ state, apiMode = false, loadHistory = null }) {
   const [remoteState, setRemoteState] = useState({ loading: apiMode, error: false, orders: [] });
   useEffect(() => {
     if (!apiMode) return undefined;
+    if (typeof loadHistory !== "function") {
+      setRemoteState({ loading: false, error: true, orders: [] });
+      return undefined;
+    }
     let cancelled = false;
     setRemoteState({ loading: true, error: false, orders: [] });
-    void fetchAdminOrderHistory({ env: window }).then((orders) => {
+    void loadHistory({ env: window }).then((orders) => {
       if (!cancelled) setRemoteState({ loading: false, error: false, orders });
     }).catch(() => {
       if (!cancelled) setRemoteState({ loading: false, error: true, orders: [] });
     });
     return () => { cancelled = true; };
-  }, [apiMode]);
+  }, [apiMode, loadHistory]);
   const sourceOrders = apiMode ? remoteState.orders.map((order) => ({
     id: order.orderId,
     tableId: String(order.tableId),
@@ -643,10 +692,11 @@ function HistoryScreen({ state, apiMode = false }) {
     })),
   })) : state.orders;
   const completed = sourceOrders.filter((order) => order.status === "completed").sort((a, b) => new Date(b.completedAt) - new Date(a.completedAt));
+  const completedToday = completed.filter((order) => isSameLocalDate(order.completedAt));
   return (
     <StaffShell route="/history" title="提供済み（履歴）" subtitle="完了した注文を、注文時点の品名と単価で確認できます。" state={state} right={<ConnectionBadge online />}>
       <section className="history-content">
-        <div className="history-summary"><div><small>本日の提供済み</small><b>{completed.length}</b><span>件</span></div><div><small>履歴合計</small><b>{yen(completed.reduce((sum, order) => sum + order.totalAmount, 0))}</b></div></div>
+        <div className="history-summary"><div><small>本日の提供済み</small><b>{completedToday.length}</b><span>件</span></div><div><small>履歴合計</small><b>{yen(completed.reduce((sum, order) => sum + order.totalAmount, 0))}</b></div></div>
         {apiMode && remoteState.loading ? <div className="empty-state"><p>注文履歴を読み込み中です。</p></div> : null}
         {apiMode && remoteState.error ? <div className="empty-state"><p>注文履歴を取得できませんでした。</p></div> : null}
         {(!apiMode || (!remoteState.loading && !remoteState.error)) && completed.length === 0 ? <div className="empty-state"><p>注文履歴はありません。</p></div> : null}
@@ -872,7 +922,13 @@ export function App() {
     if (route === "/") return <CustomerScreen state={state} updateState={updateState} deviceId="customer-03" orderClient={orderClient} customerDeviceConfig={customerDeviceConfig} />;
     if (route.startsWith("/customer/")) return <CustomerScreen state={state} updateState={updateState} deviceId={route.split("/")[2]} orderClient={orderClient} customerDeviceConfig={customerDeviceConfig} />;
     if (route === "/kitchen") return <KitchenScreen state={state} updateState={updateState} apiState={kitchenApiState} onServe={serveKitchenItem} />;
-    if (route === "/history") return <HistoryScreen state={state} apiMode={Boolean(configuredAdminToken(window))} />;
+    if (route === "/history") {
+      const explicitDemo = window.WARUN_ORDER_MODE === "demo";
+      const loadHistory = kitchenApiConfigured(window)
+        ? fetchKitchenOrderHistory
+        : configuredAdminToken(window) ? fetchAdminOrderHistory : null;
+      return <HistoryScreen state={state} apiMode={!explicitDemo} loadHistory={loadHistory} />;
+    }
     if (route.startsWith("/admin/")) return <AdminScreen state={state} updateState={updateState} section={route.split("/")[2] || "menu"} />;
     if (route === "/devices") return <Launcher state={state} updateState={updateState} />;
     return <CustomerScreen state={state} updateState={updateState} deviceId="customer-03" orderClient={orderClient} customerDeviceConfig={customerDeviceConfig} />;

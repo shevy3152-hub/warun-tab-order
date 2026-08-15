@@ -7,6 +7,7 @@
     "dev": "vite",
     "build": "vite build && node scripts/prepare-sites-build.mjs && node scripts/inline-client.mjs",
     "preview": "vite preview",
+    "test:production-smoke": "node scripts/production-browser-smoke.mjs",
     "test:sites": "node --test tests/sites-worker.test.mjs",
     "test:outbox": "node --test tests/order-outbox.test.mjs"
   },

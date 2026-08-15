@@ -50,6 +50,17 @@ export async function fetchKitchenOrders({ env = globalThis, fetchImpl = env.fet
   }));
 }
 
+export async function fetchKitchenOrderHistory({ env = globalThis, fetchImpl = env.fetch } = {}) {
+  const base = apiBase(env);
+  const requestHeaders = headers(env);
+  if (!base || !requestHeaders || typeof fetchImpl !== "function") throw new Error("Kitchen API is not configured.");
+  const response = await fetchImpl(`${base}/kitchen/order-history`, { headers: requestHeaders });
+  if (!response.ok) throw new Error("Kitchen order history could not be loaded.");
+  const body = await response.json();
+  if (!Array.isArray(body?.orders)) throw new Error("Kitchen order history response was invalid.");
+  return body.orders;
+}
+
 export async function markKitchenItemServed({ env = globalThis, orderId, orderItemId, fetchImpl = env.fetch } = {}) {
   const base = apiBase(env);
   const requestHeaders = headers(env);
