@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { fetchKitchenOrderHistory, fetchKitchenOrders, kitchenApiConfigured, markKitchenItemServed } from "../src/kitchen-api.js";
+import { closeKitchenTableSession, fetchKitchenOrderHistory, fetchKitchenOrders, fetchKitchenSnapshot, kitchenApiConfigured, markKitchenItemServed } from "../src/kitchen-api.js";
 
 const TOKEN = "fixture-kitchen-runtime-token";
 
@@ -52,6 +52,42 @@ test("kitchen serving update uses the same runtime token", async () => {
   assert.equal(calls[0].url, "http://192.168.1.10:5173/v1/kitchen/order-items/serve");
   assert.equal(calls[0].options.headers.Authorization, `Bearer ${TOKEN}`);
   assert.deepEqual(JSON.parse(calls[0].options.body), { orderId: "order-1", orderItemId: 11 });
+});
+
+test("kitchen snapshot exposes open sessions and close uses the runtime token", async () => {
+  const calls = [];
+  const sessionId = "00000000-0000-4000-8000-000000000777";
+  const env = environment(async (url, options) => {
+    calls.push({ url, options });
+    if (url.endsWith("/snapshot")) {
+      return {
+        ok: true,
+        async json() {
+          return {
+            activeOrders: [],
+            openSessions: [{ sessionId, tableId: 3, openedAtMs: 1786786940836, version: 1 }],
+          };
+        },
+      };
+    }
+    return {
+      ok: true,
+      async json() { return { tableId: 3, sessionId, closedAtMs: 1786787000000, idempotencyResult: "created" }; },
+    };
+  });
+
+  const snapshot = await fetchKitchenSnapshot({ env });
+  assert.deepEqual(snapshot.sessions, [{
+    sessionId,
+    tableId: "3",
+    openedAt: new Date(1786786940836).toISOString(),
+    version: 1,
+  }]);
+  const closed = await closeKitchenTableSession({ env, tableId: 3, sessionId });
+  assert.equal(closed.idempotencyResult, "created");
+  assert.equal(calls[1].url, "http://192.168.1.10:5173/v1/tables/sessions/close");
+  assert.equal(calls[1].options.headers.Authorization, `Bearer ${TOKEN}`);
+  assert.deepEqual(JSON.parse(calls[1].options.body), { tableId: 3, sessionId });
 });
 
 test("kitchen history uses the kitchen runtime token and SQLite API route", async () => {

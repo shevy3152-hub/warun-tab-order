@@ -56,6 +56,20 @@ test("kitchen API state changes reach the memoized screen", () => {
   assert.match(appSource, /注文情報を取得できません。/);
 });
 
+test("kitchen exposes the current session reset action without deleting order data", () => {
+  const kitchenScreen = appSource.slice(appSource.indexOf("function KitchenScreen"), appSource.indexOf("function HistoryScreen"));
+  assert.match(kitchenScreen, /openSessions|apiState\.sessions/);
+  assert.match(kitchenScreen, /会計完了・席をリセット/);
+  assert.match(kitchenScreen, /注文データは削除されませんが、客席端末には表示されなくなります。/);
+  assert.match(kitchenScreen, /onCloseSession\(resetTarget\)/);
+});
+
+test("customer history refreshes when the authenticated SSE invalidation arrives", () => {
+  assert.match(customerScreen, /orderClient\.subscribeInvalidations/);
+  assert.match(customerScreen, /setHistoryRefreshKey/);
+  assert.match(customerScreen, /historyRefreshKey/);
+});
+
 test("production history requires an authenticated API and never falls back to local state", () => {
   const historyScreen = appSource.slice(appSource.indexOf("function HistoryScreen"), appSource.indexOf("const adminTabs"));
   const historyRoute = appSource.slice(appSource.indexOf('if (route === "/history")'), appSource.indexOf('if (route.startsWith("/admin/"))'));

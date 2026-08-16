@@ -15,7 +15,7 @@ Quiesce the server before a file-level backup, or use SQLite's online backup mec
 Restore into an isolated path first and verify:
 
 - `PRAGMA integrity_check` returns `ok`.
-- `PRAGMA user_version` is `1`.
+- `PRAGMA user_version` is `2` after the v1-to-v2 additive migration.
 - `orders`, `order_items`, and `event_log` counts match the backup manifest.
 - A read-only server check can load kitchen snapshot and completed history.
 

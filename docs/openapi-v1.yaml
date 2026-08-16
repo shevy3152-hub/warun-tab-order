@@ -232,14 +232,48 @@ paths:
         '403':
           $ref: '#/components/responses/PermissionDenied'
 
-  /v1/orders/history:
+  /v1/customer/order-history:
     get:
       tags: [Orders]
-      summary: 提供済み注文履歴を取得する
-      operationId: listOrderHistory
-      parameters:
-        - $ref: '#/components/parameters/Cursor'
-        - $ref: '#/components/parameters/Limit'
+      summary: 現在のテーブル来店の客席履歴を取得する
+      description: customerの割当tableにある現在open sessionの注文だけを返す。価格、合計、sessionId、tableId、厨房情報は返さない。session close後は空になり、次の注文で作成された新sessionの注文だけが返る。
+      operationId: listCustomerOrderHistory
+      responses:
+        '200':
+          description: 現在open sessionの注文を新しい順に返す
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CustomerOrderHistoryResponse'
+        '401':
+          $ref: '#/components/responses/AuthenticationFailed'
+        '403':
+          $ref: '#/components/responses/PermissionDenied'
+
+  /v1/kitchen/order-history:
+    get:
+      tags: [Orders]
+      summary: 厨房の提供済み注文履歴を取得する
+      description: 過去sessionを含むcompleted注文を新しい順に返す。close済みsessionの注文も削除せず保持する。
+      operationId: listKitchenOrderHistory
+      responses:
+        '200':
+          description: completed注文を新しい順に返す
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrderHistoryResponse'
+        '401':
+          $ref: '#/components/responses/AuthenticationFailed'
+        '403':
+          $ref: '#/components/responses/PermissionDenied'
+
+  /v1/admin/order-history:
+    get:
+      tags: [Orders]
+      summary: 管理用の提供済み注文履歴を取得する
+      description: 過去sessionを含むcompleted注文を新しい順に返す。close済みsessionの注文も削除せず保持する。
+      operationId: listAdminOrderHistory
       responses:
         '200':
           description: completed注文を新しい順に返す
@@ -524,6 +558,44 @@ paths:
         '503':
           $ref: '#/components/responses/ReadOnlyServiceUnavailable'
 
+  /v1/tables/sessions/close:
+    post:
+      tags: [Orders]
+      summary: 現在のテーブル来店を終了して席をリセットする
+      description: |
+        kitchenまたはadminだけが実行できる。tableIdとsessionIdは対象指定に使うが、注文の所有者や
+        テーブル割り当ての根拠としては信頼しない。未提供の注文がある場合は409で拒否し、全注文がterminal
+        の場合だけSQLiteトランザクション内でセッションを閉じる。再送は同じclosedAtMsを返すno-opである。
+        注文行・注文明細・履歴は削除せず、客席の現在セッション履歴からだけ外れる。
+      operationId: closeTableSession
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CloseTableSessionRequest'
+      responses:
+        '200':
+          description: セッションを閉じた、または同じclose要求をreplayした
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TableSessionCloseResponse'
+        '400':
+          $ref: '#/components/responses/ReadOnlyBadRequest'
+        '401':
+          $ref: '#/components/responses/ReadOnlyAuthenticationFailed'
+        '403':
+          $ref: '#/components/responses/ReadOnlyAuthorizationFailed'
+        '404':
+          $ref: '#/components/responses/ReadOnlySessionNotFound'
+        '409':
+          $ref: '#/components/responses/ReadOnlySessionConflict'
+        '500':
+          $ref: '#/components/responses/ReadOnlyInternalError'
+        '503':
+          $ref: '#/components/responses/ReadOnlyServiceUnavailable'
+
   /v1/events:
     get:
       tags: [Events]
@@ -581,7 +653,7 @@ paths:
       description: |
         limitはevent_logから走査する行数に適用し、role投影後のevents件数とは一致しない場合がある。
         lastEventIdは最後に走査した実在eventId（走査行がなければafterEventId）で、不可視イベントだけでも進む。
-        hasMoreはそのcursorより後に未走査のDB eventがあることを示す。event_logはschema v1ではpruneしない。
+        hasMoreはそのcursorより後に未走査のDB eventがあることを示す。event_logはschema v2ではpruneしない。
       operationId: replayEvents
       parameters:
         - $ref: '#/components/parameters/EventEpochQueryRequired'
@@ -743,6 +815,18 @@ components:
             $ref: '#/components/schemas/ReadOnlyErrorResponse'
     ReadOnlyBadRequest:
       description: cursor、query、またはリクエスト形式が不正
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ReadOnlyErrorResponse'
+    ReadOnlySessionNotFound:
+      description: セッションが存在しない、または対象指定が不正
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ReadOnlyErrorResponse'
+    ReadOnlySessionConflict:
+      description: セッションが対象テーブルと一致しない、または未提供注文が残っている
       content:
         application/json:
           schema:
@@ -966,7 +1050,7 @@ components:
           $ref: '#/components/schemas/TimestampMs'
         schemaVersion:
           type: integer
-          const: 1
+          const: 2
         eventEpoch:
           $ref: '#/components/schemas/Uuid'
     ReadOnlyErrorDetail:
@@ -984,6 +1068,9 @@ components:
             - PAYLOAD_TOO_LARGE
             - UNSUPPORTED_MEDIA_TYPE
             - ORDER_CONFLICT
+            - SESSION_NOT_FOUND
+            - SESSION_CONFLICT
+            - SESSION_HAS_ACTIVE_ORDERS
             - MENU_ITEM_NOT_FOUND
             - MENU_ITEM_SOLD_OUT
             - EVENT_HISTORY_UNAVAILABLE
@@ -1003,6 +1090,46 @@ components:
           $ref: '#/components/schemas/ReadOnlyErrorDetail'
         requestId:
           $ref: '#/components/schemas/Uuid'
+    CloseTableSessionRequest:
+      type: object
+      additionalProperties: false
+      required: [tableId, sessionId]
+      properties:
+        tableId:
+          type: integer
+          minimum: 1
+        sessionId:
+          $ref: '#/components/schemas/Uuid'
+    TableSession:
+      type: object
+      additionalProperties: false
+      required: [sessionId, tableId, openedAtMs, version]
+      properties:
+        sessionId:
+          $ref: '#/components/schemas/Uuid'
+        tableId:
+          type: integer
+          minimum: 1
+        openedAtMs:
+          $ref: '#/components/schemas/TimestampMs'
+        version:
+          type: integer
+          minimum: 1
+    TableSessionCloseResponse:
+      type: object
+      additionalProperties: false
+      required: [tableId, sessionId, closedAtMs, idempotencyResult]
+      properties:
+        tableId:
+          type: integer
+          minimum: 1
+        sessionId:
+          $ref: '#/components/schemas/Uuid'
+        closedAtMs:
+          $ref: '#/components/schemas/TimestampMs'
+        idempotencyResult:
+          type: string
+          enum: [created, replayed]
     EventHistoryUnavailableErrorDetail:
       type: object
       additionalProperties: false
@@ -1470,6 +1597,60 @@ components:
           type: boolean
         servedAtMs:
           $ref: '#/components/schemas/TimestampMs'
+    CustomerOrderItem:
+      type: object
+      additionalProperties: false
+      required: [orderItemId, formalNameSnapshot, quantity, isServed]
+      properties:
+        orderItemId:
+          type: integer
+          minimum: 1
+        menuItemId:
+          type: string
+          pattern: '^[A-Za-z0-9_-]{1,64}$'
+        formalNameSnapshot:
+          type: string
+        quantity:
+          type: integer
+          minimum: 1
+          maximum: 99
+        isServed:
+          type: boolean
+        servedAtMs:
+          $ref: '#/components/schemas/TimestampMs'
+    CustomerOrder:
+      type: object
+      additionalProperties: false
+      required: [orderId, clientOrderId, tableNumberSnapshot, status, acceptedAtMs, items]
+      properties:
+        orderId:
+          $ref: '#/components/schemas/Uuid'
+        clientOrderId:
+          $ref: '#/components/schemas/Uuid'
+        tableNumberSnapshot:
+          type: integer
+          minimum: 1
+        status:
+          type: string
+          enum: [new, active, completed]
+        acceptedAtMs:
+          $ref: '#/components/schemas/TimestampMs'
+        completedAtMs:
+          $ref: '#/components/schemas/TimestampMs'
+        items:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/CustomerOrderItem'
+    CustomerOrderHistoryResponse:
+      type: object
+      additionalProperties: false
+      required: [orders]
+      properties:
+        orders:
+          type: array
+          items:
+            $ref: '#/components/schemas/CustomerOrder'
     StaffOrder:
       type: object
       additionalProperties: false
@@ -1477,6 +1658,7 @@ components:
         - orderId
         - clientOrderId
         - tableId
+        - sessionId
         - tableNumberSnapshot
         - status
         - totalAmountYen
@@ -1491,6 +1673,8 @@ components:
         tableId:
           type: integer
           minimum: 1
+        sessionId:
+          $ref: '#/components/schemas/Uuid'
         tableNumberSnapshot:
           type: integer
           minimum: 1
@@ -1883,7 +2067,7 @@ components:
     KitchenSnapshotResponse:
       type: object
       additionalProperties: false
-      required: [audience, eventEpoch, lastEventId, device, menu, activeOrders, openStaffCalls]
+      required: [audience, eventEpoch, lastEventId, device, menu, activeOrders, openStaffCalls, openSessions]
       properties:
         audience:
           type: string
@@ -1904,10 +2088,14 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/StaffCall'
+        openSessions:
+          type: array
+          items:
+            $ref: '#/components/schemas/TableSession'
     AdminSnapshotResponse:
       type: object
       additionalProperties: false
-      required: [audience, eventEpoch, lastEventId, device, menu, activeOrders, openStaffCalls]
+      required: [audience, eventEpoch, lastEventId, device, menu, activeOrders, openStaffCalls, openSessions]
       properties:
         audience:
           type: string
@@ -1928,6 +2116,10 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/StaffCall'
+        openSessions:
+          type: array
+          items:
+            $ref: '#/components/schemas/TableSession'
     RoleScopedSnapshotResponse:
       oneOf:
         - $ref: '#/components/schemas/CustomerSnapshotResponse'

@@ -7,6 +7,9 @@ export const HTTP_ERROR_CODES = Object.freeze({
   UNSUPPORTED_MEDIA_TYPE: 'UNSUPPORTED_MEDIA_TYPE',
   ORDER_CONFLICT: 'ORDER_CONFLICT',
   ORDER_NOT_FOUND: 'ORDER_NOT_FOUND',
+  SESSION_NOT_FOUND: 'SESSION_NOT_FOUND',
+  SESSION_CONFLICT: 'SESSION_CONFLICT',
+  SESSION_HAS_ACTIVE_ORDERS: 'SESSION_HAS_ACTIVE_ORDERS',
   MENU_ITEM_NOT_FOUND: 'MENU_ITEM_NOT_FOUND',
   MENU_ITEM_SOLD_OUT: 'MENU_ITEM_SOLD_OUT',
   EVENT_HISTORY_UNAVAILABLE: 'EVENT_HISTORY_UNAVAILABLE',
@@ -54,6 +57,18 @@ const DEFINITIONS = Object.freeze({
   [HTTP_ERROR_CODES.ORDER_NOT_FOUND]: Object.freeze({
     statusCode: 404,
     message: 'Order was not found.',
+  }),
+  [HTTP_ERROR_CODES.SESSION_NOT_FOUND]: Object.freeze({
+    statusCode: 404,
+    message: 'Table session was not found.',
+  }),
+  [HTTP_ERROR_CODES.SESSION_CONFLICT]: Object.freeze({
+    statusCode: 409,
+    message: 'Table session conflicts with the requested table.',
+  }),
+  [HTTP_ERROR_CODES.SESSION_HAS_ACTIVE_ORDERS]: Object.freeze({
+    statusCode: 409,
+    message: 'Table session still has active orders.',
   }),
   [HTTP_ERROR_CODES.MENU_ITEM_NOT_FOUND]: Object.freeze({
     statusCode: 422,

@@ -373,6 +373,111 @@ export async function fetchCustomerOrderHistory({
   return body.orders;
 }
 
+export function subscribeCustomerInvalidations({
+  config,
+  env = globalThis,
+  fetchImpl = env.fetch,
+  onEvent,
+} = {}) {
+  if (!config?.enabled || !config.baseUrl || typeof fetchImpl !== "function" || typeof onEvent !== "function") {
+    return () => {};
+  }
+
+  let stopped = false;
+  let controller = null;
+  let retryTimer = null;
+  let eventEpoch = null;
+  let lastEventId = 0;
+
+  const schedule = () => {
+    if (stopped || retryTimer !== null) return;
+    retryTimer = (env.setTimeout || setTimeout)(() => {
+      retryTimer = null;
+      void connect();
+    }, 3_000);
+  };
+
+  const readStream = async (response) => {
+    const reader = response.body?.getReader?.();
+    if (!reader) return;
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let dataLines = [];
+    let frameEventId = null;
+    while (!stopped) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      buffer += decoder.decode(chunk.value, { stream: true });
+      const lines = buffer.split(/\r?\n/);
+      buffer = lines.pop() || "";
+      for (const line of lines) {
+        if (line === "") {
+          if (frameEventId !== null && Number.isSafeInteger(frameEventId)) lastEventId = frameEventId;
+          if (dataLines.length > 0) {
+            try {
+              const event = JSON.parse(dataLines.join("\n"));
+              if (typeof event?.eventEpoch === "string") eventEpoch = event.eventEpoch;
+              if (Number.isSafeInteger(event?.eventId)) lastEventId = event.eventId;
+              onEvent(event);
+            } catch {
+              // Ignore malformed frames; the next reconnect will recover from the durable cursor.
+            }
+          }
+          dataLines = [];
+          frameEventId = null;
+          continue;
+        }
+        if (line.startsWith(":")) continue;
+        const separator = line.indexOf(":");
+        const field = separator === -1 ? line : line.slice(0, separator);
+        const value = separator === -1 ? "" : line.slice(separator + 1).replace(/^ /, "");
+        if (field === "id" && /^\d+$/.test(value)) frameEventId = Number(value);
+        if (field === "data") dataLines.push(value);
+      }
+    }
+  };
+
+  const connect = async () => {
+    if (stopped) return;
+    controller = typeof AbortController === "function" ? new AbortController() : null;
+    const headers = {
+      Accept: "text/event-stream",
+      Authorization: `Bearer ${config.token}`,
+    };
+    if (eventEpoch !== null) {
+      headers["X-Event-Epoch"] = eventEpoch;
+      headers["Last-Event-ID"] = String(lastEventId);
+    }
+    try {
+      const response = await fetchImpl(`${config.baseUrl}/events`, {
+        headers,
+        ...(controller ? { signal: controller.signal } : {}),
+      });
+      if (response.status === 410) {
+        eventEpoch = null;
+        lastEventId = 0;
+      } else if (response.ok) {
+        const responseEpoch = response.headers?.get?.("X-Event-Epoch");
+        if (responseEpoch) eventEpoch = responseEpoch;
+        await readStream(response);
+      }
+    } catch {
+      // Reconnect and let the server-side cursor recover the missed invalidation.
+    } finally {
+      controller = null;
+      schedule();
+    }
+  };
+
+  void connect();
+  return () => {
+    stopped = true;
+    if (retryTimer !== null) (env.clearTimeout || clearTimeout)(retryTimer);
+    retryTimer = null;
+    controller?.abort?.();
+  };
+}
+
 export function createLocalDemoTransport() {
   return {
     kind: "demo",
@@ -564,6 +669,7 @@ export function createCustomerOrderClient({
       async start() {},
       async stop() {},
       subscribe() { return () => {}; },
+      subscribeInvalidations() { return () => {}; },
       get() { return Promise.resolve(null); },
       getHistory() { return Promise.resolve([]); },
       list() { return Promise.resolve([]); },
@@ -589,6 +695,14 @@ export function createCustomerOrderClient({
         config,
         env: global,
         fetchImpl: options.fetchImpl || global.fetch,
+      });
+    },
+    subscribeInvalidations(listener) {
+      return subscribeCustomerInvalidations({
+        config,
+        env: global,
+        fetchImpl: options.fetchImpl || global.fetch,
+        onEvent: listener,
       });
     },
   };

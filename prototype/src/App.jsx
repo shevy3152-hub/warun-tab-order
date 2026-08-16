@@ -24,7 +24,7 @@ import { createCustomerOrderClient, resolveOrderApiConfig } from "./order-outbox
 import { claimCustomerDevice, createIndexedDbCredentialStore, loadOrCreateCustomerDevice, runtimeForCustomerCredentials } from "./device-credentials.js";
 import { customerOrderNoticeFromOutboxEvent } from "./customer-order-notice.js";
 import { configuredAdminToken, fetchAdminOrderHistory, issueCustomerPairingCode } from "./admin-pairing.js";
-import { fetchKitchenOrderHistory, fetchKitchenOrders, kitchenApiConfigured, markKitchenItemServed } from "./kitchen-api.js";
+import { closeKitchenTableSession, fetchKitchenOrderHistory, fetchKitchenSnapshot, kitchenApiConfigured, markKitchenItemServed } from "./kitchen-api.js";
 import { bootstrapCustomerOrderClient } from "./customer-bootstrap.js";
 
 const STORAGE_KEY = "izakaya-order-prototype-v3";
@@ -349,6 +349,7 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
   const [notice, setNotice] = useState(null);
   const [apiOrders, setApiOrders] = useState([]);
   const [apiHistoryState, setApiHistoryState] = useState({ loading: false, error: false });
+  const [historyRefreshKey, setHistoryRefreshKey] = useState(0);
   const [submitting, setSubmitting] = useState(false);
   const submitLock = useRef(false);
   const featuredIds = ["edamame", "dashimaki", "beer", "lemon", "karaage"];
@@ -376,7 +377,12 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
         setApiHistoryState({ loading: false, error: true });
       });
     return () => { cancelled = true; };
-  }, [apiMode, modal, orderClient]);
+  }, [apiMode, modal, orderClient, historyRefreshKey]);
+
+  useEffect(() => {
+    if (!apiMode || typeof orderClient.subscribeInvalidations !== "function") return undefined;
+    return orderClient.subscribeInvalidations(() => setHistoryRefreshKey((current) => current + 1));
+  }, [apiMode, orderClient]);
 
   useEffect(() => {
     const unsubscribe = orderClient.subscribe((event) => {
@@ -602,14 +608,18 @@ function StaffShell({ route, title, subtitle, state, children, right, newOrderCo
   );
 }
 
-function KitchenScreen({ state, updateState, apiState, onServe }) {
+function KitchenScreen({ state, updateState, apiState, onServe, onCloseSession }) {
   const [callPanel, setCallPanel] = useState(false);
   const apiMode = Boolean(apiState);
   const sourceOrders = apiMode ? apiState.orders : state.orders;
+  const sessions = apiMode ? apiState.sessions : [];
   const activeOrders = sourceOrders.filter((order) => order.status === "new" || order.status === "active");
-  const tables = [...new Set(activeOrders.map((order) => order.tableId))].sort((a, b) => Number(a) - Number(b));
+  const tables = [...new Set([...activeOrders.map((order) => order.tableId), ...sessions.map((session) => session.tableId)])].sort((a, b) => Number(a) - Number(b));
   const activeCalls = state.staffCalls.filter((call) => !call.resolvedAt);
   const kitchenAliases = Object.fromEntries(state.menuItems.map((item) => [item.id, item.kitchenAlias?.trim()]));
+  const [resetTarget, setResetTarget] = useState(null);
+  const [resetting, setResetting] = useState(false);
+  const [resetError, setResetError] = useState(false);
 
   const toggleServed = (orderId, itemId) => {
     if (apiMode) {
@@ -637,9 +647,11 @@ function KitchenScreen({ state, updateState, apiState, onServe }) {
         <div className="table-scroll">
           {apiMode && apiState.loading ? <div className="kitchen-empty"><p>注文を読み込み中です。</p></div> : apiMode && apiState.error ? <div className="kitchen-empty"><p>注文情報を取得できません。</p></div> : tables.length ? tables.map((tableId) => {
             const orders = activeOrders.filter((order) => order.tableId === tableId);
+            const session = sessions.find((candidate) => candidate.tableId === tableId) ?? orders.find((order) => order.sessionId);
+            const sessionId = session?.sessionId;
             const rows = orders.flatMap((order) => order.items.map((item) => ({ ...item, orderId: order.id, createdAt: order.createdAt }))).sort((a, b) => Number(a.isServed) - Number(b.isServed));
             const total = orders.reduce((sum, order) => sum + order.totalAmount, 0);
-            const oldest = orders.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt))[0];
+            const oldest = orders.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt))[0] ?? { createdAt: session?.openedAt };
             return (
               <article className="table-panel" key={tableId}>
                 <header><h2>テーブル <b>{tableId}</b></h2><time>{formatTime(oldest.createdAt)}</time></header>
@@ -647,14 +659,16 @@ function KitchenScreen({ state, updateState, apiState, onServe }) {
                   {rows.filter((row) => !row.isServed).map((row) => <button className="order-item" key={row.id} onClick={() => toggleServed(row.orderId, row.id)}><span><b>{kitchenMenuName(row, kitchenAliases)}</b><small>{row.quantity}点</small></span><i><Check size={19} weight="bold" /></i></button>)}
                   {rows.some((row) => row.isServed) ? <div className="served-divider"><span>提供済み</span></div> : null}
                   {rows.filter((row) => row.isServed).map((row) => <button className="order-item is-served" key={row.id} onClick={() => toggleServed(row.orderId, row.id)}><span><b>{kitchenMenuName(row, kitchenAliases)}</b><small>{row.quantity}点</small></span><i><Check size={19} weight="bold" /></i></button>)}
+                  {!rows.length ? <div className="empty-state"><p>現在の注文はありません。</p></div> : null}
                 </div>
-                <footer><span>合計</span><b>{yen(total)}</b></footer>
+                <footer><span>合計</span><b>{yen(total)}</b>{apiMode && sessionId ? <button className="button button--quiet table-panel__reset" onClick={() => { setResetError(false); setResetTarget({ tableId, sessionId }); }}>会計完了・席をリセット</button> : null}</footer>
               </article>
             );
           }) : <div className="kitchen-empty"><CheckCircle size={72} weight="thin" /><h2>すべて提供済みです</h2><p>新しい注文が届くと、ここにテーブルごとに表示されます。</p></div>}
         </div>
         <div className="horizontal-hint"><ArrowLeft size={20} /><span></span><ArrowRight size={20} /></div>
       </section>
+      {resetTarget ? <Modal title="会計完了・席をリセット" onClose={() => { if (!resetting) setResetTarget(null); }}><p className="modal-lead">テーブル{resetTarget.tableId}の現在の来店を終了します。注文データは削除されませんが、客席端末には表示されなくなります。</p>{resetError ? <p role="alert">席のリセットに失敗しました。未提供の注文がないか確認してください。</p> : null}<div className="modal-actions"><button className="button button--quiet" onClick={() => setResetTarget(null)} disabled={resetting}>戻る</button><button className="button button--primary button--large" onClick={async () => { setResetting(true); setResetError(false); try { await onCloseSession(resetTarget); setResetTarget(null); } catch { setResetError(true); } finally { setResetting(false); } }} disabled={resetting}>{resetting ? "処理中" : "会計完了・席をリセット"}</button></div></Modal> : null}
       {callPanel ? <Modal title="スタッフ呼び出し" onClose={() => setCallPanel(false)} wide><div className="call-list">{activeCalls.length ? activeCalls.map((call) => <article key={call.id}><Bell size={28} weight="fill" /><div><b>テーブル {call.tableId}</b><span>{formatTime(call.createdAt)} に呼び出し</span></div><button className="button button--primary" onClick={() => resolveCall(call.id)}>対応済みにする</button></article>) : <div className="empty-state"><Bell size={42} /><p>未対応の呼び出しはありません。</p></div>}</div></Modal> : null}
     </StaffShell>
   );
@@ -822,19 +836,19 @@ export function App() {
       return undefined;
     }
     if (!kitchenApiConfigured(window)) {
-      setKitchenApiState(window.WARUN_ORDER_MODE === "demo" ? null : { loading: false, error: true, orders: [] });
+      setKitchenApiState(window.WARUN_ORDER_MODE === "demo" ? null : { loading: false, error: true, orders: [], sessions: [] });
       return undefined;
     }
     let cancelled = false;
     const load = async () => {
       try {
-        const orders = await fetchKitchenOrders({ env: window });
-        if (!cancelled) setKitchenApiState({ loading: false, error: false, orders });
+        const snapshot = await fetchKitchenSnapshot({ env: window });
+        if (!cancelled) setKitchenApiState({ loading: false, error: false, orders: snapshot.orders, sessions: snapshot.sessions });
       } catch {
-        if (!cancelled) setKitchenApiState({ loading: false, error: true, orders: [] });
+        if (!cancelled) setKitchenApiState({ loading: false, error: true, orders: [], sessions: [] });
       }
     };
-    setKitchenApiState({ loading: true, error: false, orders: [] });
+    setKitchenApiState({ loading: true, error: false, orders: [], sessions: [] });
     void load();
     const timer = window.setInterval(load, 2_000);
     return () => { cancelled = true; window.clearInterval(timer); };
@@ -843,11 +857,17 @@ export function App() {
   const serveKitchenItem = async (orderId, orderItemId) => {
     try {
       await markKitchenItemServed({ env: window, orderId, orderItemId });
-      const orders = await fetchKitchenOrders({ env: window });
-      setKitchenApiState({ loading: false, error: false, orders });
+      const snapshot = await fetchKitchenSnapshot({ env: window });
+      setKitchenApiState({ loading: false, error: false, orders: snapshot.orders, sessions: snapshot.sessions });
     } catch {
       setKitchenApiState((current) => current ? { ...current, error: true } : current);
     }
+  };
+
+  const closeKitchenSession = async ({ tableId, sessionId }) => {
+    await closeKitchenTableSession({ env: window, tableId, sessionId });
+    const snapshot = await fetchKitchenSnapshot({ env: window });
+    setKitchenApiState({ loading: false, error: false, orders: snapshot.orders, sessions: snapshot.sessions });
   };
 
   useEffect(() => {
@@ -921,7 +941,7 @@ export function App() {
     if (isCustomerRoute && !orderClient) return <PairingScreen onClaim={claim} error={pairingError} />;
     if (route === "/") return <CustomerScreen state={state} updateState={updateState} deviceId="customer-03" orderClient={orderClient} customerDeviceConfig={customerDeviceConfig} />;
     if (route.startsWith("/customer/")) return <CustomerScreen state={state} updateState={updateState} deviceId={route.split("/")[2]} orderClient={orderClient} customerDeviceConfig={customerDeviceConfig} />;
-    if (route === "/kitchen") return <KitchenScreen state={state} updateState={updateState} apiState={kitchenApiState} onServe={serveKitchenItem} />;
+    if (route === "/kitchen") return <KitchenScreen state={state} updateState={updateState} apiState={kitchenApiState} onServe={serveKitchenItem} onCloseSession={closeKitchenSession} />;
     if (route === "/history") {
       const explicitDemo = window.WARUN_ORDER_MODE === "demo";
       const loadHistory = kitchenApiConfigured(window)

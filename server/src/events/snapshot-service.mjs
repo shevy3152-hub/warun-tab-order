@@ -168,8 +168,19 @@ function projectOrder(source) {
     version: requireInteger(value.version, 1),
     items: requireArray(value.items).map(projectOrderItem),
   };
+  if (Object.hasOwn(value, 'sessionId')) order.sessionId = requireString(value.sessionId);
   optionalInteger(order, 'completedAtMs', value.completedAtMs);
   return order;
+}
+
+function projectOpenSession(source) {
+  const value = requireObject(source);
+  return {
+    sessionId: requireString(value.sessionId),
+    tableId: requireInteger(value.tableId, 1),
+    openedAtMs: requireInteger(value.openedAtMs),
+    version: requireInteger(value.version, 1),
+  };
 }
 
 function projectStaffCall(source) {
@@ -284,6 +295,7 @@ export function createSnapshotService({
         if (role === 'kitchen' || role === 'admin') {
           snapshot.activeOrders = requireArray(orderSource.activeOrders).map(projectOrder);
           snapshot.openStaffCalls = requireArray(orderSource.openStaffCalls).map(projectStaffCall);
+          snapshot.openSessions = requireArray(orderSource.openSessions ?? []).map(projectOpenSession);
         }
         return deepFreeze(snapshot);
       } catch (error) {

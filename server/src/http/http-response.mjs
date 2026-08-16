@@ -39,7 +39,7 @@ const EVENT_TYPES_BY_ROLE = Object.freeze({
     'table.assignment_updated',
   ]),
 });
-const SUPPORTED_SCHEMA_VERSION = 1;
+const SUPPORTED_SCHEMA_VERSION = 2;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const OPAQUE_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
 
@@ -216,6 +216,7 @@ function mapStaffOrder(order) {
     version: requireInteger(order.version, 1),
     items: items.map(mapStaffOrderItem),
   };
+  if (Object.hasOwn(order, 'sessionId')) response.sessionId = requireUuid(order.sessionId);
   if (Object.hasOwn(order, 'completedAtMs') && order.completedAtMs !== null) {
     response.completedAtMs = requireInteger(order.completedAtMs);
   }
@@ -274,6 +275,16 @@ function mapStaffCall(call) {
     response.resolvedAtMs = requireInteger(call.resolvedAtMs);
   }
   return response;
+}
+
+function mapOpenSession(session) {
+  requireObject(session);
+  return {
+    sessionId: requireUuid(session.sessionId),
+    tableId: requireInteger(session.tableId, 1),
+    openedAtMs: requireInteger(session.openedAtMs),
+    version: requireInteger(session.version, 1),
+  };
 }
 
 function mapEvent(event, audience, eventEpoch, previousEventId, lastEventId) {
@@ -399,6 +410,16 @@ export function mapOrderHistoryResponse(orders) {
   return { orders: orders.map(mapStaffOrder) };
 }
 
+export function mapTableSessionCloseResponse(result) {
+  requireObject(result);
+  return {
+    tableId: requireInteger(result.tableId, 1),
+    sessionId: requireUuid(result.sessionId),
+    closedAtMs: requireInteger(result.closedAtMs),
+    idempotencyResult: requireOneOf(result.idempotencyResult, new Set(['created', 'replayed'])),
+  };
+}
+
 export function mapCustomerOrderHistoryResponse(orders) {
   if (!Array.isArray(orders)) throw invalidDto();
   return { orders: orders.map(mapCustomerOrder) };
@@ -446,6 +467,9 @@ export function mapSnapshotResponse(snapshot) {
   if (audience === 'kitchen' || audience === 'admin') {
     response.activeOrders = requireArray(snapshot.activeOrders).map(mapStaffOrder);
     response.openStaffCalls = requireArray(snapshot.openStaffCalls).map(mapStaffCall);
+    if (Object.hasOwn(snapshot, 'openSessions')) {
+      response.openSessions = requireArray(snapshot.openSessions).map(mapOpenSession);
+    }
   }
   return response;
 }

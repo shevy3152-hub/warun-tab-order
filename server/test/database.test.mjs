@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { existsSync, renameSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -15,6 +15,7 @@ const EXPECTED_TABLES = [
   'pairing_codes',
   'categories',
   'menu_items',
+  'table_sessions',
   'orders',
   'order_items',
   'staff_calls',
@@ -30,6 +31,8 @@ const EXPECTED_INDEXES = [
   'idx_orders_status_accepted',
   'idx_orders_table_status',
   'idx_orders_customer_device',
+  'idx_table_sessions_table_opened',
+  'uq_table_sessions_open_table',
   'idx_order_items_order_served',
   'uq_order_items_order_menu',
   'idx_staff_calls_status_created',
@@ -42,6 +45,9 @@ const EXPECTED_TRIGGERS = [
   'trg_tables_assignment_insert_valid',
   'trg_tables_assignment_update_valid',
   'trg_orders_server_assignment_insert',
+  'trg_orders_session_valid_insert',
+  'trg_orders_session_immutable',
+  'trg_table_sessions_immutable_origin',
   'trg_staff_calls_server_assignment_insert',
   'trg_event_log_current_epoch',
   'trg_orders_immutable_identity',
@@ -126,19 +132,37 @@ function insertOrder(
   `);
 }
 
-test('new database creates its parent directory and applies schema v1', async () => {
+function legacySchemaSql() {
+  let schema = readFileSync(new URL('../../docs/schema-v1.sql', import.meta.url), 'utf8');
+  schema = schema.replace(/CREATE TABLE table_sessions [\s\S]*?\n\);\n\n(?=CREATE TABLE orders)/, '');
+  schema = schema.replace('  session_id TEXT,\n', '');
+  schema = schema.replace(
+    '  FOREIGN KEY (session_id) REFERENCES table_sessions(session_id)\n    ON UPDATE RESTRICT ON DELETE RESTRICT,\n',
+    '',
+  );
+  schema = schema.replace(
+    'CREATE INDEX idx_table_sessions_table_opened\n  ON table_sessions (table_id, opened_at_ms, session_id);\nCREATE UNIQUE INDEX uq_table_sessions_open_table\n  ON table_sessions (table_id)\n  WHERE closed_at_ms IS NULL;\n',
+    '',
+  );
+  schema = schema.replace(/CREATE TRIGGER trg_orders_session_valid_insert[\s\S]*?END;\n\n/, '');
+  schema = schema.replace(/CREATE TRIGGER trg_orders_session_immutable[\s\S]*?END;\n\n/, '');
+  schema = schema.replace(/CREATE TRIGGER trg_table_sessions_immutable_origin[\s\S]*?END;\n\n/, '');
+  return schema;
+}
+
+test('new database creates its parent directory and applies schema v2', async () => {
   await withTemporaryDatabase(({ databasePath }) => {
     const connection = initializeDatabase({ databasePath });
     assert.equal(existsSync(databasePath), true);
-    assert.equal(connection.schemaVersion, 1);
+    assert.equal(connection.schemaVersion, 2);
     connection.close();
   });
 });
 
-test('new database records PRAGMA user_version = 1', async () => {
+test('new database records PRAGMA user_version = 2', async () => {
   await withTemporaryDatabase(({ databasePath }) => {
     const connection = initializeDatabase({ databasePath });
-    assert.equal(pragmaValue(connection.database, 'user_version'), 1);
+    assert.equal(pragmaValue(connection.database, 'user_version'), 2);
     connection.close();
   });
 });
@@ -202,16 +226,16 @@ test('synchronous mode is FULL', async () => {
   });
 });
 
-test('a valid schema v1 database can be closed and reopened', async () => {
+test('a valid schema v2 database can be closed and reopened', async () => {
   await withTemporaryDatabase(({ databasePath }) => {
     initializeDatabase({ databasePath }).close();
     const reopened = initializeDatabase({ databasePath });
-    assert.equal(reopened.schemaVersion, 1);
+    assert.equal(reopened.schemaVersion, 2);
     reopened.close();
   });
 });
 
-test('reopening schema v1 preserves existing data', async () => {
+test('reopening schema v2 preserves existing data', async () => {
   await withTemporaryDatabase(({ databasePath }) => {
     const first = initializeDatabase({ databasePath });
     first.database.exec(`
@@ -229,6 +253,65 @@ test('reopening schema v1 preserves existing data', async () => {
     );
     assert.equal(reopened.database.prepare('SELECT event_epoch FROM system_state').get().event_epoch, epoch);
     reopened.close();
+  });
+});
+
+test('legacy schema v1 migrates to schema v2 and assigns existing orders to one open table session', async () => {
+  await withTemporaryDatabase(({ directory }) => {
+    const legacyPath = join(directory, 'legacy.sqlite3');
+    const legacy = new DatabaseSync(legacyPath);
+    legacy.exec(legacySchemaSql());
+    seedOrderParents(legacy);
+    insertOrder(legacy);
+    const eventEpoch = legacy.prepare('SELECT event_epoch FROM system_state WHERE singleton_id = 1').get().event_epoch;
+    legacy.prepare(`
+      INSERT INTO order_items (
+        order_id, line_index, menu_item_id, formal_name_snapshot,
+        kitchen_alias_snapshot, unit_price_yen_snapshot, quantity,
+        line_total_yen, created_at_ms, updated_at_ms
+      ) VALUES (?, 0, 'edamame', '枝豆（塩ゆで）', '枝豆', 380, 1, 380, 2000, 2000)
+    `).run(ORDER_ID);
+    legacy.prepare(`
+      INSERT INTO event_log (
+        event_epoch, event_type, aggregate_type, aggregate_id,
+        actor_device_id, payload_json, created_at_ms
+      ) VALUES (?, 'order.created', 'order', ?, ?, '{"orderId":"${ORDER_ID}"}', 2000)
+    `).run(eventEpoch, ORDER_ID, CUSTOMER_DEVICE_ID);
+    const countsBefore = {
+      orders: legacy.prepare('SELECT COUNT(*) AS count FROM orders').get().count,
+      orderItems: legacy.prepare('SELECT COUNT(*) AS count FROM order_items').get().count,
+      events: legacy.prepare('SELECT COUNT(*) AS count FROM event_log').get().count,
+    };
+    legacy.close();
+
+    const connection = initializeDatabase({ databasePath: legacyPath });
+    const session = connection.database.prepare(`
+      SELECT session_id, table_id, opened_at_ms, closed_at_ms
+      FROM table_sessions
+      WHERE table_id = 1
+    `).get();
+    const order = connection.database.prepare(`
+      SELECT session_id, accepted_at_ms
+      FROM orders
+      WHERE order_id = ?
+    `).get(ORDER_ID);
+
+    assert.equal(connection.schemaVersion, 2);
+    assert.equal(pragmaValue(connection.database, 'user_version'), 2);
+    assert.equal(connection.database.prepare('SELECT schema_version FROM system_state').get().schema_version, 2);
+    assert.deepEqual({
+      orders: connection.database.prepare('SELECT COUNT(*) AS count FROM orders').get().count,
+      orderItems: connection.database.prepare('SELECT COUNT(*) AS count FROM order_items').get().count,
+      events: connection.database.prepare('SELECT COUNT(*) AS count FROM event_log').get().count,
+    }, countsBefore);
+    assert.equal(connection.database.prepare('SELECT COUNT(*) AS count FROM table_sessions').get().count, 1);
+    assert.equal(connection.database.prepare('SELECT formal_name_snapshot FROM order_items WHERE order_id = ?').get(ORDER_ID).formal_name_snapshot, '枝豆（塩ゆで）');
+    assert.equal(connection.database.prepare('SELECT payload_json FROM event_log WHERE aggregate_id = ?').get(ORDER_ID).payload_json, `{"orderId":"${ORDER_ID}"}`);
+    assert.equal(session.session_id, order.session_id);
+    assert.equal(session.table_id, 1);
+    assert.equal(session.opened_at_ms, order.accepted_at_ms);
+    assert.equal(session.closed_at_ms, null);
+    connection.close();
   });
 });
 
@@ -294,11 +377,11 @@ test('invalid item quantities are rejected by CHECK constraints', async () => {
   });
 });
 
-test('schema versions newer than v1 are rejected without migration', async () => {
+test('schema versions newer than v2 are rejected without migration', async () => {
   await withTemporaryDatabase(({ directory }) => {
     const databasePath = join(directory, 'version-2.sqlite3');
     const raw = new DatabaseSync(databasePath);
-    raw.exec('PRAGMA user_version = 2;');
+    raw.exec('PRAGMA user_version = 3;');
     raw.close();
 
     assert.throws(

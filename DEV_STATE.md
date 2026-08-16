@@ -1,5 +1,43 @@
 # 開発状態
 
+## 2026-08-16 永続DB適用後・実機受入完了
+
+- Windows再起動後、デスクトップ「わるん注文・厨房」の1クリック起動を実施し、PC厨房画面、LAN URL `192.168.1.10:5173`、通信状態「接続中」、A90の客席画面を確認した。永続DBのv1→v2 migration後も厨房・A90は起動した。
+- 永続DBのread-only最終確認は`user_version=2`、`system_state.schema_version=2`、`integrity_check=ok`、`foreign_key_check=[]`。実測件数は`orders=6`、`order_items=13`、`event_log=20`。sessionは2件（旧session closed 1件・旧注文5件、新session open 1件・今回注文1件）で、session未割当ordersは0件だった。
+- 19:29の枝豆注文は新しいopen sessionへ所属し、既存注文は旧closed sessionへ保持されていることをread-onlyで確認した。旧v1バックアップのorders 5、order_items 12、event_log 17の全旧行も現DBへ保持されている。
+- 実機受入は、会計完了・席リセット確認、A90の既存履歴の自動消去、次注文の新着反映、現在履歴の新session分離、提供済み履歴への移動、厨房・管理履歴の保持までPASSとする。kitchen/adminのみclose可能、customerはclose不可の契約と一致する。
+- schema v2、v1→v2加算migration、table単位のvisit session、現在open sessionだけの客席履歴、会計完了でのclose、次注文時の新session自動作成、注文削除なしを確定した。バックアップ作成・復元コピーmigration・再initialize no-op検証もPASS。
+- 緊急時QRによる代替タブレット切替は引き続き未実装・後回し。token、認証情報、注文payload詳細は記録していない。
+
+## 2026-08-16 永続DB適用前最終確認（完了記録）
+
+- 基準branch/HEADは一致し、`feature/sqlite-foundation` / `ebceab4e645f1b7ce4f13b5f62ac6130fbcc70e2` の時点で確認を開始した。Windows再起動、1クリック起動、永続DBへのmigrationはこの事前確認では実施していない。
+- 実運用DBの正確なパスは `server/var/warun.sqlite3`。読み取り専用確認では、`journal_mode=wal`、SQLite 3.53.3、アプリschema `PRAGMA user_version=1`、`system_state.schema_version=1`、SQLite内部 `PRAGMA schema_version=33`、`-wal`（0 bytes）と`-shm`の存在を確認した。`table_sessions`と`orders.session_id`はまだなく、旧schema v1の移行元である。API注文payloadの`schemaVersion: 1`は変更していない。
+- schema管理の不整合を残さないため、`docs/schema-v1.sql`を旧定義として復元し、session構造を含む`docs/schema-v2.sql`を追加した。`server/src/db/database.mjs`は`SCHEMA_VERSION=2`へ更新し、旧v1の必須table/index/triggerと`system_state.schema_version=1`を検査してから、`system_state`を値保持のままv2制約へ再構築し、session追加・backfill・`PRAGMA user_version=2`を単一transactionで実施する。v2はsession table/columnと全required objectsを検証し、安全なno-opになる。SQLite内部`PRAGMA schema_version`は操作していない。
+- Node v24.19.0には公式`backup()` APIがなかったため、Git除外の`server/var/backups/`へ上書きなしの第2serializeバックアップ`session-pre-migration-readonly-second-20260816100729369.sqlite3`を作成した。バックアップSHA-256は記録済み。元DBとbackupは`sqlite_schema`、全ユーザーテーブルの全列・全行・SQLite型付き値、`user_version`、`system_state.schema_version`が一致し、双方`integrity_check=ok`・`foreign_key_check=[]`、backupの再オープンもPASS。
+- 第2backupの作業用コピーだけへv1→v2 migrationを適用し、orders 5、order_items 12、event_log 17を保持、全旧テーブル共通列保持、session backfill 1、未割当orders 0、`user_version=2`、`system_state.schema_version=2`、2回目initialize no-op、integrity/foreign-key確認をPASSした。以前のメインファイルSHA変化は物理配置差として記録し、論理一致を合格条件としてBLOCKEDを解除した。永続DBへの適用は後続の実機受入で完了した。
+- 事前検証は migration関連 21/21、実HTTP session E2E 21/21、server全体 330/330、復元backupのv1→v2 migration・共通列データ保持・2回目no-op、`git diff --check` PASS。prototypeコードは事前確認時点で変更していない。
+
+## 2026-08-16 客席来店セッション実装
+
+- 基準状態との整合性は維持されている。実測は `feature/sqlite-foundation` / `ebceab4e645f1b7ce4f13b5f62ac6130fbcc70e2`、`origin/feature/sqlite-foundation` に対して ahead 3 / behind 16。開始時から存在した無関係なdirty変更・未追跡ファイルは保持し、session対象ファイルだけを変更した。
+- `table_sessions`、部分UNIQUE INDEX、`orders.session_id`、session整合性triggerを追加した。DB schemaはv2として管理し、legacy schema v1のデータ入りDBにはsystem_stateの値を保持した加算的・単一トランザクションのv1→v2移行を適用し、注文が存在するtableだけへ移行用open sessionを作成する。既存orders、order_items、event_logの共通列は削除・書換えしない。
+- 注文作成は認証済みdeviceからサーバー側で確定したtableのopen sessionを同一SQLite transaction内で再利用または作成する。客席履歴はtableの現在open sessionだけ、厨房・管理履歴は従来どおりcompleted全件を返す。
+- `POST /v1/tables/sessions/close` を追加し、kitchen/adminだけに許可した。未終端注文は409で不変、完了済みsessionのclose再送はreplayed no-op、終了直後は空sessionを作らず、次の注文時だけ新sessionを作る。既存の安全な `table.assignment_updated` invalidationをsession終了通知として再利用し、raw payload・token・session詳細はSSEへ投影しない。
+- 厨房snapshot/UIへopen sessionと「会計完了・席をリセット」確認を追加し、客席は認証済みSSE invalidationを受けると履歴を再取得する。QR、pairing、token再発行、既存のSites保護ファイル、`prototype/src/styles.css` は変更していない。
+- 検証は server 全体 330/330、prototype 全体 52/52、Sites worker 4/4、直接Vite production build、inline生成、fresh/legacy一時SQLite migration、実HTTP E2E、`PRAGMA foreign_key_check=[]`、`PRAGMA integrity_check=ok` がPASS。`pnpm install --offline --frozen-lockfile` と `pnpm run test:sites` は既知の非TTY `ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY` で停止したため、依存・設定を変更せず直接Node経路で代替した。
+- 永続 `server/var` DB、Windows環境変数、実機、Windows再起動・1クリック起動は今回触っていない。自動検証と一時DB検証が完了したため、次はユーザーがWindows再起動後に1クリック起動し、テーブル1でリセット前後の客席履歴と新規注文後の履歴分離を一度確認する段階。
+
+## 2026-08-16 実機受入前の現行リポジトリ照合（履歴）
+
+- 実機受入前の実測時点のルートは `feature/sqlite-foundation` / `ebceab4` (`fix: serve authenticated order histories reliably`)。`origin/feature/sqlite-foundation` に対して `ahead 3 / behind 16`、dirty であった。以後のcheckpoint commit後のHEADは最上段の現況記録を正とする。
+- `c645a8e` と `ebceab4` は実機受入前のHEADに含まれていた。既存のdirty変更（`mvp-design-spec.md`、`prototype/AGENTS.md`、`prototype/CONTEXT.md`、`prototype/README.md`、`prototype/src/styles.css`）と未追跡ファイルは変更していなかった。
+- 起動経路のコールドスタート前提を確認した時点でNodeサーバーは停止、対象IP `192.168.1.10` とデスクトップショートカットは存在した。一方、`WARUN_KITCHEN_API_TOKEN` はWindows User/Machine環境変数に設定されていなかったため、秘密値を推測・復元・再発行せず、OS再起動およびショートカット起動は実施していない。
+- したがって、直近の次タスク「Windows再起動後のデスクトップアイコン1回によるproduction画面・認証済み厨房履歴の復帰」は未完了のまま。再開時は、既存の安全な厨房端末プロビジョニングまたは運用者によるUser環境変数復旧後に、再起動→ショートカット1回→health/Web/API/snapshot/画面確認を行う。DB・端末・注文データは今回変更していない。
+- 現行HEADの検証は server `324/324`、prototype `48/48`、直接Vite production build、Sites準備、`git diff --check` を実施。`pnpm run build` は既知の非TTYによる `ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY` で停止したため、依存・lockfile・承認設定を変更せず直接Vite経路で代替した。
+
+最終照合日: 2026-08-16
+
 ## 2026-08-15 照合・再検証
 
 - ルートの実測は `feature/sqlite-foundation` / `18e68f0` / `origin/feature/sqlite-foundation` に対して behind 10 / dirty で、現況記録と一致した。ルートの既存変更、`server/var`、別 worktree の作業は変更していない。
@@ -15,7 +53,7 @@
 
 - ルート作業ツリーは `feature/sqlite-foundation`。1クリック起動作業の開始基準HEADは `25ae7e9`。
 - 作業開始時点で `origin/feature/sqlite-foundation` に対して ahead 1 / behind 16。originの変更は取り込まず、作業ツリーの既存dirty変更を保護している。
-- 客席注文から永続SQLite、厨房snapshot、未完了2件・新着2件・テーブル1表示まで実機受入済み。現在の目標はWindowsサーバーPCの再起動後もデスクトップアイコン1回で同じ状態へ復帰できること。
+- 客席注文から永続SQLite、厨房snapshot、客席session分離、会計後リセット、新session作成、厨房・管理履歴保持、Windows再起動後の1クリック起動まで実機受入済み。現在の次タスクは緊急時QRによる代替タブレット切替の設計・実装であり、後回しとしている。
 - SQLite、注文、履歴、event_log、schema、既存端末、Windows User環境変数の値は今回変更していない。
 
 ## 完了している内容
@@ -123,11 +161,8 @@
 
 ## 未完了・次回対応
 
-1. 現在の客席履歴は同じcustomer端末に紐づく過去客の注文も表示する。客席セッション境界は未実装。
-2. 客席履歴を「現在の来店」だけに区切るセッション管理と、会計後の席リセットが必要。
-3. 緊急時にQRで代替タブレットへ切り替える運用・実装は後回し。
-4. Windows再起動後の1クリック起動を、最新のinline module修正を含むproduction buildで最終再確認する必要がある。
+1. 緊急時にQRで代替タブレットへ切り替える運用・実装は後回し。
 
 ## 次の一手
 
-1. WindowsサーバーPCを再起動後、デスクトップの「わるん注文・厨房」を1回押し、最新production画面と認証済み厨房履歴が復帰することを確認する。
+1. 緊急時QRによる代替タブレット切替の要件と安全な再ペアリング運用を設計する。

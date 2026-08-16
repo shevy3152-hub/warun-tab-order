@@ -112,7 +112,7 @@ function Test-ProjectHttpSignature {
   try {
     $health = Invoke-WebRequest -UseBasicParsing -Uri $LocalHealthUrl -TimeoutSec 3
     $healthBody = $health.Content | ConvertFrom-Json
-    if ($health.StatusCode -ne 200 -or $healthBody.status -ne 'ready' -or $healthBody.schemaVersion -ne 1) {
+    if ($health.StatusCode -ne 200 -or $healthBody.status -ne 'ready' -or $healthBody.schemaVersion -ne 2) {
       return $false
     }
     $admin = Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:${WebPort}/admin.html" -TimeoutSec 3

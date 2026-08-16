@@ -1,5 +1,61 @@
 # Persistent Context
 
+## Persistent DB and real-device acceptance 2026-08-16 — PASS
+
+- After the Windows restart and one desktop-shortcut launch, the PC kitchen screen, LAN URL `192.168.1.10:5173`, connected state, and A90 customer screen all passed. The persistent database completed v1-to-v2 migration and both kitchen and customer devices recovered.
+- Read-only verification found `user_version=2`, `system_state.schema_version=2`, `integrity_check=ok`, and an empty `foreign_key_check`. Actual counts are `orders=6`, `order_items=13`, and `event_log=20`. There are two table sessions: one closed session retaining five prior orders and one open session containing the new 19:29 edamame order; zero orders have a null session.
+- The real-device flow passed: customer history showed the prior visit, kitchen displayed the explicit table-1 reset confirmation, reset pushed an automatic customer-history refresh, the next order appeared as new, current customer history showed only the new session, serving moved the item to prior orders, and kitchen/admin history retained both visits.
+- The confirmed contract is DB schema v2 with additive v1-to-v2 migration, table-scoped visit sessions, current-open-session-only customer history, kitchen/admin-only close, no order deletion, and lazy creation of the next session on the next order. The second serialize backup, restore migration, and reinitialize no-op checks also passed. Emergency QR fallback tablet switching remains deferred.
+
+## Pre-migration persistent DB check 2026-08-16 — PASS (completed historical record)
+
+- The production SQLite path is `server/var/warun.sqlite3`. Read-only inspection found `journal_mode=wal`, SQLite 3.53.3, application `user_version=1`, `system_state.schema_version=1`, SQLite internal `schema_version=33`, present `-wal`/`-shm`, and no `table_sessions`/`orders.session_id`; it is the old schema v1 migration source. The server manages the additive change as DB schema v2; order API payload `schemaVersion: 1` remains unchanged.
+- Node v24.19.0 did not expose an official `backup()` method, so a new Git-ignored `server/var/backups/session-pre-migration-readonly-second-20260816100729369.sqlite3` was created from a read-only `DatabaseSync.serialize()` snapshot without overwriting the prior backup. Its SHA-256 was recorded. Source and backup matched across `sqlite_schema`, all user-table columns and rows with SQLite types preserved, `user_version`, and `system_state.schema_version`; both passed integrity and foreign-key checks and the backup reopened successfully.
+- A temporary restored copy of the second backup alone passed v1-to-v2 migration, common-column data preservation, session backfill, second-initialize no-op, and integrity checks. The earlier main-file SHA change is recorded as a physical WAL/checkpoint representation difference; logical equality is now the acceptance condition. The production DB was not migrated and Windows restart/shortcut use was not performed.
+
+## Customer table-session boundary 2026-08-16 (implementation and device acceptance complete)
+
+- The current root remains `feature/sqlite-foundation` at `ebceab4` and retains the pre-existing dirty worktree. The session change is additive DB schema v2: SQLite schema v1 remains the migration source, while v2 has `table_sessions`, nullable legacy-compatible `orders.session_id`, one-open-session-per-table enforcement, and a transactional v1-to-v2 migration.
+- Authenticated customer history now reads only the assigned table's current open session. Kitchen/admin history remains all completed orders. `POST /v1/tables/sessions/close` is kitchen/admin-only, rejects non-terminal orders with 409, is replay-safe, and leaves the historical rows intact; the next order creates the next session.
+- Kitchen snapshots expose open sessions and the kitchen UI confirms `会計完了・席をリセット`. Customer history subscribes to the existing safe SSE invalidation stream and refreshes without a manual reload. QR/pairing/token changes and the existing Sites-protected files were not part of this task.
+- Verification on 2026-08-16: server 330/330, prototype 52/52, Sites worker 4/4, direct Vite production build plus inline generation, temporary fresh/legacy SQLite migration and HTTP E2E, foreign-key check empty, integrity check `ok`. pnpm's locked restore/test wrapper remained blocked by the known non-TTY modules-purge confirmation; no dependencies or settings were changed.
+- The subsequent persistent migration, Windows restart, one-click launch, and physical A90/PC table-session reset acceptance are recorded in the current section above. Emergency QR fallback tablet switching remains deferred.
+
+## Current repository reconciliation 2026-08-16 (pre-device-acceptance history)
+
+- The pre-device-acceptance root was `feature/sqlite-foundation` at `ebceab4` (`fix: serve authenticated order histories reliably`), dirty and `ahead 3 / behind 16` against `origin/feature/sqlite-foundation`. This section is historical; the current checkpoint HEAD is recorded in the latest handoff section.
+- `c645a8e` and `ebceab4` were present at that pre-device-acceptance HEAD, including the Windows launcher, authenticated kitchen/customer history, and production inline-module fix. Existing dirty user changes and untracked files were preserved.
+- The cold-start prerequisite check found no running Node server and confirmed the target IP and desktop shortcut, but `WARUN_KITCHEN_API_TOKEN` was absent from Windows User and Machine environment scopes. No secret was guessed, recovered, or reissued; no OS restart or launcher run was performed.
+- Verification passed: server 324/324, prototype 48/48, direct Vite production build, Sites packaging, and `git diff --check`. `pnpm run build` stopped at the known non-TTY module purge confirmation, so the documented direct Vite fallback was used without changing dependencies, lockfiles, or approval settings.
+- Next handoff: after an authorized safe restoration/provisioning of the kitchen runtime token, perform the Windows restart and one desktop-shortcut launch check. The customer-session history boundary remains the next product task after that operational acceptance.
+
+## Handoff 2026-08-15
+
+- The repository root is intentionally still dirty on `feature/sqlite-foundation` at `18e68f0`; existing user changes and the local `server/var` database were preserved.
+- The current dirty implementation includes the SQLite order persistence, authenticated customer/kitchen/admin HTTP paths, kitchen serving updates, completed-order history, pairing, and customer outbox work described in `DEV_STATE.md`. The older sections below retain historical 2026-08-09/11 baselines and must not be used as the current Git baseline.
+- Rechecked the root working tree without changing it: prototype tests 34/34 passed, server tests 315/315 passed, the existing Sites dist output was present, and `git diff --check` passed.
+- The remote-tracking `origin/feature/sqlite-foundation` is ten commits ahead and was not merged into the dirty root. An isolated archive of that ref also passed after direct Vite/Sites packaging: prototype 37/37 and server 319/319.
+- `pnpm run build` was not usable in the isolated copy because pnpm attempted a non-TTY module purge; direct Vite with `--configLoader runner` plus the two Sites scripts was used instead. No dependency, pnpm approval, or Git metadata was changed.
+- A90 Chrome has confirmed QR pairing, menu display, order submission, immediate kitchen reflection, and movement to completed history; Brave registration failed. Still unverified: the post-fix A90 check, real runtime-token kitchen acceptance, deliberate offline/online transitions, QR camera scanning with the standard camera, multi-device concurrency, backup/recovery, and production operational rollout.
+- Read-only A90 follow-up found a persisted order assigned by the server to table 1 while the customer demo route displayed table 3; the kitchen page also lacked API runtime configuration and showed the localStorage fallback. The customer server-assignment display, kitchen badge source, and fail-closed kitchen configuration behavior were corrected without changing SQLite data or schema.
+- A90 post-fix confirmation passed: the customer screen shows table 1; the old local table-3 history is no longer shown, with no data loss and no DB change required. Admin-shell-only kitchen runtime-token injection and kitchen API regression coverage were added. At that point the DB snapshot acceptance was pending because no kitchen-role device or runtime credential was available.
+- Provisioning and restart are now complete; the frontend snapshot-state rendering fix below must be used for the next no-reorder A90 kitchen check.
+
+## Provisioning handoff 2026-08-15
+
+- A new `kitchen` device was provisioned through `server/scripts/provision-kitchen-device.mjs`; only its token hash is in SQLite and the plaintext is held in the Windows User environment. Existing admin/customer devices were not changed.
+- Read-only verification kept `orders=5`, `order_items=12`, and `event_log=14`; schema and existing order/history data were not modified. The persisted table-1 18:42 order remains `new` with two unserved items and one `order.created` event.
+- After restart with the User environment configuration, authenticated local and LAN `/v1/snapshot` both returned 200 with two active orders including the 18:42 order. The kitchen token is injected only into the admin shell; it is absent from customer HTML, the bundle, Git diff, and handoff documents.
+- Targeted regression tests passed: server 6/6 and prototype 13/13; direct Vite build passed. The in-app browser surface did not expose fetch/XHR and therefore its localStorage display is not an acceptance result.
+- Next: wait for the A90 kitchen screen to reload and verify the API-backed table-1 order and new-order badge without placing another order or serving an existing item.
+
+## Kitchen snapshot rendering fix 2026-08-15
+
+- PC Chrome showed no order badge and the local empty-state message even though the persisted snapshot had two active orders. Staff-call count 1 is a separate counter.
+- Existing server logs had no request-level access logging. Direct HTTP verification showed unauthenticated Web proxy 401, authenticated Web proxy/API 200, and the snapshot contained both active orders including the table-1 18:42 order. The production `fetchKitchenOrders` function reproduced the same two-order result over LAN.
+- Root cause: `kitchenApiState` was missing from the `App` `useMemo` dependency list, so the fetched state never reached the rendered kitchen screen. The minimal fix adds that dependency and changes the fetch-error text to `注文情報を取得できません。`.
+- No DB, order, history, event-log, or schema changes were made. Prototype target tests pass 10/10 and direct Vite build passes. Post-fix A90 visual acceptance remains pending; no reorder or serving action is required.
+
 ## Handoff 2026-08-11
 
 - Branch: `feature/sqlite-foundation`; customer order outbox commit: `8049117` (`feat: connect customer order outbox`), pushed to `origin/feature/sqlite-foundation`.

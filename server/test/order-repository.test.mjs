@@ -7,6 +7,7 @@ import test from 'node:test';
 import { Worker } from 'node:worker_threads';
 import { once } from 'node:events';
 
+import { createDeviceAuthenticator } from '../src/auth/device-auth.mjs';
 import { initializeDatabase } from '../src/db/database.mjs';
 import {
   ORDER_ERROR_CODES,
@@ -177,6 +178,17 @@ function assertOrderError(action, code) {
   );
 }
 
+function issuePrincipal(database, deviceId, byte) {
+  const token = Buffer.alloc(32, byte).toString('base64url');
+  const tokenHash = createHash('sha256').update(token, 'utf8').digest('hex');
+  database.prepare('UPDATE devices SET token_hash = ? WHERE device_id = ?').run(tokenHash, deviceId);
+  const authenticator = createDeviceAuthenticator({ database });
+  return {
+    authenticator,
+    principal: authenticator.authenticateDeviceToken(token),
+  };
+}
+
 test('creates a new order and returns created', async () => {
   await withFixture(({ database }) => {
     const result = makeRepository(database).createOrder(orderRequest());
@@ -190,6 +202,88 @@ test('new order inserts exactly one orders row', async () => {
   await withFixture(({ database }) => {
     makeRepository(database).createOrder(orderRequest());
     assert.equal(countRows(database, 'orders'), 1);
+  });
+});
+
+test('orders on one table reuse one open session and customer history follows that table session', async () => {
+  await withFixture(({ database }) => {
+    const repository = makeRepository(database);
+    const first = repository.createOrder(orderRequest());
+    const second = repository.createOrder(orderRequest({ clientOrderId: CLIENT_ORDER_B }));
+    const customer = issuePrincipal(database, DEVICE_A, 0x61);
+
+    try {
+      assert.match(first.order.sessionId, /^[0-9a-f-]{36}$/);
+      assert.equal(second.order.sessionId, first.order.sessionId);
+      assert.equal(database.prepare('SELECT COUNT(*) AS count FROM table_sessions').get().count, 1);
+      assert.deepEqual(
+        repository.getCustomerHistory(customer.principal).map((order) => order.sessionId),
+        [first.order.sessionId, first.order.sessionId],
+      );
+    } finally {
+      customer.authenticator.close();
+    }
+  });
+});
+
+test('closing a session requires terminal orders, is replay-safe, and next order opens a new session', async () => {
+  await withFixture(({ database }) => {
+    const repository = makeRepository(database);
+    const kitchen = issuePrincipal(database, DEVICE_KITCHEN, 0x62);
+    const customer = issuePrincipal(database, DEVICE_A, 0x63);
+    const created = repository.createOrder(orderRequest());
+    const sessionId = created.order.sessionId;
+
+    try {
+      assertOrderError(
+        () => repository.closeTableSession({
+          principal: kitchen.principal,
+          tableId: 1,
+          sessionId,
+        }),
+        ORDER_ERROR_CODES.SESSION_HAS_ACTIVE_ORDERS,
+      );
+      assert.equal(database.prepare('SELECT closed_at_ms FROM table_sessions WHERE session_id = ?').get(sessionId).closed_at_ms, null);
+
+      const served = repository.markItemServed({
+        principal: kitchen.principal,
+        orderId: created.order.orderId,
+        orderItemId: created.order.items[0].orderItemId,
+      });
+      assert.equal(served.order.status, 'completed');
+
+      const closed = repository.closeTableSession({
+        principal: kitchen.principal,
+        tableId: 1,
+        sessionId,
+      });
+      assert.equal(closed.idempotencyResult, 'created');
+      assert.equal(database.prepare("SELECT COUNT(*) AS count FROM event_log WHERE event_type = 'table.assignment_updated'").get().count, 1);
+      assert.deepEqual(repository.getCustomerHistory(customer.principal), []);
+      assert.equal(database.prepare('SELECT COUNT(*) AS count FROM table_sessions').get().count, 1);
+
+      const orderReplay = repository.createOrder(orderRequest());
+      assert.equal(orderReplay.idempotencyResult, 'replayed');
+      assert.equal(orderReplay.order.sessionId, sessionId);
+      assert.equal(database.prepare('SELECT COUNT(*) AS count FROM table_sessions').get().count, 1);
+
+      const replay = repository.closeTableSession({
+        principal: kitchen.principal,
+        tableId: 1,
+        sessionId,
+      });
+      assert.equal(replay.idempotencyResult, 'replayed');
+      assert.equal(replay.closedAtMs, closed.closedAtMs);
+      assert.equal(database.prepare("SELECT COUNT(*) AS count FROM event_log WHERE event_type = 'table.assignment_updated'").get().count, 1);
+
+      const next = repository.createOrder(orderRequest({ clientOrderId: CLIENT_ORDER_B }));
+      assert.notEqual(next.order.sessionId, sessionId);
+      assert.equal(database.prepare('SELECT COUNT(*) AS count FROM table_sessions').get().count, 2);
+      assert.deepEqual(repository.getCustomerHistory(customer.principal).map((order) => order.orderId), [next.order.orderId]);
+    } finally {
+      kitchen.authenticator.close();
+      customer.authenticator.close();
+    }
   });
 });
 

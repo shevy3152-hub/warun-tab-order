@@ -226,6 +226,16 @@ function postOrder(port, token, body, headers = {}) {
   });
 }
 
+function closeSession(port, token, body) {
+  return request({
+    port,
+    path: '/v1/tables/sessions/close',
+    method: 'POST',
+    headers: { ...bearer(token), ...JSON_HEADERS },
+    body: JSON.stringify(body),
+  });
+}
+
 function assertError(response, statusCode, code) {
   assert.equal(response.statusCode, statusCode);
   assert.equal(response.json.error.code, code);
@@ -450,6 +460,135 @@ test('kitchen can serve items, complete orders, and expose them to admin history
     const history = await request({ port, path: '/v1/admin/order-history', headers: bearer(ADMIN_TOKEN) });
     assert.equal(history.statusCode, 200);
     assert.equal(history.json.orders[0].orderId, stored.order_id);
+  });
+});
+
+test('session close is kitchen/admin-only, rejects active orders, hides closed history, and is replay-safe', async () => {
+  await withFixture(async ({ port, database }) => {
+    const customerStream = await openSse({ port, token: CUSTOMER_A_TOKEN });
+    const clientOrderId = uuid(1_103);
+    const created = await postOrder(port, CUSTOMER_A_TOKEN, orderBody(clientOrderId));
+    assert.equal(created.statusCode, 201);
+    const stored = database.prepare('SELECT order_id, session_id FROM orders WHERE client_order_id = ?').get(clientOrderId);
+    const item = database.prepare('SELECT order_item_id FROM order_items WHERE order_id = ?').get(stored.order_id);
+
+    const customerAttempt = await closeSession(port, CUSTOMER_A_TOKEN, {
+      tableId: 1,
+      sessionId: stored.session_id,
+    });
+    assertError(customerAttempt, 403, 'AUTHORIZATION_FAILED');
+
+    const active = await closeSession(port, KITCHEN_TOKEN, {
+      tableId: 1,
+      sessionId: stored.session_id,
+    });
+    assertError(active, 409, 'SESSION_HAS_ACTIVE_ORDERS');
+    assert.equal(database.prepare('SELECT closed_at_ms FROM table_sessions WHERE session_id = ?').get(stored.session_id).closed_at_ms, null);
+
+    const served = await request({
+      port,
+      path: '/v1/kitchen/order-items/serve',
+      method: 'POST',
+      headers: { ...bearer(KITCHEN_TOKEN), ...JSON_HEADERS },
+      body: JSON.stringify({ orderId: stored.order_id, orderItemId: item.order_item_id }),
+    });
+    assert.equal(served.statusCode, 200);
+
+    const closed = await closeSession(port, KITCHEN_TOKEN, {
+      tableId: 1,
+      sessionId: stored.session_id,
+    });
+    assert.equal(closed.statusCode, 200);
+    assert.equal(closed.json.idempotencyResult, 'created');
+    assert.deepEqual(Object.keys(closed.json).sort(), ['closedAtMs', 'idempotencyResult', 'sessionId', 'tableId']);
+    assert.doesNotMatch(closed.rawBody, /price|total|token|payload|actor/i);
+    await waitForSse(customerStream, /event: table\.assignment_updated/, 'customer session invalidation');
+    assert.doesNotMatch(customerStream.text, /sessionId|closedAtMs|payloadJson|token|price|total/i);
+
+    const kitchenHistory = await request({
+      port,
+      path: '/v1/kitchen/order-history',
+      headers: bearer(KITCHEN_TOKEN),
+    });
+    const adminHistory = await request({
+      port,
+      path: '/v1/admin/order-history',
+      headers: bearer(ADMIN_TOKEN),
+    });
+    assert.equal(kitchenHistory.statusCode, 200);
+    assert.equal(adminHistory.statusCode, 200);
+    assert.equal(kitchenHistory.json.orders.some((order) => order.orderId === stored.order_id), true);
+    assert.equal(adminHistory.json.orders.some((order) => order.orderId === stored.order_id), true);
+
+    const historyAfterClose = await request({
+      port,
+      path: '/v1/customer/order-history',
+      headers: bearer(CUSTOMER_A_TOKEN),
+    });
+    assert.equal(historyAfterClose.statusCode, 200);
+    assert.deepEqual(historyAfterClose.json.orders, []);
+
+    const replay = await closeSession(port, KITCHEN_TOKEN, {
+      tableId: 1,
+      sessionId: stored.session_id,
+    });
+    assert.equal(replay.statusCode, 200);
+    assert.equal(replay.json.idempotencyResult, 'replayed');
+    assert.equal(replay.json.closedAtMs, closed.json.closedAtMs);
+    assert.equal(count(database, 'event_log'), 3);
+
+    const nextOrderId = uuid(1_104);
+    assert.equal((await postOrder(port, CUSTOMER_A_TOKEN, orderBody(nextOrderId))).statusCode, 201);
+    const next = database.prepare('SELECT session_id FROM orders WHERE client_order_id = ?').get(nextOrderId);
+    assert.notEqual(next.session_id, stored.session_id);
+    const currentHistory = await request({
+      port,
+      path: '/v1/customer/order-history',
+      headers: bearer(CUSTOMER_A_TOKEN),
+    });
+    assert.deepEqual(currentHistory.json.orders.map((order) => order.clientOrderId), [nextOrderId]);
+    customerStream.close();
+  });
+});
+
+test('session close rejects a session belonging to another table without changing either session', async () => {
+  await withFixture(async ({ port, database }) => {
+    const first = await postOrder(port, CUSTOMER_A_TOKEN, orderBody(uuid(1_105)));
+    const second = await postOrder(port, CUSTOMER_B_TOKEN, orderBody(uuid(1_106), [{ menuItemId: 'beer', quantity: 1 }]));
+    assert.equal(first.statusCode, 201);
+    assert.equal(second.statusCode, 201);
+    const sessions = database.prepare('SELECT table_id, session_id, closed_at_ms FROM table_sessions ORDER BY table_id').all();
+    assert.equal(sessions.length, 2);
+
+    const response = await closeSession(port, KITCHEN_TOKEN, {
+      tableId: sessions[0].table_id,
+      sessionId: sessions[1].session_id,
+    });
+    assertError(response, 409, 'SESSION_CONFLICT');
+    assert.deepEqual(
+      database.prepare('SELECT table_id, closed_at_ms FROM table_sessions ORDER BY table_id').all()
+        .map(({ table_id, closed_at_ms }) => ({ table_id, closed_at_ms })),
+      [{ table_id: 1, closed_at_ms: null }, { table_id: 2, closed_at_ms: null }],
+    );
+    assert.equal(count(database, 'event_log'), 2);
+    const historyA = await request({ port, path: '/v1/customer/order-history', headers: bearer(CUSTOMER_A_TOKEN) });
+    const historyB = await request({ port, path: '/v1/customer/order-history', headers: bearer(CUSTOMER_B_TOKEN) });
+    assert.deepEqual(historyA.json.orders.map((order) => order.clientOrderId), [uuid(1_105)]);
+    assert.deepEqual(historyB.json.orders.map((order) => order.clientOrderId), [uuid(1_106)]);
+  });
+});
+
+test('concurrent orders on one table create exactly one open session', async () => {
+  await withFixture(async ({ port, database }) => {
+    const responses = await Promise.all([
+      postOrder(port, CUSTOMER_A_TOKEN, orderBody(uuid(1_107))),
+      postOrder(port, CUSTOMER_A_TOKEN, orderBody(uuid(1_108), [{ menuItemId: 'beer', quantity: 1 }])),
+    ]);
+    assert.deepEqual(responses.map((response) => response.statusCode).sort(), [201, 201]);
+    assert.equal(count(database, 'orders'), 2);
+    assert.equal(count(database, 'table_sessions'), 1);
+    assert.equal(database.prepare('SELECT COUNT(*) AS count FROM table_sessions WHERE closed_at_ms IS NULL').get().count, 1);
+    assert.equal(database.prepare('SELECT COUNT(DISTINCT session_id) AS count FROM orders').get().count, 1);
   });
 });
 

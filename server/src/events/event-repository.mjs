@@ -143,6 +143,7 @@ function mapOrder(row, itemRows) {
     version: row.version,
     items: itemRows.map(mapOrderItem),
   };
+  if (row.session_id !== null && row.session_id !== undefined) order.sessionId = row.session_id;
   if (row.completed_at_ms !== null) order.completedAtMs = row.completed_at_ms;
   return order;
 }
@@ -239,6 +240,7 @@ export function createEventRepository({ database } = {}) {
           order_id,
           client_order_id,
           table_id,
+          session_id,
           table_number_snapshot,
           status,
           total_amount_yen,
@@ -278,6 +280,12 @@ export function createEventRepository({ database } = {}) {
         FROM staff_calls
         WHERE status = 'open'
         ORDER BY created_at_ms, staff_call_id
+      `),
+      findOpenSessions: database.prepare(`
+        SELECT session_id, table_id, opened_at_ms, version
+        FROM table_sessions
+        WHERE closed_at_ms IS NULL
+        ORDER BY table_id, opened_at_ms, session_id
       `),
     };
   } catch (error) {
@@ -517,6 +525,14 @@ export function createEventRepository({ database } = {}) {
         lastEventId: cursor.last_event_id,
         activeOrders,
         openStaffCalls,
+        openSessions: device.role === 'kitchen' || device.role === 'admin'
+          ? statements.findOpenSessions.all().map((row) => ({
+            sessionId: row.session_id,
+            tableId: row.table_id,
+            openedAtMs: row.opened_at_ms,
+            version: row.version,
+          }))
+          : [],
       });
     });
   }

@@ -24,12 +24,13 @@ try {
 }
 ```
 
-初期化処理は呼び出し元のカレントディレクトリに依存せず、リポジトリの`docs/schema-v1.sql`を読み込みます。DBファイルの親ディレクトリは必要に応じて作成します。
+初期化処理は呼び出し元のカレントディレクトリに依存せず、リポジトリの`docs/schema-v2.sql`を読み込みます。DBファイルの親ディレクトリは必要に応じて作成します。
 
 対応するスキーマはv1だけです。
 
-- `user_version = 0`かつユーザーテーブルなし: v1を適用
-- `user_version = 1`: 必須テーブル、インデックス、トリガーと整合性を検証して再利用
+- `user_version = 0`かつユーザーテーブルなし: v2を適用
+- `user_version = 1`: 旧schema v1の必須構造を検証し、session追加と`system_state`更新を含むv1→v2加算migrationを適用
+- `user_version = 2`: v2の必須テーブル、インデックス、トリガーと整合性を検証して再利用
 - `user_version = 0`かつユーザーテーブルあり: 誤上書き防止のため拒否
 - 上記以外のバージョン: Migration未実装のため拒否
 
@@ -166,6 +167,10 @@ ETagとSSE更新通知は未実装です。
 - `GET /v1/device/config`: DB最新状態のrole別端末設定
 - `GET /v1/menu`: role別メニュー
 - `POST /v1/orders`: customerだけが使える冪等な注文作成
+- `GET /v1/customer/order-history`: customer割当tableの現在open sessionだけの履歴
+- `GET /v1/kitchen/order-history`: kitchen向けcompleted注文履歴（close済みsessionを含む）
+- `GET /v1/admin/order-history`: admin向けcompleted注文履歴（close済みsessionを含む）
+- `POST /v1/tables/sessions/close`: kitchen/adminだけが会計後に現在sessionをcloseする操作
 - `GET /v1/events/replay`: 欠落イベントのrole別JSON replay
 - `GET /v1/events`: role別SSE stream
 - `GET /v1/snapshot`: event履歴を継続できない場合のrole別再同期状態
@@ -236,7 +241,7 @@ cursor headerを両方省略したSSE接続は現在tailからliveだけを受�
 
 epoch不一致、未来cursor、または現在epochからcursor行が失われている場合は`410 EVENT_HISTORY_UNAVAILABLE`とsnapshot URL・現在cursorを返します。クライアントは旧cacheを破棄してsnapshotを取り直します。snapshotはdevice、menu、厨房・管理用active ordersとopen staff callsが同じ論理cursorになるまで有界回数だけ再取得します。
 
-schema v1では`event_log`を削除・pruneしません。cursor行の欠落とepoch変更は検出できますが、DB破損などによる任意の中間1行だけの削除を完全検出するretention watermarkはありません。正式な保持期限を導入する場合は、連続prefix削除とretention floorを別Migrationで設計します。
+schema v2では`event_log`を削除・pruneしません。cursor行の欠落とepoch変更は検出できますが、DB破損などによる任意の中間1行だけの削除を完全検出するretention watermarkはありません。正式な保持期限を導入する場合は、連続prefix削除とretention floorを別Migrationで設計します。
 
 ### 所有権と未実装範囲
 

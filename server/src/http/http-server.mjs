@@ -42,6 +42,7 @@ import {
   mapMenuResponse,
   mapOrderHistoryResponse,
   mapOrderReceiptResponse,
+  mapTableSessionCloseResponse,
   mapSnapshotResponse,
   writeJsonResponse,
 } from './http-response.mjs';
@@ -59,6 +60,7 @@ const ROUTE_METHODS = new Map([
   ['/v1/orders', 'POST'],
   ['/v1/customer/order-history', 'GET'],
   ['/v1/kitchen/order-items/serve', 'POST'],
+  ['/v1/tables/sessions/close', 'POST'],
   ['/v1/kitchen/order-history', 'GET'],
   ['/v1/admin/order-history', 'GET'],
   ['/v1/snapshot', 'GET'],
@@ -349,6 +351,19 @@ function mapApplicationError(error) {
     if (error.code === ORDER_ERROR_CODES.ORDER_NOT_FOUND) {
       return createHttpError(HTTP_ERROR_CODES.ORDER_NOT_FOUND);
     }
+    if (error.code === ORDER_ERROR_CODES.SESSION_NOT_FOUND) {
+      return createHttpError(HTTP_ERROR_CODES.SESSION_NOT_FOUND);
+    }
+    if (
+      error.code === ORDER_ERROR_CODES.SESSION_CONFLICT
+      || error.code === ORDER_ERROR_CODES.SESSION_HAS_ACTIVE_ORDERS
+    ) {
+      return createHttpError(
+        error.code === ORDER_ERROR_CODES.SESSION_CONFLICT
+          ? HTTP_ERROR_CODES.SESSION_CONFLICT
+          : HTTP_ERROR_CODES.SESSION_HAS_ACTIVE_ORDERS,
+      );
+    }
     if (error.code === ORDER_ERROR_CODES.DATABASE_FAILURE && hasBusyCause(error)) {
       return createHttpError(HTTP_ERROR_CODES.SERVICE_UNAVAILABLE);
     }
@@ -515,6 +530,7 @@ function createConfiguredHttpServer({
       || typeof orderRepository.createOrder !== 'function'
       || typeof orderRepository.getCustomerHistory !== 'function'
       || typeof orderRepository.getHistory !== 'function'
+      || typeof orderRepository.closeTableSession !== 'function'
       || typeof orderRepository.markItemServed !== 'function'
       || !eventRepository
       || typeof eventRepository.replay !== 'function'
@@ -625,6 +641,25 @@ function createConfiguredHttpServer({
         writeJsonResponse(response, {
           statusCode: 200,
           body: mapOrderHistoryResponse([result.order]),
+          requestId,
+        });
+        return;
+      }
+
+      if (target.path === '/v1/tables/sessions/close') {
+        authorizeDeviceRole(principal, ['kitchen', 'admin']);
+        const orders = requireService(orderRepository, 'closeTableSession');
+        const body = await readJsonBody(request);
+        const result = orders.closeTableSession({
+          principal,
+          tableId: body?.tableId,
+          sessionId: body?.sessionId,
+        });
+        await notifyCommittedSafely(sseHub, result);
+        if (response.destroyed) return;
+        writeJsonResponse(response, {
+          statusCode: 200,
+          body: mapTableSessionCloseResponse(result),
           requestId,
         });
         return;

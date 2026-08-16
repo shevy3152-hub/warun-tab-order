@@ -36,6 +36,16 @@ function normalizeAuthenticatedDeviceId(value) {
   return value.trim().toLowerCase();
 }
 
+function normalizeTableId(value, fieldName = 'tableId') {
+  if (!Number.isSafeInteger(value) || value < 1) {
+    throw repositoryError(
+      ORDER_ERROR_CODES.INVALID_ORDER_REQUEST,
+      `${fieldName} must be a positive integer.`,
+    );
+  }
+  return value;
+}
+
 function normalizeItems(items) {
   if (!Array.isArray(items) || items.length === 0 || items.length > MAX_ITEMS) {
     throw repositoryError(
@@ -142,13 +152,22 @@ function validateGeneratedValues(orderId, acceptedAtMs) {
   }
 }
 
+function validateGeneratedSessionId(sessionId) {
+  if (typeof sessionId !== 'string' || !UUID_V4_PATTERN.test(sessionId)) {
+    throw repositoryError(
+      ORDER_ERROR_CODES.DATABASE_FAILURE,
+      'sessionIdFactory must return a valid UUID v4.',
+    );
+  }
+}
+
 function isClientOrderUniqueViolation(error) {
   return error?.code === 'ERR_SQLITE_ERROR'
     && String(error.message).includes('UNIQUE constraint failed: orders.client_order_id');
 }
 
 function mapOrderRow(row, items) {
-  return {
+  const order = {
     orderId: row.order_id,
     clientOrderId: row.client_order_id,
     requestFingerprint: row.request_fingerprint,
@@ -163,6 +182,8 @@ function mapOrderRow(row, items) {
     version: row.version,
     items,
   };
+  if (row.session_id !== null && row.session_id !== undefined) order.sessionId = row.session_id;
+  return order;
 }
 
 function mapOrderItemRow(row) {
@@ -180,14 +201,14 @@ function mapOrderItemRow(row) {
   };
 }
 
-export function createOrderRepository({ database, now = Date.now, idFactory = randomUUID } = {}) {
+export function createOrderRepository({ database, now = Date.now, idFactory = randomUUID, sessionIdFactory = randomUUID } = {}) {
   if (!database || typeof database.prepare !== 'function' || typeof database.exec !== 'function') {
     throw repositoryError(
       ORDER_ERROR_CODES.DATABASE_FAILURE,
       'A ready node:sqlite database connection is required.',
     );
   }
-  if (typeof now !== 'function' || typeof idFactory !== 'function') {
+  if (typeof now !== 'function' || typeof idFactory !== 'function' || typeof sessionIdFactory !== 'function') {
     throw repositoryError(
       ORDER_ERROR_CODES.DATABASE_FAILURE,
       'now and idFactory must be functions.',
@@ -207,6 +228,7 @@ export function createOrderRepository({ database, now = Date.now, idFactory = ra
           canonical_request_json,
           customer_device_id,
           table_id,
+          session_id,
           table_number_snapshot,
           status,
           total_amount_yen,
@@ -240,6 +262,7 @@ export function createOrderRepository({ database, now = Date.now, idFactory = ra
           canonical_request_json,
           customer_device_id,
           table_id,
+          session_id,
           table_number_snapshot,
           status,
           total_amount_yen,
@@ -258,6 +281,7 @@ export function createOrderRepository({ database, now = Date.now, idFactory = ra
           canonical_request_json,
           customer_device_id,
           table_id,
+          session_id,
           table_number_snapshot,
           status,
           total_amount_yen,
@@ -265,7 +289,7 @@ export function createOrderRepository({ database, now = Date.now, idFactory = ra
           completed_at_ms,
           version
         FROM orders
-        WHERE customer_device_id = ?
+        WHERE session_id = ?
         ORDER BY accepted_at_ms DESC, order_id DESC
       `),
       findServingOrder: database.prepare(`
@@ -276,6 +300,7 @@ export function createOrderRepository({ database, now = Date.now, idFactory = ra
           canonical_request_json,
           customer_device_id,
           table_id,
+          session_id,
           table_number_snapshot,
           status,
           total_amount_yen,
@@ -326,6 +351,42 @@ export function createOrderRepository({ database, now = Date.now, idFactory = ra
         FROM tables
         WHERE assigned_customer_device_id = ?
       `),
+      findOpenSession: database.prepare(`
+        SELECT session_id, table_id, opened_at_ms, closed_at_ms, version
+        FROM table_sessions
+        WHERE table_id = ? AND closed_at_ms IS NULL
+      `),
+      findSession: database.prepare(`
+        SELECT session_id, table_id, opened_at_ms, closed_at_ms, version
+        FROM table_sessions
+        WHERE session_id = ?
+      `),
+      insertSession: database.prepare(`
+        INSERT INTO table_sessions (
+          session_id, table_id, opened_at_ms, version, created_at_ms, updated_at_ms
+        ) VALUES (?, ?, ?, 1, ?, ?)
+      `),
+      countSessionActiveOrders: database.prepare(`
+        SELECT COUNT(*) AS count
+        FROM orders
+        WHERE session_id = ? AND status IN ('new', 'active')
+      `),
+      closeSession: database.prepare(`
+        UPDATE table_sessions
+        SET closed_at_ms = ?, version = version + 1, updated_at_ms = ?
+        WHERE session_id = ? AND table_id = ? AND closed_at_ms IS NULL
+      `),
+      insertSessionCloseEvent: database.prepare(`
+        INSERT INTO event_log (
+          event_epoch,
+          event_type,
+          aggregate_type,
+          aggregate_id,
+          actor_device_id,
+          payload_json,
+          created_at_ms
+        ) VALUES (?, 'table.assignment_updated', 'table', ?, ?, ?, ?)
+      `),
       findMenuItem: database.prepare(`
         SELECT
           menu_item_id,
@@ -350,11 +411,12 @@ export function createOrderRepository({ database, now = Date.now, idFactory = ra
           canonical_request_json,
           customer_device_id,
           table_id,
+          session_id,
           table_number_snapshot,
           status,
           total_amount_yen,
           accepted_at_ms
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, 'new', ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'new', ?, ?)
       `),
       insertOrderItem: database.prepare(`
         INSERT INTO order_items (
@@ -438,6 +500,16 @@ export function createOrderRepository({ database, now = Date.now, idFactory = ra
     }
   }
 
+  function ensureOpenSession(tableId, openedAtMs) {
+    const existing = statements.findOpenSession.get(tableId);
+    if (existing) return existing;
+
+    const sessionId = String(sessionIdFactory()).toLowerCase();
+    validateGeneratedSessionId(sessionId);
+    statements.insertSession.run(sessionId, tableId, openedAtMs, openedAtMs, openedAtMs);
+    return statements.findOpenSession.get(tableId);
+  }
+
   function createOrder(request) {
     if (closed) {
       throw repositoryError(
@@ -498,6 +570,13 @@ export function createOrderRepository({ database, now = Date.now, idFactory = ra
       const acceptedAtMs = now();
       const orderId = String(idFactory()).toLowerCase();
       validateGeneratedValues(orderId, acceptedAtMs);
+      const session = ensureOpenSession(table.table_id, acceptedAtMs);
+      if (!session) {
+        throw repositoryError(
+          ORDER_ERROR_CODES.DATABASE_FAILURE,
+          'The current table session could not be created.',
+        );
+      }
 
       let totalAmountYen = 0;
       const snapshots = normalized.items.map((item, lineIndex) => {
@@ -549,6 +628,7 @@ export function createOrderRepository({ database, now = Date.now, idFactory = ra
         canonicalRequestJson,
         normalized.authenticatedDeviceId,
         table.table_id,
+        session.session_id,
         table.table_id,
         totalAmountYen,
         acceptedAtMs,
@@ -607,6 +687,7 @@ export function createOrderRepository({ database, now = Date.now, idFactory = ra
           canonicalRequestJson,
           authenticatedDeviceId: normalized.authenticatedDeviceId,
           tableId: table.table_id,
+          sessionId: session.session_id,
           tableNumberSnapshot: table.table_id,
           status: 'new',
           totalAmountYen,
@@ -699,7 +780,23 @@ export function createOrderRepository({ database, now = Date.now, idFactory = ra
     try {
       database.exec('BEGIN;');
       transactionOpen = true;
-      const history = statements.findCustomerHistoryOrders.all(principal.deviceId).map(loadOrder);
+      const table = statements.findAssignedTable.get(principal.deviceId);
+      if (!table) {
+        throw repositoryError(
+          ORDER_ERROR_CODES.DEVICE_NOT_ASSIGNED,
+          'The authenticated customer device is not assigned to a table.',
+        );
+      }
+      if (table.is_active !== 1) {
+        throw repositoryError(
+          ORDER_ERROR_CODES.TABLE_INACTIVE,
+          'The assigned table is inactive.',
+        );
+      }
+      const session = statements.findOpenSession.get(table.table_id);
+      const history = session
+        ? statements.findCustomerHistoryOrders.all(session.session_id).map(loadOrder)
+        : [];
       database.exec('COMMIT;');
       transactionOpen = false;
       return history;
@@ -711,6 +808,107 @@ export function createOrderRepository({ database, now = Date.now, idFactory = ra
       throw repositoryError(
         ORDER_ERROR_CODES.DATABASE_FAILURE,
         'The customer order history could not be read.',
+        { cause: error },
+      );
+    }
+  }
+
+  function closeTableSession({ principal, tableId, sessionId } = {}) {
+    if (closed) {
+      throw repositoryError(ORDER_ERROR_CODES.DATABASE_FAILURE, 'The order repository is closed.');
+    }
+    authorizeDeviceRole(principal, ['kitchen', 'admin']);
+    const normalizedTableId = normalizeTableId(tableId);
+    const normalizedSessionId = normalizeUuid(sessionId, 'sessionId');
+    let transactionOpen = false;
+
+    try {
+      database.exec('BEGIN IMMEDIATE;');
+      transactionOpen = true;
+      const session = statements.findSession.get(normalizedSessionId);
+      if (!session) {
+        throw repositoryError(ORDER_ERROR_CODES.SESSION_NOT_FOUND, 'The table session was not found.');
+      }
+      if (session.table_id !== normalizedTableId) {
+        throw repositoryError(ORDER_ERROR_CODES.SESSION_CONFLICT, 'The table session does not belong to this table.');
+      }
+      if (session.closed_at_ms !== null) {
+        database.exec('COMMIT;');
+        transactionOpen = false;
+        return {
+          idempotencyResult: 'replayed',
+          tableId: normalizedTableId,
+          sessionId: normalizedSessionId,
+          closedAtMs: session.closed_at_ms,
+          event: null,
+        };
+      }
+
+      const activeOrderCount = Number(statements.countSessionActiveOrders.get(normalizedSessionId).count);
+      if (activeOrderCount > 0) {
+        throw repositoryError(
+          ORDER_ERROR_CODES.SESSION_HAS_ACTIVE_ORDERS,
+          'The table session still has non-terminal orders.',
+        );
+      }
+
+      const closedAtMs = now();
+      if (!Number.isSafeInteger(closedAtMs) || closedAtMs < session.opened_at_ms) {
+        throw repositoryError(
+          ORDER_ERROR_CODES.DATABASE_FAILURE,
+          'now must return a timestamp after the session opened.',
+        );
+      }
+      const updated = statements.closeSession.run(
+        closedAtMs,
+        closedAtMs,
+        normalizedSessionId,
+        normalizedTableId,
+      );
+      if (Number(updated.changes) !== 1) {
+        throw repositoryError(ORDER_ERROR_CODES.SESSION_CONFLICT, 'The table session is no longer current.');
+      }
+
+      const systemState = statements.findSystemState.get();
+      if (!systemState?.event_epoch) {
+        throw repositoryError(ORDER_ERROR_CODES.DATABASE_FAILURE, 'Current event epoch is unavailable.');
+      }
+      const eventPayloadJson = JSON.stringify({
+        tableId: normalizedTableId,
+        sessionId: normalizedSessionId,
+        closedAtMs,
+      });
+      const eventInsertion = statements.insertSessionCloseEvent.run(
+        systemState.event_epoch,
+        String(normalizedTableId),
+        principal.deviceId,
+        eventPayloadJson,
+        closedAtMs,
+      );
+
+      database.exec('COMMIT;');
+      transactionOpen = false;
+      return {
+        idempotencyResult: 'created',
+        tableId: normalizedTableId,
+        sessionId: normalizedSessionId,
+        closedAtMs,
+        event: {
+          eventId: Number(eventInsertion.lastInsertRowid),
+          eventEpoch: systemState.event_epoch,
+          eventType: 'table.assignment_updated',
+          payloadJson: eventPayloadJson,
+          createdAtMs: closedAtMs,
+        },
+      };
+    } catch (error) {
+      if (transactionOpen) {
+        try { database.exec('ROLLBACK;'); } catch {}
+      }
+      if (error instanceof OrderRepositoryError) throw error;
+      throw repositoryError(
+        ORDER_ERROR_CODES.DATABASE_FAILURE,
+        'The table session close transaction failed.',
         { cause: error },
       );
     }
@@ -779,6 +977,7 @@ export function createOrderRepository({ database, now = Date.now, idFactory = ra
     createOrder,
     getCustomerHistory,
     getHistory,
+    closeTableSession,
     markItemServed,
     close() {
       closed = true;

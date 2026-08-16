@@ -12,6 +12,7 @@ import {
   fetchCustomerOrderHistory,
   resolveOrderApiConfig,
   retryDelayForAttempt,
+  subscribeCustomerInvalidations,
 } from "../src/order-outbox.js";
 import { customerOrderNoticeFromOutboxEvent } from "../src/customer-order-notice.js";
 
@@ -386,6 +387,66 @@ test("API customer client exposes authenticated history through its existing run
 
   assert.deepEqual(await client.getHistory(), []);
   assert.equal(authorization, `Bearer ${token}`);
+});
+
+test("customer invalidation subscription refreshes on safe SSE events and preserves the cursor", async () => {
+  const token = "runtime-customer-secret";
+  const eventEpoch = uuid(31);
+  const event = {
+    audience: "customer",
+    eventEpoch,
+    eventId: 7,
+    type: "table.assignment_updated",
+    aggregateId: "device-config",
+    occurredAtMs: 1786786940836,
+    payload: { resource: "deviceConfig", refreshRequired: true },
+  };
+  const timers = [];
+  const requests = [];
+  const received = [];
+  const encoded = new TextEncoder().encode(`id: 7\ndata: ${JSON.stringify(event)}\n\n`);
+  const env = {
+    WARUN_ORDER_MODE: "api",
+    WARUN_API_BASE: "https://api.example.test/v1",
+    WARUN_API_TOKEN: token,
+    location: { origin: "https://tablet.example.test" },
+    navigator: { onLine: true },
+    setTimeout(callback, delay) { timers.push({ callback, delay }); return timers.length; },
+    clearTimeout() {},
+  };
+  const unsubscribe = subscribeCustomerInvalidations({
+    config: resolveOrderApiConfig(env),
+    env,
+    fetchImpl: async (url, options) => {
+      requests.push({ url, options });
+      return {
+        ok: true,
+        status: 200,
+        headers: { get(name) { return name === "X-Event-Epoch" ? eventEpoch : null; } },
+        body: {
+          getReader() {
+            let done = false;
+            return { async read() { if (done) return { done: true }; done = true; return { done: false, value: encoded }; } };
+          },
+        },
+      };
+    },
+    onEvent: (value) => received.push(value),
+  });
+
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(received, [event]);
+  assert.equal(requests[0].url, "https://api.example.test/v1/events");
+  assert.equal(requests[0].options.headers.Authorization, `Bearer ${token}`);
+  assert.equal(requests[0].options.headers["X-Event-Epoch"], undefined);
+  assert.equal(requests[0].options.headers["Last-Event-ID"], undefined);
+  assert.equal(timers.length, 1);
+
+  timers[0].callback();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(requests[1].options.headers["X-Event-Epoch"], eventEpoch);
+  assert.equal(requests[1].options.headers["Last-Event-ID"], "7");
+  unsubscribe();
 });
 
 test("API mode without runtime configuration is safe and does not use demo transport", async () => {
