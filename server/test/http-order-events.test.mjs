@@ -1005,7 +1005,8 @@ test('snapshot response is cursor-consistent and strictly role scoped', async ()
     assert.equal(customer.json.eventEpoch, customer.json.device.eventEpoch);
     assert.equal(customer.json.lastEventId, customer.json.menu.lastEventId);
     assert.equal(Object.hasOwn(customer.json, 'activeOrders'), false);
-    assert.doesNotMatch(JSON.stringify(customer.json.menu), /priceYen|kitchenAlias/);
+    assert.equal(customer.json.menu.items.every((item) => Number.isSafeInteger(item.priceYen)), true);
+    assert.doesNotMatch(JSON.stringify(customer.json.menu), /kitchenAlias/);
 
     const kitchen = await request({ port, path: '/v1/snapshot', headers: bearer(KITCHEN_TOKEN) });
     assert.equal(kitchen.statusCode, 200);

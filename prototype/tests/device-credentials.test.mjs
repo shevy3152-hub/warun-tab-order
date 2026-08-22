@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { claimCustomerDevice, createMemoryCredentialStore, loadOrCreateCustomerDevice } from '../src/device-credentials.js';
+import { claimCustomerDevice, createMemoryCredentialStore, loadOrCreateCustomerDevice, pairingClaimErrorMessage } from '../src/device-credentials.js';
 
 const DEVICE_ID = '00000000-0000-4000-8000-000000000001';
 const TOKEN = 'token-is-only-used-by-the-credential-store';
@@ -28,4 +28,25 @@ test('deviceId survives reload and claim stores credentials without putting toke
   const reloaded = await store.load();
   assert.equal(reloaded.deviceId, DEVICE_ID);
   assert.equal(reloaded.token, TOKEN);
+});
+
+test('claim preserves pairing status and shows actionable expiry/conflict messages', async () => {
+  for (const [status, code, message] of [
+    [410, 'PAIRING_EXPIRED', 'コード期限切れ：管理画面で新しいQRを発行してください。'],
+    [409, 'PAIRING_CONFLICT', '既存端末競合：この端末は登録済みです。管理画面で状態を確認してください。'],
+  ]) {
+    await assert.rejects(
+      () => claimCustomerDevice({
+        store: createMemoryCredentialStore({ deviceId: DEVICE_ID, token: null, config: null }),
+        baseUrl: 'http://tablet.local/v1',
+        pairingCode: 'ABCD2345EFGH',
+        deviceId: DEVICE_ID,
+        displayName: 'A90',
+        appVersion: 'test',
+        fetchImpl: async () => ({ ok: false, status, async json() { return { error: { code } }; } }),
+      }),
+      (error) => error.status === status && error.code === code,
+    );
+    assert.equal(pairingClaimErrorMessage({ status, code }), message);
+  }
 });

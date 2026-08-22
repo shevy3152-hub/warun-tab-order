@@ -39,7 +39,7 @@ const EVENT_TYPES_BY_ROLE = Object.freeze({
     'table.assignment_updated',
   ]),
 });
-const SUPPORTED_SCHEMA_VERSION = 2;
+const SUPPORTED_SCHEMA_VERSION = 4;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const OPAQUE_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
 
@@ -101,6 +101,55 @@ function optionalImageUri(source, target) {
   return target;
 }
 
+function optionalStringField(source, target, key) {
+  if (Object.hasOwn(source, key)) target[key] = requireString(source[key]);
+  return target;
+}
+
+function mapProductDetail(detail) {
+  requireObject(detail);
+  const response = { enabled: requireBoolean(detail.enabled) };
+  for (const key of ['imageUri', 'reading', 'itemType', 'origin', 'producer', 'taste', 'aroma', 'sweetness', 'finish', 'recommendation', 'description']) {
+    optionalStringField(detail, response, key);
+  }
+  return response;
+}
+
+function mapMenuVariant(variant, admin = false) {
+  requireObject(variant);
+  const response = {
+    variantId: requireOpaqueId(variant.variantId),
+    name: requireString(variant.name),
+    volumeLabel: requireString(variant.volumeLabel),
+    priceYen: requireInteger(variant.priceYen),
+    sortOrder: requireInteger(variant.sortOrder),
+  };
+  if (admin) {
+    response.isActive = requireBoolean(variant.isActive);
+    response.version = requireInteger(variant.version, 1);
+  }
+  if (Object.hasOwn(variant, 'temperatureOptions')) {
+    const temperatures = requireArray(variant.temperatureOptions);
+    if (temperatures.length === 0 || temperatures.some((temperature) => !['冷酒', '燗酒'].includes(temperature))) throw invalidDto();
+    response.temperatureOptions = temperatures.map((temperature) => requireString(temperature));
+  }
+  return response;
+}
+
+function mapServingOption(option, admin = false) {
+  requireObject(option);
+  const response = {
+    servingOptionId: requireOpaqueId(option.servingOptionId),
+    name: requireString(option.name),
+    sortOrder: requireInteger(option.sortOrder),
+  };
+  if (admin) {
+    response.isActive = requireBoolean(option.isActive);
+    response.version = requireInteger(option.version, 1);
+  }
+  return response;
+}
+
 function mapPublicCategory(category) {
   requireObject(category);
   return {
@@ -124,15 +173,21 @@ function mapAdminCategory(category) {
 
 function mapCustomerMenuItem(item) {
   requireObject(item);
-  return optionalImageUri(item, {
+  const response = optionalImageUri(item, {
     menuItemId: requireOpaqueId(item.menuItemId),
     categoryId: requireOpaqueId(item.categoryId),
     formalName: requireString(item.formalName),
     description: requireString(item.description),
+    priceYen: requireInteger(item.priceYen),
     isSoldOut: requireBoolean(item.isSoldOut),
     sortOrder: requireInteger(item.sortOrder),
     version: requireInteger(item.version, 1),
+    variants: requireArray(item.variants).map((variant) => mapMenuVariant(variant)),
+    servingOptions: requireArray(item.servingOptions).map((option) => mapServingOption(option)),
   });
+  optionalStringField(item, response, 'sectionKey');
+  if (Object.hasOwn(item, 'detail')) response.detail = mapProductDetail(item.detail);
+  return response;
 }
 
 function mapKitchenMenuItem(item) {
@@ -150,7 +205,7 @@ function mapKitchenMenuItem(item) {
 
 function mapAdminMenuItem(item) {
   requireObject(item);
-  return optionalImageUri(item, {
+  const response = optionalImageUri(item, {
     menuItemId: requireOpaqueId(item.menuItemId),
     categoryId: requireOpaqueId(item.categoryId),
     formalName: requireString(item.formalName),
@@ -162,7 +217,12 @@ function mapAdminMenuItem(item) {
     sortOrder: requireInteger(item.sortOrder),
     version: requireInteger(item.version, 1),
     updatedAtMs: requireInteger(item.updatedAtMs),
+    detail: mapProductDetail(item.detail),
+    variants: requireArray(item.variants).map((variant) => mapMenuVariant(variant, true)),
+    servingOptions: requireArray(item.servingOptions).map((option) => mapServingOption(option, true)),
   });
+  optionalStringField(item, response, 'sectionKey');
+  return response;
 }
 
 function mapCursor(cursor) {
@@ -197,6 +257,9 @@ function mapStaffOrderItem(item) {
   }
   if (Object.hasOwn(item, 'servedAtMs') && item.servedAtMs !== null) {
     response.servedAtMs = requireInteger(item.servedAtMs);
+  }
+  for (const key of ['variantId', 'variantNameSnapshot', 'variantVolumeSnapshot', 'temperatureSnapshot', 'servingOptionId', 'servingOptionNameSnapshot']) {
+    optionalStringField(item, response, key);
   }
   return response;
 }
@@ -237,6 +300,9 @@ function mapCustomerOrderItem(item) {
   }
   if (Object.hasOwn(item, 'servedAtMs') && item.servedAtMs !== null) {
     response.servedAtMs = requireInteger(item.servedAtMs);
+  }
+  for (const key of ['variantId', 'variantNameSnapshot', 'variantVolumeSnapshot', 'temperatureSnapshot', 'servingOptionId', 'servingOptionNameSnapshot']) {
+    optionalStringField(item, response, key);
   }
   return response;
 }
@@ -387,6 +453,68 @@ export function mapMenuResponse(menu) {
   }
 
   throw invalidDto();
+}
+
+export function mapCatalogWriteResponse(result) {
+  requireObject(result);
+  return {
+    menuItemId: requireOpaqueId(result.menuItemId),
+    version: requireInteger(result.version, 1),
+    eventEpoch: requireUuid(result.event?.eventEpoch),
+    eventId: requireInteger(result.event?.eventId, 1),
+  };
+}
+
+function mapPairingTable(table) {
+  requireObject(table);
+  const response = {
+    tableId: requireInteger(table.tableId, 1),
+    label: requireString(table.label),
+  };
+  if (Object.hasOwn(table, 'deviceId')) response.deviceId = requireUuid(table.deviceId);
+  if (Object.hasOwn(table, 'deviceDisplayName')) response.deviceDisplayName = requireString(table.deviceDisplayName);
+  if (Object.hasOwn(table, 'deviceStatus')) response.deviceStatus = requireString(table.deviceStatus);
+  return response;
+}
+
+export function mapPairingPreflightResponse({ runtimeInfo, tables, requestOrigin = '' } = {}) {
+  requireObject(runtimeInfo);
+  requireObject(tables);
+  const available = requireArray(tables.available).map(mapPairingTable);
+  const assigned = requireArray(tables.assigned).map(mapPairingTable);
+  const databaseTarget = requireOneOf(runtimeInfo.databaseTarget, new Set(['safe-copy', 'production', 'other', 'unknown']));
+  const isProduction = requireBoolean(runtimeInfo.isProduction);
+  const webOrigins = requireArray(runtimeInfo.webOrigins).map(requireString);
+  const webOriginMatches = requestOrigin === '' || webOrigins.includes(requestOrigin);
+  let blockedReason = null;
+  if (databaseTarget !== 'safe-copy' || isProduction) blockedReason = 'SAFE_COPY_MISMATCH';
+  else if (!webOriginMatches) blockedReason = 'WEB_API_URL_MISMATCH';
+  else if (available.length === 0) blockedReason = 'NO_AVAILABLE_TABLE';
+  return {
+    authentication: { status: 'valid', role: 'admin' },
+    database: {
+      path: requireString(runtimeInfo.databasePath),
+      target: databaseTarget,
+      isProduction,
+      environment: requireString(runtimeInfo.environment),
+    },
+    server: {
+      apiPort: requireInteger(runtimeInfo.apiPort, 1),
+      webPort: requireInteger(runtimeInfo.webPort, 1),
+      lanIPv4: requireArray(runtimeInfo.lanIPv4).map(requireString),
+      webOrigins,
+      requestedOrigin: requireString(requestOrigin),
+      webOriginMatches,
+      apiBasePath: '/v1',
+      pairingUrlOrigin: requireString(runtimeInfo.pairingUrlOrigin),
+      pairingUrlTemplate: requireString(runtimeInfo.pairingUrlTemplate),
+    },
+    tables: { available, assigned },
+    pairing: {
+      canIssue: blockedReason === null,
+      blockedReason,
+    },
+  };
 }
 
 export function mapOrderReceiptResponse(result) {

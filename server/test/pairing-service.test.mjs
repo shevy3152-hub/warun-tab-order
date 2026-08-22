@@ -57,3 +57,48 @@ test('expiry, table conflict, duplicate device and attempt limit are rejected', 
   const code2 = service.createPairingCode({ role: 'customer', tableId: 1, expiresAtMs: 200000, createdByDeviceId: adminId });
   assert.throws(() => service.claimPairingCode({ pairingCode: code2.code, deviceId: duplicate, displayName: 'A90', appVersion: 'test' }), (error) => error.code === PAIRING_ERROR_CODES.DEVICE_CONFLICT);
 }));
+
+test('revoked customer device IDs are reactivated without changing order data', async () => fixture(async ({ service, adminId, db }) => {
+  const protectedCountsBefore = Object.fromEntries(['orders', 'order_items', 'event_log'].map((table) => [table, db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get().count]));
+  for (const [status, deviceNumber, byte] of [['revoked', 8, 0x48]]) {
+    const deviceId = uuid(deviceNumber);
+    db.prepare(`
+      INSERT INTO devices (
+        device_id, role, display_name, token_hash, status, app_version,
+        paired_at_ms, revoked_at_ms, created_at_ms, updated_at_ms
+      ) VALUES (?, 'customer', ?, ?, ?, 'old', 10, ?, 10, 10)
+    `).run(deviceId, 'Old A90', hash(token(byte)), status, status === 'revoked' ? 20 : null);
+    const code = service.createPairingCode({ role: 'customer', tableId: 1, expiresAtMs: 200000, createdByDeviceId: adminId });
+    const claimed = service.claimPairingCode({ pairingCode: code.code, deviceId, displayName: `${status} A90`, appVersion: 'new' });
+    const row = db.prepare('SELECT role, display_name, token_hash, status, app_version, paired_at_ms, revoked_at_ms, created_at_ms FROM devices WHERE device_id = ?').get(deviceId);
+    assert.equal(claimed.deviceId, deviceId);
+    assert.equal(row.role, 'customer');
+    assert.equal(row.display_name, `${status} A90`);
+    assert.equal(row.token_hash, hash(claimed.deviceToken));
+    assert.equal(row.status, 'active');
+    assert.equal(row.app_version, 'new');
+    assert.equal(row.paired_at_ms, 100000);
+    assert.equal(row.revoked_at_ms, null);
+    assert.equal(row.created_at_ms, 10);
+    assert.equal(db.prepare('SELECT assigned_customer_device_id FROM tables WHERE table_id = 1').get().assigned_customer_device_id, deviceId);
+    assert.equal(db.prepare('SELECT used_by_device_id FROM pairing_codes WHERE code_hash = ?').get(hash(code.code)).used_by_device_id, deviceId);
+    db.prepare('UPDATE tables SET assigned_customer_device_id = NULL WHERE table_id = 1').run();
+  }
+  assert.deepEqual(Object.fromEntries(['orders', 'order_items', 'event_log'].map((table) => [table, db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get().count])), protectedCountsBefore);
+}));
+
+test('reactivation never replaces a different active device on the target table', async () => fixture(async ({ service, adminId, db }) => {
+  const oldDeviceId = uuid(10);
+  const activeDeviceId = uuid(11);
+  db.prepare(`INSERT INTO devices (device_id, role, display_name, token_hash, status, paired_at_ms, revoked_at_ms, created_at_ms, updated_at_ms) VALUES (?, 'customer', 'Revoked A90', ?, 'revoked', 1, 2, 1, 1)`).run(oldDeviceId, hash(token(10)));
+  const code = service.createPairingCode({ role: 'customer', tableId: 1, expiresAtMs: 200000, createdByDeviceId: adminId });
+  db.prepare(`INSERT INTO devices (device_id, role, display_name, token_hash, status, paired_at_ms, created_at_ms, updated_at_ms) VALUES (?, 'customer', 'Active A90', ?, 'active', 1, 1, 1)`).run(activeDeviceId, hash(token(11)));
+  db.prepare('UPDATE tables SET assigned_customer_device_id = ? WHERE table_id = 1').run(activeDeviceId);
+  assert.throws(
+    () => service.claimPairingCode({ pairingCode: code.code, deviceId: oldDeviceId, displayName: 'Reused A90', appVersion: 'test' }),
+    (error) => error.code === PAIRING_ERROR_CODES.TABLE_CONFLICT,
+  );
+  assert.equal(db.prepare('SELECT status FROM devices WHERE device_id = ?').get(oldDeviceId).status, 'revoked');
+  assert.equal(db.prepare('SELECT assigned_customer_device_id FROM tables WHERE table_id = 1').get().assigned_customer_device_id, activeDeviceId);
+  assert.equal(db.prepare('SELECT used_by_device_id FROM pairing_codes WHERE code_hash = ?').get(hash(code.code)).used_by_device_id, null);
+}));

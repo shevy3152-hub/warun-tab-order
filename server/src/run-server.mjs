@@ -1,6 +1,6 @@
 import { createServer as createNodeServer } from "node:http";
+import { appendFileSync, mkdirSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import { networkInterfaces } from "node:os";
 import { dirname, extname, isAbsolute, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -13,6 +13,14 @@ import { createSnapshotService } from "./events/snapshot-service.mjs";
 import { createHttpServer } from "./http/http-server.mjs";
 import { createOrderRepository } from "./orders/order-repository.mjs";
 import { createPairingService } from "./pairing/pairing-service.mjs";
+import {
+  classifyDatabaseTarget,
+  createRuntimeInfo,
+  isSafeCopyRuntime,
+  lanIPv4Addresses,
+} from "./runtime-info.mjs";
+
+export { classifyDatabaseTarget, createRuntimeInfo, isSafeCopyRuntime, lanIPv4Addresses } from "./runtime-info.mjs";
 
 const DEFAULT_HOST = "0.0.0.0";
 const DEFAULT_PORT = 8787;
@@ -48,13 +56,13 @@ function injectAdminRuntime(html, adminRuntimeToken, kitchenRuntimeToken) {
     : html.replace("</head>", `${injection}</head>`);
 }
 
-export function lanIPv4Addresses(interfaces = networkInterfaces()) {
-  return Object.values(interfaces)
-    .flatMap((entries) => entries || [])
-    .filter((entry) => entry?.family === "IPv4" && !entry.internal)
-    .map((entry) => entry.address)
-    .filter((address, index, addresses) => addresses.indexOf(address) === index)
-    .sort();
+function createPairingDiagnosticLogger(logPath) {
+  if (typeof logPath !== 'string' || !logPath.trim()) return undefined;
+  const resolvedPath = resolve(logPath);
+  mkdirSync(dirname(resolvedPath), { recursive: true });
+  return (entry) => {
+    appendFileSync(resolvedPath, `${JSON.stringify(entry)}\n`, { encoding: 'utf8' });
+  };
 }
 
 export function accessUrls({ host = DEFAULT_HOST, port = DEFAULT_PORT, webPort = DEFAULT_WEB_PORT, addresses = lanIPv4Addresses() } = {}) {
@@ -86,7 +94,7 @@ export function resolveOperationalPath({ value, fallback, name, requireExplicit 
   return resolve(selected);
 }
 
-export function createWarunServer({ databasePath, now = Date.now } = {}) {
+export function createWarunServer({ databasePath, runtimeInfo = undefined, now = Date.now } = {}) {
   const connection = initializeDatabase({ databasePath });
   const { database } = connection;
   const authenticator = createDeviceAuthenticator({ database });
@@ -96,6 +104,7 @@ export function createWarunServer({ databasePath, now = Date.now } = {}) {
   const pairingService = createPairingService({ database, now });
   const snapshotService = createSnapshotService({ catalog, eventRepository });
   const sseHub = createSseHub({ eventRepository });
+  const pairingDiagnosticLogger = createPairingDiagnosticLogger(process.env.WARUN_PAIRING_DIAGNOSTIC_LOG_PATH);
   const server = createHttpServer({
     database,
     authenticator,
@@ -106,6 +115,8 @@ export function createWarunServer({ databasePath, now = Date.now } = {}) {
     sseHub,
     now,
     pairingService,
+    runtimeInfo,
+    pairingDiagnosticLogger,
   });
 
   const closeDependencies = () => {
@@ -175,14 +186,29 @@ async function main() {
   const host = process.env.WARUN_SERVER_HOST || DEFAULT_HOST;
   const port = envNumber("WARUN_SERVER_PORT", DEFAULT_PORT);
   const webPort = envNumber("WARUN_WEB_PORT", 5173);
-  const productionMode = process.env.WARUN_ENV === "production" || process.env.NODE_ENV === "production";
+  const environment = process.env.WARUN_ENV || (process.env.NODE_ENV === "production" ? "production" : "development");
+  const productionMode = environment === "production";
+  const safeCopyMode = environment === "safe-copy";
+  const repositoryRoot = resolve(SERVER_SOURCE_DIRECTORY, "..", "..");
   const databasePath = resolveOperationalPath({
     value: process.env.WARUN_DB_PATH,
     fallback: DEFAULT_DATABASE_PATH,
     name: "WARUN_DB_PATH",
-    requireExplicit: productionMode,
+    requireExplicit: productionMode || safeCopyMode,
   });
-  const application = createWarunServer({ databasePath });
+  const runtimeInfo = createRuntimeInfo({
+    databasePath,
+    repositoryRoot,
+    environment,
+    host,
+    apiPort: port,
+    webPort,
+    processId: process.pid,
+  });
+  if (safeCopyMode && !isSafeCopyRuntime(runtimeInfo)) {
+    throw new Error("WARUN_ENV=safe-copy requires a database under server/var/safe-copies and refuses production DB.");
+  }
+  const application = createWarunServer({ databasePath, runtimeInfo });
   const webRoot = resolveOperationalPath({
     value: process.env.WARUN_WEB_ROOT,
     fallback: DEFAULT_WEB_ROOT,
@@ -205,6 +231,14 @@ async function main() {
   console.log("Web UI is served with the same-origin /v1 path; no API URL is entered on tablets.");
   console.log("PC Web URL:", urls.webUrls[0]);
   for (const url of urls.webUrls.slice(1)) console.log("LAN Web URL:", url);
+  console.log("Runtime database path:", runtimeInfo.databasePath);
+  console.log("Runtime process id:", process.pid);
+  console.log("Runtime target:", runtimeInfo.databaseTarget, "production:", runtimeInfo.isProduction ? "yes" : "no");
+  console.log("Runtime Web/API ports:", `${runtimeInfo.webPort}/${runtimeInfo.apiPort}`);
+  console.log("Runtime LAN IPv4:", runtimeInfo.lanIPv4.join(", ") || "none");
+  console.log("PC admin URL:", `${runtimeInfo.localWebUrl}admin.html#/admin/devices`);
+  console.log("A90 customer URL:", `${runtimeInfo.pairingUrlOrigin}/customer/customer-01`);
+  console.log("Pairing URL origin:", runtimeInfo.pairingUrlOrigin);
 
   let keepAlive;
   await new Promise((resolveShutdown) => {

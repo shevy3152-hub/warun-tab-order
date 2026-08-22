@@ -92,7 +92,7 @@ CREATE TABLE pairing_codes (
   table_id INTEGER,
   expires_at_ms INTEGER NOT NULL CHECK (expires_at_ms >= 0),
   created_by_device_id TEXT,
-  used_by_device_id TEXT UNIQUE,
+  used_by_device_id TEXT,
   created_at_ms INTEGER NOT NULL CHECK (created_at_ms >= 0),
   used_at_ms INTEGER CHECK (used_at_ms IS NULL OR used_at_ms >= created_at_ms),
   FOREIGN KEY (table_id) REFERENCES tables(table_id)

@@ -10,6 +10,7 @@ const PAIRING_CODE_PATTERN = /^[A-HJ-NP-Z2-9]{12}$/;
 const MAX_CLAIM_ATTEMPTS = 5;
 const MAX_PAIRING_LIFETIME_MS = 24 * 60 * 60 * 1000;
 const MIN_PAIRING_LIFETIME_MS = 60 * 1000;
+const REACTIVATABLE_DEVICE_STATUSES = new Set(['revoked', 'inactive']);
 
 export const PAIRING_ERROR_CODES = Object.freeze({
   INVALID_REQUEST: 'INVALID_REQUEST',
@@ -149,6 +150,39 @@ export function createPairingService({ database, now = Date.now, idFactory = ran
     return createPairingCode({ ...request, createdByDeviceId });
   }
 
+  function getPairingTableState() {
+    const rows = database.prepare(`
+      SELECT
+        t.table_id,
+        t.label,
+        t.is_active,
+        t.assigned_customer_device_id,
+        d.display_name AS device_display_name,
+        d.status AS device_status
+      FROM tables AS t
+      LEFT JOIN devices AS d
+        ON d.device_id = t.assigned_customer_device_id
+      WHERE t.is_active = 1
+      ORDER BY t.table_id
+    `).all();
+    const available = [];
+    const assigned = [];
+    for (const row of rows) {
+      const table = { tableId: row.table_id, label: row.label };
+      if (row.assigned_customer_device_id === null) {
+        available.push(table);
+      } else {
+        assigned.push({
+          ...table,
+          deviceId: row.assigned_customer_device_id,
+          deviceDisplayName: row.device_display_name || '登録済み端末',
+          deviceStatus: row.device_status || 'unknown',
+        });
+      }
+    }
+    return Object.freeze({ available: Object.freeze(available), assigned: Object.freeze(assigned) });
+  }
+
   function claimPairingCode({ pairingCode, deviceId, displayName, appVersion } = {}) {
     if (!validPairingCode(pairingCode) || !validUuid(deviceId) || !validLabel(displayName) || !validAppVersion(appVersion)) {
       throw pairingError(PAIRING_ERROR_CODES.INVALID_REQUEST, 'Pairing claim is invalid.');
@@ -175,7 +209,19 @@ export function createPairingService({ database, now = Date.now, idFactory = ran
       if (code.role !== 'customer' || !Number.isInteger(code.table_id)) {
         throw pairingError(PAIRING_ERROR_CODES.INVALID_CODE, 'Pairing code is invalid.');
       }
-      if (database.prepare('SELECT device_id FROM devices WHERE device_id = ?').get(deviceId)) {
+      const existingDevice = database.prepare(`
+        SELECT device_id, role, status
+        FROM devices
+        WHERE device_id = ?
+      `).get(deviceId);
+      if (
+        existingDevice
+        && (
+          existingDevice.status === 'active'
+          || existingDevice.role !== 'customer'
+          || !REACTIVATABLE_DEVICE_STATUSES.has(existingDevice.status)
+        )
+      ) {
         throw pairingError(PAIRING_ERROR_CODES.DEVICE_CONFLICT, 'Device is already registered.');
       }
       const table = database.prepare(`
@@ -183,22 +229,31 @@ export function createPairingService({ database, now = Date.now, idFactory = ran
         FROM tables
         WHERE table_id = ?
       `).get(code.table_id);
-      if (!table || table.is_active !== 1 || table.assigned_customer_device_id !== null) {
+      if (!table || table.is_active !== 1 || (table.assigned_customer_device_id !== null && table.assigned_customer_device_id !== deviceId)) {
         throw pairingError(PAIRING_ERROR_CODES.TABLE_CONFLICT, 'The table is not available for pairing.');
       }
 
       const token = rawSecret(TOKEN_BYTES);
-      database.prepare(`
-        INSERT INTO devices (
-          device_id, role, display_name, token_hash, status, app_version,
-          paired_at_ms, created_at_ms, updated_at_ms
-        ) VALUES (?, 'customer', ?, ?, 'active', ?, ?, ?, ?)
-      `).run(deviceId, displayName.trim(), hashPairingSecret(token), appVersion.trim(), currentTime, currentTime, currentTime);
+      if (existingDevice) {
+        database.prepare(`
+          UPDATE devices
+          SET display_name = ?, token_hash = ?, status = 'active', app_version = ?,
+              paired_at_ms = ?, revoked_at_ms = NULL, updated_at_ms = ?
+          WHERE device_id = ?
+        `).run(displayName.trim(), hashPairingSecret(token), appVersion.trim(), currentTime, currentTime, deviceId);
+      } else {
+        database.prepare(`
+          INSERT INTO devices (
+            device_id, role, display_name, token_hash, status, app_version,
+            paired_at_ms, created_at_ms, updated_at_ms
+          ) VALUES (?, 'customer', ?, ?, 'active', ?, ?, ?, ?)
+        `).run(deviceId, displayName.trim(), hashPairingSecret(token), appVersion.trim(), currentTime, currentTime, currentTime);
+      }
       const assignment = database.prepare(`
         UPDATE tables
         SET assigned_customer_device_id = ?, version = version + 1, updated_at_ms = ?
-        WHERE table_id = ? AND is_active = 1 AND assigned_customer_device_id IS NULL
-      `).run(deviceId, currentTime, code.table_id);
+        WHERE table_id = ? AND is_active = 1 AND (assigned_customer_device_id IS NULL OR assigned_customer_device_id = ?)
+      `).run(deviceId, currentTime, code.table_id, deviceId);
       if (assignment.changes !== 1) throw pairingError(PAIRING_ERROR_CODES.TABLE_CONFLICT, 'The table is not available for pairing.');
       database.prepare(`
         UPDATE pairing_codes
@@ -237,10 +292,10 @@ export function createPairingService({ database, now = Date.now, idFactory = ran
     });
   }
 
-  function revokeDeviceRequest(request) {
+  function revokeDeviceRequest(request, { actorDeviceId } = {}) {
     exactFields(request, ['deviceId']);
-    return revokeDevice(request);
+    return revokeDevice({ ...request, actorDeviceId });
   }
 
-  return Object.freeze({ createPairingCode, createPairingCodeRequest, claimPairingCode, claimPairingCodeRequest, revokeDevice, revokeDeviceRequest });
+  return Object.freeze({ createPairingCode, createPairingCodeRequest, getPairingTableState, claimPairingCode, claimPairingCodeRequest, revokeDevice, revokeDeviceRequest });
 }

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -15,6 +16,9 @@ const EXPECTED_TABLES = [
   'pairing_codes',
   'categories',
   'menu_items',
+  'menu_item_details',
+  'menu_item_variants',
+  'menu_item_serving_options',
   'table_sessions',
   'orders',
   'order_items',
@@ -34,7 +38,9 @@ const EXPECTED_INDEXES = [
   'idx_table_sessions_table_opened',
   'uq_table_sessions_open_table',
   'idx_order_items_order_served',
-  'uq_order_items_order_menu',
+  'idx_menu_item_variants_item_sort',
+  'idx_menu_item_serving_options_item_sort',
+  'uq_order_items_order_selection',
   'idx_staff_calls_status_created',
   'idx_staff_calls_table_status',
   'idx_event_log_type_event',
@@ -85,8 +91,12 @@ const ORDER_ID = '22222222-2222-4222-8222-222222222222';
 const CLIENT_ORDER_ID = '33333333-3333-4333-8333-333333333333';
 const SECOND_ORDER_ID = '44444444-4444-4444-8444-444444444444';
 const SECOND_CLIENT_ORDER_ID = '55555555-5555-4555-8555-555555555555';
+const ADMIN_DEVICE_ID = '66666666-6666-4666-8666-666666666666';
+const REVOKED_DEVICE_ID = '77777777-7777-4777-8777-777777777777';
 const HASH_A = 'a'.repeat(64);
 const HASH_B = 'b'.repeat(64);
+const HASH_C = 'c'.repeat(64);
+const HASH_D = 'd'.repeat(64);
 
 function seedOrderParents(database) {
   database.exec(`
@@ -150,19 +160,19 @@ function legacySchemaSql() {
   return schema;
 }
 
-test('new database creates its parent directory and applies schema v2', async () => {
+test('new database creates its parent directory and applies schema v4', async () => {
   await withTemporaryDatabase(({ databasePath }) => {
     const connection = initializeDatabase({ databasePath });
     assert.equal(existsSync(databasePath), true);
-    assert.equal(connection.schemaVersion, 2);
+    assert.equal(connection.schemaVersion, 4);
     connection.close();
   });
 });
 
-test('new database records PRAGMA user_version = 2', async () => {
+test('new database records PRAGMA user_version = 4', async () => {
   await withTemporaryDatabase(({ databasePath }) => {
     const connection = initializeDatabase({ databasePath });
-    assert.equal(pragmaValue(connection.database, 'user_version'), 2);
+    assert.equal(pragmaValue(connection.database, 'user_version'), 4);
     connection.close();
   });
 });
@@ -226,16 +236,16 @@ test('synchronous mode is FULL', async () => {
   });
 });
 
-test('a valid schema v2 database can be closed and reopened', async () => {
+test('a valid schema v4 database can be closed and reopened', async () => {
   await withTemporaryDatabase(({ databasePath }) => {
     initializeDatabase({ databasePath }).close();
     const reopened = initializeDatabase({ databasePath });
-    assert.equal(reopened.schemaVersion, 2);
+    assert.equal(reopened.schemaVersion, 4);
     reopened.close();
   });
 });
 
-test('reopening schema v2 preserves existing data', async () => {
+test('reopening schema v4 preserves existing data', async () => {
   await withTemporaryDatabase(({ databasePath }) => {
     const first = initializeDatabase({ databasePath });
     first.database.exec(`
@@ -256,7 +266,77 @@ test('reopening schema v2 preserves existing data', async () => {
   });
 });
 
-test('legacy schema v1 migrates to schema v2 and assigns existing orders to one open table session', async () => {
+test('schema v4 repairs the legacy unique pairing-device constraint for revoked re-registration', async () => {
+  await withTemporaryDatabase(({ databasePath }) => {
+    const databaseModuleUrl = new URL('../src/db/database.mjs', import.meta.url).href;
+    const pairingModuleUrl = new URL('../src/pairing/pairing-service.mjs', import.meta.url).href;
+    const childSource = `
+      import { initializeDatabase } from ${JSON.stringify(databaseModuleUrl)};
+      import { createPairingService } from ${JSON.stringify(pairingModuleUrl)};
+      const first = initializeDatabase({ databasePath: process.env.WARUN_DATABASE_PATH });
+      first.database.exec(\`
+        INSERT INTO devices (
+          device_id, role, display_name, token_hash, status,
+          revoked_at_ms, paired_at_ms, created_at_ms, updated_at_ms
+        ) VALUES
+          ('${ADMIN_DEVICE_ID}', 'admin', '管理端末', '${HASH_C}', 'active', NULL, 1000, 1000, 1000),
+          ('${REVOKED_DEVICE_ID}', 'customer', '旧客席端末', '${HASH_A}', 'revoked', 2000, 1000, 1000, 2000);
+
+        INSERT INTO tables (
+          table_id, label, created_at_ms, updated_at_ms
+        ) VALUES (1, 'テーブル1', 1000, 1000);
+
+        INSERT INTO pairing_codes (
+          code_hash, role, table_id, expires_at_ms, created_by_device_id,
+          used_by_device_id, created_at_ms, used_at_ms
+        ) VALUES (
+          '${HASH_D}', 'customer', 1, 100000, '${ADMIN_DEVICE_ID}',
+          '${REVOKED_DEVICE_ID}', 1000, 2000
+        );
+
+        CREATE UNIQUE INDEX legacy_pairing_codes_used_device
+          ON pairing_codes (used_by_device_id);
+      \`);
+      first.close();
+      const connection = initializeDatabase({ databasePath: process.env.WARUN_DATABASE_PATH });
+      const db = connection.database;
+      const pairingCodesSchema = db.prepare("SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'pairing_codes'").get().sql;
+      const oldCode = db.prepare('SELECT used_by_device_id FROM pairing_codes WHERE code_hash = ?').get(${JSON.stringify(HASH_D)});
+      const service = createPairingService({ database: db, now: () => 3000 });
+      const fresh = service.createPairingCode({ role: 'customer', tableId: 1, expiresAtMs: 100000, createdByDeviceId: ${JSON.stringify(ADMIN_DEVICE_ID)} });
+      const claimed = service.claimPairingCode({ pairingCode: fresh.code, deviceId: ${JSON.stringify(REVOKED_DEVICE_ID)}, displayName: '再登録端末', appVersion: 'test' });
+      const device = db.prepare('SELECT status, revoked_at_ms FROM devices WHERE device_id = ?').get(${JSON.stringify(REVOKED_DEVICE_ID)});
+      const table = db.prepare('SELECT assigned_customer_device_id FROM tables WHERE table_id = 1').get();
+      console.log(JSON.stringify({
+        schemaHasLegacyUnique: /\\bused_by_device_id\\s+TEXT\\s+UNIQUE\\b/i.test(pairingCodesSchema),
+        oldCodeUsedBy: oldCode.used_by_device_id,
+        claimed: typeof claimed.deviceToken === 'string',
+        deviceStatus: device.status,
+        revokedAtMs: device.revoked_at_ms,
+        tableAssigned: table.assigned_customer_device_id === ${JSON.stringify(REVOKED_DEVICE_ID)},
+        pairingCodeCount: db.prepare('SELECT COUNT(*) AS count FROM pairing_codes').get().count,
+      }));
+      connection.close();
+    `;
+    const child = spawnSync(process.execPath, ['--input-type=module', '-e', childSource], {
+      cwd: process.cwd(),
+      env: { ...process.env, WARUN_DATABASE_PATH: databasePath },
+      encoding: 'utf8',
+    });
+    assert.equal(child.status, 0, child.stderr);
+    assert.deepEqual(JSON.parse(child.stdout.trim()), {
+      schemaHasLegacyUnique: false,
+      oldCodeUsedBy: REVOKED_DEVICE_ID,
+      claimed: true,
+      deviceStatus: 'active',
+      revokedAtMs: null,
+      tableAssigned: true,
+      pairingCodeCount: 2,
+    });
+  });
+});
+
+test('legacy schema v1 migrates through schema v4 and assigns existing orders to one open table session', async () => {
   await withTemporaryDatabase(({ directory }) => {
     const legacyPath = join(directory, 'legacy.sqlite3');
     const legacy = new DatabaseSync(legacyPath);
@@ -296,9 +376,9 @@ test('legacy schema v1 migrates to schema v2 and assigns existing orders to one 
       WHERE order_id = ?
     `).get(ORDER_ID);
 
-    assert.equal(connection.schemaVersion, 2);
-    assert.equal(pragmaValue(connection.database, 'user_version'), 2);
-    assert.equal(connection.database.prepare('SELECT schema_version FROM system_state').get().schema_version, 2);
+    assert.equal(connection.schemaVersion, 4);
+    assert.equal(pragmaValue(connection.database, 'user_version'), 4);
+    assert.equal(connection.database.prepare('SELECT schema_version FROM system_state').get().schema_version, 4);
     assert.deepEqual({
       orders: connection.database.prepare('SELECT COUNT(*) AS count FROM orders').get().count,
       orderItems: connection.database.prepare('SELECT COUNT(*) AS count FROM order_items').get().count,
@@ -377,11 +457,11 @@ test('invalid item quantities are rejected by CHECK constraints', async () => {
   });
 });
 
-test('schema versions newer than v2 are rejected without migration', async () => {
+test('schema versions newer than v4 are rejected without migration', async () => {
   await withTemporaryDatabase(({ directory }) => {
-    const databasePath = join(directory, 'version-2.sqlite3');
+    const databasePath = join(directory, 'version-4.sqlite3');
     const raw = new DatabaseSync(databasePath);
-    raw.exec('PRAGMA user_version = 3;');
+    raw.exec('PRAGMA user_version = 5;');
     raw.close();
 
     assert.throws(

@@ -50,6 +50,9 @@ function customerMenu(eventId = 1, overrides = {}) {
       categoryId: 'food',
       formalName: '枝豆（塩ゆで）',
       description: '架空商品',
+      priceYen: 380,
+      variants: [],
+      servingOptions: [],
       isSoldOut: false,
       sortOrder: 1,
       version: 1,
@@ -148,7 +151,8 @@ test('customer snapshot whitelists fields and omits staff state', () => {
     devices: [device], menus: [menu], orders: [orders],
   })).getSnapshot({});
   assert.deepEqual(Object.keys(snapshot), ['audience', 'eventEpoch', 'lastEventId', 'device', 'menu']);
-  assert.doesNotMatch(JSON.stringify(snapshot), /secret|tokenHash|priceYen|internalAudit/);
+  assert.doesNotMatch(JSON.stringify(snapshot), /secret|tokenHash|internalAudit/);
+  assert.equal(snapshot.menu.items[0].priceYen, 999999);
 });
 
 test('kitchen snapshot includes explicitly projected order and call state', () => {
@@ -310,7 +314,7 @@ test('real repositories compose a genuine role-scoped customer snapshot without 
     assert.equal(snapshot.audience, 'customer');
     assert.equal(snapshot.device.tableId, 1);
     assert.equal(snapshot.menu.items[0].formalName, '枝豆（塩ゆで）');
-    assert.equal('priceYen' in snapshot.menu.items[0], false);
+    assert.equal(snapshot.menu.items[0].priceYen, 380);
     assert.equal(after, before);
   });
 });

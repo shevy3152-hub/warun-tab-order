@@ -4,7 +4,8 @@ import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
 
 export const LEGACY_SCHEMA_VERSION = 1;
-export const SCHEMA_VERSION = 2;
+export const SESSION_SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 4;
 
 export const REQUIRED_TABLES = Object.freeze([
   'system_state',
@@ -14,6 +15,9 @@ export const REQUIRED_TABLES = Object.freeze([
   'pairing_codes',
   'categories',
   'menu_items',
+  'menu_item_details',
+  'menu_item_variants',
+  'menu_item_serving_options',
   'orders',
   'order_items',
   'staff_calls',
@@ -32,7 +36,9 @@ export const REQUIRED_INDEXES = Object.freeze([
   'idx_table_sessions_table_opened',
   'uq_table_sessions_open_table',
   'idx_order_items_order_served',
-  'uq_order_items_order_menu',
+  'idx_menu_item_variants_item_sort',
+  'idx_menu_item_serving_options_item_sort',
+  'uq_order_items_order_selection',
   'idx_staff_calls_status_created',
   'idx_staff_calls_table_status',
   'idx_event_log_type_event',
@@ -62,6 +68,22 @@ export const DEFAULT_SCHEMA_PATH = resolve(
   '..',
   'docs',
   'schema-v2.sql',
+);
+export const DEFAULT_V3_MIGRATION_PATH = resolve(
+  moduleDirectory,
+  '..',
+  '..',
+  '..',
+  'docs',
+  'schema-v3-migration.sql',
+);
+export const DEFAULT_V4_MIGRATION_PATH = resolve(
+  moduleDirectory,
+  '..',
+  '..',
+  '..',
+  'docs',
+  'schema-v4-migration.sql',
 );
 
 export class DatabaseInitializationError extends Error {
@@ -131,6 +153,88 @@ function tableColumns(database, tableName) {
   );
 }
 
+function hasUniquePairingCodeDeviceIndex(database) {
+  const table = database.prepare(`
+    SELECT sql
+    FROM sqlite_schema
+    WHERE type = 'table' AND name = 'pairing_codes'
+  `).get();
+  if (/\bused_by_device_id\s+TEXT\s+UNIQUE\b/i.test(table?.sql ?? '')) return true;
+
+  const explicitIndex = database.prepare(`
+    SELECT sql
+    FROM sqlite_schema
+    WHERE type = 'index'
+      AND tbl_name = 'pairing_codes'
+      AND sql IS NOT NULL
+      AND sql LIKE 'CREATE UNIQUE INDEX%'
+      AND sql LIKE '%used_by_device_id%'
+  `).get();
+  return Boolean(explicitIndex);
+}
+
+function repairPairingCodeDeviceReuseConstraint(database) {
+  if (!hasUniquePairingCodeDeviceIndex(database)) return;
+
+  let transactionOpen = false;
+  try {
+    database.exec('BEGIN IMMEDIATE;');
+    transactionOpen = true;
+    database.exec(`
+      CREATE TABLE pairing_codes_rebuilt (
+        code_hash TEXT PRIMARY KEY
+          CHECK (length(code_hash) = 64 AND code_hash NOT GLOB '*[^0-9a-f]*'),
+        role TEXT NOT NULL CHECK (role IN ('customer', 'kitchen', 'admin')),
+        table_id INTEGER,
+        expires_at_ms INTEGER NOT NULL CHECK (expires_at_ms >= 0),
+        created_by_device_id TEXT,
+        used_by_device_id TEXT,
+        created_at_ms INTEGER NOT NULL CHECK (created_at_ms >= 0),
+        used_at_ms INTEGER CHECK (used_at_ms IS NULL OR used_at_ms >= created_at_ms),
+        FOREIGN KEY (table_id) REFERENCES tables(table_id)
+          ON UPDATE RESTRICT ON DELETE RESTRICT,
+        FOREIGN KEY (created_by_device_id) REFERENCES devices(device_id)
+          ON UPDATE RESTRICT ON DELETE SET NULL,
+        FOREIGN KEY (used_by_device_id) REFERENCES devices(device_id)
+          ON UPDATE RESTRICT ON DELETE SET NULL,
+        CHECK (
+          (role = 'customer' AND table_id IS NOT NULL)
+          OR (role IN ('kitchen', 'admin') AND table_id IS NULL)
+        ),
+        CHECK (
+          (used_at_ms IS NULL AND used_by_device_id IS NULL)
+          OR (used_at_ms IS NOT NULL AND used_by_device_id IS NOT NULL)
+        )
+      );
+
+      INSERT INTO pairing_codes_rebuilt (
+        code_hash, role, table_id, expires_at_ms, created_by_device_id,
+        used_by_device_id, created_at_ms, used_at_ms
+      )
+      SELECT
+        code_hash, role, table_id, expires_at_ms, created_by_device_id,
+        used_by_device_id, created_at_ms, used_at_ms
+      FROM pairing_codes;
+
+      DROP TABLE pairing_codes;
+      ALTER TABLE pairing_codes_rebuilt RENAME TO pairing_codes;
+      CREATE INDEX idx_pairing_codes_expiry_unused
+        ON pairing_codes (expires_at_ms, used_at_ms);
+    `);
+    database.exec('COMMIT;');
+    transactionOpen = false;
+  } catch (error) {
+    if (transactionOpen) {
+      try { database.exec('ROLLBACK;'); } catch {}
+    }
+    throw new DatabaseInitializationError(
+      'MIGRATION_FAILED',
+      'The pairing code device-reuse constraint migration failed.',
+      { cause: error },
+    );
+  }
+}
+
 function hasSessionExtension(database) {
   const hasTable = schemaObjectNames(database, 'table').has('table_sessions');
   const hasColumn = tableColumns(database, 'orders').has('session_id');
@@ -144,11 +248,17 @@ function hasSessionExtension(database) {
 }
 
 function validateLegacySchema(database) {
-  const legacyTables = REQUIRED_TABLES.filter((name) => name !== 'table_sessions');
+  const legacyTables = REQUIRED_TABLES.filter((name) => ![
+    'table_sessions', 'menu_item_details', 'menu_item_variants', 'menu_item_serving_options',
+  ].includes(name));
   const legacyIndexes = REQUIRED_INDEXES.filter((name) => ![
     'idx_table_sessions_table_opened',
     'uq_table_sessions_open_table',
+    'idx_menu_item_variants_item_sort',
+    'idx_menu_item_serving_options_item_sort',
+    'uq_order_items_order_selection',
   ].includes(name));
+  legacyIndexes.push('uq_order_items_order_menu');
   const legacyTriggers = REQUIRED_TRIGGERS.filter((name) => ![
     'trg_orders_session_valid_insert',
     'trg_orders_session_immutable',
@@ -171,6 +281,54 @@ function validateLegacySchema(database) {
     throw new DatabaseInitializationError(
       'SCHEMA_INCOMPLETE',
       'Schema v1 system_state metadata is missing or invalid.',
+    );
+  }
+}
+
+function validateSchemaV2(database) {
+  const tables = REQUIRED_TABLES.filter((name) => ![
+    'menu_item_details', 'menu_item_variants', 'menu_item_serving_options',
+  ].includes(name));
+  const indexes = REQUIRED_INDEXES.filter((name) => ![
+    'idx_menu_item_variants_item_sort',
+    'idx_menu_item_serving_options_item_sort',
+    'uq_order_items_order_selection',
+  ].includes(name));
+  indexes.push('uq_order_items_order_menu');
+  assertRequiredNames(schemaObjectNames(database, 'table'), tables, 'tables');
+  assertRequiredNames(schemaObjectNames(database, 'index'), indexes, 'indexes');
+  const state = database.prepare(`
+    SELECT schema_version, event_epoch FROM system_state WHERE singleton_id = 1
+  `).get();
+  if (state?.schema_version !== SESSION_SCHEMA_VERSION || typeof state?.event_epoch !== 'string') {
+    throw new DatabaseInitializationError('SCHEMA_INCOMPLETE', 'Schema v2 metadata is missing or invalid.');
+  }
+}
+
+function migrateSchemaV2ToV3(database, migrationPath) {
+  try {
+    const migrationSql = readFileSync(migrationPath, 'utf8');
+    database.exec(migrationSql);
+  } catch (error) {
+    try { if (database.isTransaction) database.exec('ROLLBACK;'); } catch {}
+    throw new DatabaseInitializationError(
+      'MIGRATION_FAILED',
+      'The menu variant schema migration failed.',
+      { cause: error },
+    );
+  }
+}
+
+function migrateSchemaV3ToV4(database, migrationPath) {
+  try {
+    const migrationSql = readFileSync(migrationPath, 'utf8');
+    database.exec(migrationSql);
+  } catch (error) {
+    try { if (database.isTransaction) database.exec('ROLLBACK;'); } catch {}
+    throw new DatabaseInitializationError(
+      'MIGRATION_FAILED',
+      'The sake temperature schema migration failed.',
+      { cause: error },
     );
   }
 }
@@ -365,6 +523,8 @@ function validateSchema(database) {
   assertRequiredNames(schemaObjectNames(database, 'table'), REQUIRED_TABLES, 'tables');
   assertRequiredNames(schemaObjectNames(database, 'index'), REQUIRED_INDEXES, 'indexes');
   assertRequiredNames(schemaObjectNames(database, 'trigger'), REQUIRED_TRIGGERS, 'triggers');
+  assertRequiredNames(tableColumns(database, 'menu_item_variants'), ['temperature_options_json'], 'menu_item_variants columns');
+  assertRequiredNames(tableColumns(database, 'order_items'), ['temperature_snapshot'], 'order_items columns');
 
   const state = database
     .prepare(`
@@ -436,9 +596,16 @@ function safelyClose(database) {
   }
 }
 
-export function initializeDatabase({ databasePath, schemaPath = DEFAULT_SCHEMA_PATH } = {}) {
+export function initializeDatabase({
+  databasePath,
+  schemaPath = DEFAULT_SCHEMA_PATH,
+  v3MigrationPath = DEFAULT_V3_MIGRATION_PATH,
+  v4MigrationPath = DEFAULT_V4_MIGRATION_PATH,
+} = {}) {
   const resolvedDatabasePath = resolveFilePath(databasePath, 'databasePath');
   const resolvedSchemaPath = resolveFilePath(schemaPath, 'schemaPath');
+  const resolvedV3MigrationPath = resolveFilePath(v3MigrationPath, 'v3MigrationPath');
+  const resolvedV4MigrationPath = resolveFilePath(v4MigrationPath, 'v4MigrationPath');
 
   mkdirSync(dirname(resolvedDatabasePath), { recursive: true });
 
@@ -447,17 +614,32 @@ export function initializeDatabase({ databasePath, schemaPath = DEFAULT_SCHEMA_P
     database = new DatabaseSync(resolvedDatabasePath);
     configureConnectionPragmas(database);
 
-    const currentVersion = Number(pragmaValue(database, 'user_version'));
+    let currentVersion = Number(pragmaValue(database, 'user_version'));
     const tables = userTableNames(database);
 
     if (currentVersion === 0 && tables.length === 0) {
       enableWriteAheadLogging(database);
       const schemaSql = readFileSync(resolvedSchemaPath, 'utf8');
       database.exec(schemaSql);
+      currentVersion = Number(pragmaValue(database, 'user_version'));
     } else if (currentVersion === LEGACY_SCHEMA_VERSION) {
       validateLegacySchema(database);
       migrateSchemaV1ToV2(database);
       enableWriteAheadLogging(database);
+      currentVersion = SESSION_SCHEMA_VERSION;
+    }
+
+    if (currentVersion === SESSION_SCHEMA_VERSION) {
+      validateSchemaV2(database);
+      migrateSchemaV2ToV3(database, resolvedV3MigrationPath);
+      enableWriteAheadLogging(database);
+      currentVersion = 3;
+    }
+
+    if (currentVersion === 3) {
+      migrateSchemaV3ToV4(database, resolvedV4MigrationPath);
+      enableWriteAheadLogging(database);
+      currentVersion = SCHEMA_VERSION;
     } else if (currentVersion === SCHEMA_VERSION) {
       if (!hasSessionExtension(database)) {
         throw new DatabaseInitializationError(
@@ -471,13 +653,14 @@ export function initializeDatabase({ databasePath, schemaPath = DEFAULT_SCHEMA_P
         'UNVERSIONED_DATABASE',
         `Refusing to initialize an unversioned database containing tables: ${tables.join(', ')}`,
       );
-    } else {
+    } else if (currentVersion !== SCHEMA_VERSION) {
       throw new DatabaseInitializationError(
         'UNSUPPORTED_SCHEMA_VERSION',
         `Unsupported SQLite schema version ${currentVersion}; expected ${SCHEMA_VERSION}.`,
       );
     }
 
+    repairPairingCodeDeviceReuseConstraint(database);
     configureConnectionPragmas(database);
 
     const appliedVersion = Number(pragmaValue(database, 'user_version'));

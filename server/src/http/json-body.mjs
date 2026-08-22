@@ -55,7 +55,7 @@ const TOP_LEVEL_KEYS = new Set([
   'clientCreatedAtMs',
   'items',
 ]);
-const ITEM_KEYS = new Set(['menuItemId', 'quantity']);
+const ITEM_KEYS = new Set(['menuItemId', 'quantity', 'variantId', 'servingOptionId']);
 
 function bodyError(code, options = undefined) {
   return new OrderJsonBodyError(code, options);
@@ -365,7 +365,7 @@ function requireExactKeys(value, allowedKeys, requiredKeys) {
 
 function validateOrderRequest(value) {
   requireExactKeys(value, TOP_LEVEL_KEYS, ['schemaVersion', 'clientOrderId', 'items']);
-  if (value.schemaVersion !== 1 || !CLIENT_ORDER_ID_PATTERN.test(value.clientOrderId)) {
+  if (![1, 2].includes(value.schemaVersion) || !CLIENT_ORDER_ID_PATTERN.test(value.clientOrderId)) {
     throw bodyError(ORDER_JSON_BODY_ERROR_CODES.INVALID_ORDER_REQUEST);
   }
   if (
@@ -378,7 +378,7 @@ function validateOrderRequest(value) {
     throw bodyError(ORDER_JSON_BODY_ERROR_CODES.INVALID_ORDER_REQUEST);
   }
 
-  const seenMenuItemIds = new Set();
+  const seenSelections = new Set();
   const items = value.items.map((item) => {
     requireExactKeys(item, ITEM_KEYS, ['menuItemId', 'quantity']);
     if (
@@ -387,16 +387,35 @@ function validateOrderRequest(value) {
       || !Number.isInteger(item.quantity)
       || item.quantity < 1
       || item.quantity > MAX_QUANTITY
-      || seenMenuItemIds.has(item.menuItemId)
     ) {
       throw bodyError(ORDER_JSON_BODY_ERROR_CODES.INVALID_ORDER_REQUEST);
     }
-    seenMenuItemIds.add(item.menuItemId);
-    return Object.freeze({ menuItemId: item.menuItemId, quantity: item.quantity });
+    const variantId = item.variantId ?? null;
+    const servingOptionId = item.servingOptionId ?? null;
+    for (const selectionId of [variantId, servingOptionId]) {
+      if (selectionId !== null && (typeof selectionId !== 'string' || !MENU_ITEM_ID_PATTERN.test(selectionId))) {
+        throw bodyError(ORDER_JSON_BODY_ERROR_CODES.INVALID_ORDER_REQUEST);
+      }
+    }
+    if (
+      (variantId !== null && servingOptionId !== null)
+      || (value.schemaVersion === 1 && (variantId !== null || servingOptionId !== null))
+    ) {
+      throw bodyError(ORDER_JSON_BODY_ERROR_CODES.INVALID_ORDER_REQUEST);
+    }
+    const selectionKey = `${item.menuItemId}\u0000${variantId ?? ''}\u0000${servingOptionId ?? ''}`;
+    if (seenSelections.has(selectionKey)) throw bodyError(ORDER_JSON_BODY_ERROR_CODES.INVALID_ORDER_REQUEST);
+    seenSelections.add(selectionKey);
+    return Object.freeze({
+      menuItemId: item.menuItemId,
+      quantity: item.quantity,
+      ...(variantId ? { variantId } : {}),
+      ...(servingOptionId ? { servingOptionId } : {}),
+    });
   });
 
   const normalized = {
-    schemaVersion: 1,
+    schemaVersion: value.schemaVersion,
     clientOrderId: value.clientOrderId,
     items: Object.freeze(items),
   };

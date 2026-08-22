@@ -1,5 +1,179 @@
 # Persistent Context
 
+## Pairing claimの実原因とsafe-copy修復 2026-08-22
+
+- A90の有効期限内QR claimはsafe-copyへ到達したがHTTP 500、発生段階は`claim`だった。safe-copy DBの一時コピーで`UNIQUE constraint failed: pairing_codes.used_by_device_id`を再現し、過去に使用済みのpairing codeに残る同じdeviceIdがrevoked端末の再登録を阻害していたことを確認した。期限切れQRは別途HTTP 410 `PAIRING_EXPIRED`であり、今回の500原因ではない。
+- `docs/schema-v2.sql`の`pairing_codes.used_by_device_id` UNIQUE制約を除去し、`server/src/db/database.mjs`にschema v4既存DBを起動時に単一トランザクションで再構築する互換修復を追加した。使用済みpairing情報は保持し、schemaVersion 4は維持する。active端末の409、期限切れ410、revoked customer deviceIdの再有効化ルールは変更していない。
+- safe-copy DBはバックアップ`server/var/safe-copies/initial-menu-20260818-before-pairing-reuse-fix-20260822-215156.sqlite3`作成後に修復した。修復後のpairing code 24件、使用済み3件、orders 1件、order_items 1件、event_log 53件がバックアップと一致し、production DBは使用していない。
+- schema修復テストを含むserver関連30/30が成功。schema v4のlegacy unique制約を持つ一時DBで、同じrevoked deviceIdの新規claim相当201、端末再有効化、テーブル割当、使用済みpairing情報保持を確認した。
+- 修復後の実safe-copy DBでのA90再登録は未確認。期限の短い既存QRは使わず、次回は修復後に新規発行したQRを1回だけ実機確認する。token、QR本文、平文コードは文書へ記録しない。
+
+## Safe-copy pairing preflight and runtime unification 2026-08-22
+
+- `DEV_STATE.md` と現況を照合した。実際のGitは `feature/sqlite-foundation`、HEAD `14e9ae3`。既存のdirty worktreeは保持し、reset/pull/merge/commitは行っていない。
+- `server/start-safe-copy.ps1` / `.cmd` と `server/src/runtime-info.mjs` が、明示されたsafe-copy DB、safe-copy判定、Web/APIポート、実測LAN IPv4、PC管理画面URL、A90客席URL、pairing URL originを生成する。production DBパスとsafe-copy外のDBは拒否し、health HTTP 200、schemaVersion 4、DB identity、プロセスを確認する。同じ非機密情報はruntime-stateにも保存する。
+- 現在のsafe-copyは `server/var/safe-copies/initial-menu-20260818.sqlite3`、PID 14540、Web `25173`、API `28787`、LAN `192.168.1.11`。healthはHTTP 200、`ready`、schemaVersion 4。PC管理画面は `http://127.0.0.1:25173/admin.html#/admin/devices`、A90客席は `http://192.168.1.11:25173/customer/customer-01`。
+- safe-copy専用tokenは `%LOCALAPPDATA%\WarunTabOrder\safe-copy\admin-token` に保存し、safe-copy admin行のhash一致を確認した。起動スクリプトはこのファイルをruntime tokenへ注入し、tokenファイルがない場合はランダム再生成せず停止する。
+- token修正後、同じPID 17064で管理preflight HTTP 200・テーブル2のpairing発行HTTP 201、再起動後PID 14540で管理preflight HTTP 200・テーブル1のpairing発行HTTP 201を確認した。admin shellはruntime configとapiToken注入を確認したが、平文token・QR本文は出力していない。
+- 接続中端末一覧と「接続解除」UIを追加し、既存の認証済みrevoke処理を再利用する。解除は端末tokenを失効し、テーブルを空きに戻すが、注文・履歴・event_logは変更しない。今回、端末解除とFirewall変更は行っていない。
+- 配信中admin bundleはHTTP 200でpreflight、QR modal、pairing URL、接続解除UIマーカーを含む。今回の実機確認ではA90のテーブル4接続成功と管理画面の接続中端末表示を確認した。接続解除ボタンの実タップ確認は未実施のため未確認とする。
+
+## Pairing再登録と端末競合の明示 2026-08-22
+
+- `server/src/pairing/pairing-service.mjs` のclaim処理は単一トランザクション内で、期限切れコードを410、active端末の再登録を409として拒否し、現行schema v4で非active状態にあたるrevoked customer deviceIdだけを再利用して再有効化する。別のactive端末が対象テーブルに割り当て済みの場合も置換せず409とする。テーブルごとのactive端末は1台に制限される。
+- 再登録では同じdeviceIdのtoken hash、表示名、app version、paired_atを更新し、revoked_atを解除する。注文、履歴、order_items、event_logは変更しない。
+- 客席側はclaim APIのHTTP statusとエラーコードを保持し、410を「コード期限切れ」、409を「既存端末競合」として表示する。400/404/401も原因を表示し、汎用メッセージだけにしない。
+- 検証済み: pairing関連server focused 6/6、prototype focused 11/11、server全体355/355、prototype全体71/71。Direct Vite buildは4580 modules transformedで成功した。pnpm buildは既存の非対話端末のmodules削除確認で停止した。
+- safe-copyのhealthはHTTP 200、pairing.htmlと配信bundleはHTTP 200/no-storeを確認した。safe-copy実DBへのclaim書き込みと、A90での再登録3ケースの実機確認は未実施である。次はsafe-copyの専用fixtureまたは許可済みテスト端末で、revoked再登録、active競合、期限切れを実通信確認する。
+
+## A90 revoked再登録の実機結果とsafe-copy再起動 2026-08-22
+
+- A90の実機再登録では「既存端末競合」が表示された。実行中safe-copy DBを読み取り専用で照合した時点では、customer devicesは4行すべてrevoked、active customerは0行、テーブル1〜4はすべて未割当だった。orders 1件、order_items 1件、event_log 53件も確認した。A90が送信したdeviceId自体はアクセスログに保存されていないため、4行のどれかとの個別一致は確認不能と記録する。
+- 原因は、修正版 `pairing-service.mjs` の更新時刻が20:31:53であるのに対し、実行中PID 15584の起動時刻が19:16:30で、revoked再利用修正前のサーバーがロードされたままだったこと。修正前コードにはdeviceIdが存在するだけで `DEVICE_CONFLICT` にする条件があった。
+- safe-copyサーバーだけを旧PID 15584から再起動し、同じDB、Web 25173、API 28787でPID 14540を起動した。healthはHTTP 200、status=ready、db=ready、schemaVersion=4、safe-copy identity一致、pairing.htmlはHTTP 200。A90の再登録実操作はこのPC側セッションから実行できず未確認である。
+- 再起動後の回帰確認はserver pairing focused 6/6、prototype pairing focused 11/11。テーブル1用QRは発行済みで、A90ではこのQRを1回だけ読み取る必要がある。
+
+## Safe-copy管理tokenの再起動後永続化 2026-08-22
+
+- 旧起動経路はruntime tokenを現在のプロセス環境だけに依存し、再起動後にsafe-copy admin hashと不一致になる経路があった。`server/scripts/provision-safe-copy-admin-token.mjs` はsafe-copy専用のローカルtokenファイルを一度だけ作成・再利用し、同じhashをsafe-copy admin行へ保存する。tokenファイルがある場合はランダム再生成せず、失敗時はDB・環境・ファイルをロールバックする。
+- `server/start-safe-copy.ps1` はリポジトリ外の `%LOCALAPPDATA%\WarunTabOrder\safe-copy\admin-token` を読み、`WARUN_ADMIN_API_TOKEN` としてsafe-copyプロセスへ注入する。既存safe-copyプロセスのpreflightが401なら、そのsafe-copy PIDだけを再起動し、起動直後のpreflight HTTP 200を必須にする。token平文はログ、画面、状態文書へ出さない。
+- 確認済み: token fileとsafe-copy admin hash一致、同一PID 17064でpreflight 200・pairing 201、再起動後PID 14540でpreflight 200・テーブル1 pairing 201、server全体355/355。production DB、既存端末解除、Firewall変更は行っていない。
+- A90の再登録実操作はこのPC側セッションから実行できず未確認。再起動後に発行済みのテーブル1用QRをA90で1回だけ読み取り、revoked deviceIdのHTTP 201再登録を確認する。
+
+## Sake serving method and temperature redesign 2026-08-19
+
+- Japanese-sake customer rows now show one `提供方法を選ぶ` button only. Inline glass/tokuri buttons and an independent `＋` are not rendered for sake; shochu continues to use `飲み方を選ぶ` and other categories continue to use the existing add button.
+- The popup title is `提供方法・温度を選ぶ`. It supports グラス 110ml/税込900円 (冷酒 only), 徳利1合 180ml/税込1000円 (冷酒・燗酒), and 徳利2合 360ml/税込2000円 (冷酒・燗酒). The displayed tax-exclusive prices use the shared formatter (818/909/1818 yen); warm service does not alter price. Cancel, close, and backdrop dismissal do not add an order item; confirmation uses `この内容で追加`.
+- Schema v4 adds `menu_item_variants.temperature_options_json` and immutable `order_items.temperature_snapshot`. Admin catalog editing/import format supports the permitted temperatures per sake variant, and server order validation rejects a temperature that is not enabled for the selected variant. The existing variant ID, formal name, form, volume, tax-included price, and temperature flow through customer order snapshots, kitchen projection, and history projection. Legacy schema v2 requests remain compatible; temperature-bearing requests use schema v3.
+- The non-production draft and fixture now define 12 sake variants (4 labels × glass, 徳利1合, 徳利2合). `docs/initial-menu-import-draft.md` keeps the 7-category/41-product menu, leaves 梅酒・果実酒 unregistered, and leaves image mappings absent so the importer reports warnings rather than inventing images.
+- Safe-copy verification used `server/var/safe-copies/initial-menu-20260818.sqlite3` only. The pre-apply backup is `server/var/safe-copies/initial-menu-20260818-before-sake-temperature-applied.sqlite3`. Dry-run and apply each completed with 0 errors and 45 image warnings; a post-apply dry-run returned 48 unchanged catalog rows. Final counts are 7 categories, 41 items, 12 sake variants, 48 shochu serving options, 1 existing order, 1 order-item snapshot, and the original order event retained. Schema version is 4 and no production DB was used.
+- Safe-copy service is currently available at `http://127.0.0.1:25173/` and LAN `http://192.168.1.10:25173/`; API health is on port 28787. The served bundle contains the one-button popup, `徳利2合`, and `temperatureSnapshot` markers, and no legacy inline sake variant button marker. A90 physical tapping and rendered screenshot acceptance remain unverified because the in-app browser trusted-path connection is unavailable; manual check is `http://192.168.1.10:25173/customer/customer-01`.
+- Verification: all server tests passed 342/342; customer UI and outbox tests passed 40/40; direct Vite build passed (including the generated client bundle); `git diff --check` found no whitespace errors beyond existing LF/CRLF conversion warnings. `pnpm run build` and `pnpm run test:sites` were attempted but stopped before task execution at the existing non-TTY `ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY` guard; dependencies and pnpm settings were not changed. No reset, pull, merge, or commit was performed.
+- Remaining scope: formal production Markdown/image mapping is not approved or applied, actual image mappings are still absent, and A90 confirmation of glass/tokuri/temperature/cancel and kitchen/history display remains manual. Next: perform the safe-copy A90 acceptance flow, then review any UI or data issue found without touching production.
+
+## Customer category selection always collapses rail 2026-08-19
+
+- Updated the shared `selectSubcategory` handler to set `majorNavOpen` to `false` after every subcategory selection. Major-category selection already used the same collapse behavior, so selecting either a major category or a central subcategory now always leaves the left navigation at the 78px collapsed rail.
+- Reopening the major-category rail and selecting `おすすめ`, `日本酒`, or any other subcategory now collapses it immediately while preserving the selected category and existing product/variant behavior. Server, DB, order processing, importer, authentication API, and non-sake/shochu actions were not changed.
+- Added a regression assertion for subcategory-selection collapse in `prototype/tests/customer-ui.test.mjs`. Customer UI tests passed 18/18 and Direct Vite production build passed. Sites preparation/inline output was refreshed for the running safe-copy server; no reset, pull, merge, or commit was performed.
+- Physical A90 interaction remains unverified because the browser connection is blocked by its trusted-path guard. Manual check: open `http://192.168.1.10:5173/customer/customer-01`, reopen the rail, select a major category or subcategory, and confirm it immediately returns to 78px.
+
+## Customer major-category rail behavior 2026-08-19
+
+- Read-only reconciliation found the requested behavior already present in the current customer implementation: `majorNavOpen` starts as `true`; all four major-category buttons call the shared `selectMajorCategory`; that handler selects the category and sets `majorNavOpen` to `false`; the selected category is shown in the collapsed rail; tapping the full collapsed rail, including `カテゴリーを変更`, sets `majorNavOpen` to `true`.
+- The same handler is used when the already-selected category is tapped again, so it also collapses on a repeat tap. The shared CSS changes the customer grid from the expanded sidebar to `78px` for `.customer-app--category-collapsed`, releasing horizontal space for product names, image placeholders, sake variant buttons, and the right order panel. Drink four-column/two-row navigation, sake direct variant buttons, shochu choices, prices, and no-total cart/history rules were not changed.
+- No App.jsx or styles.css change was needed for this pass because the behavior and 78px layout were already implemented. Added an explicit regression test covering initial expansion, all-category selection collapse, repeat selection, full-rail reopen, and the 78px CSS rule in `prototype/tests/customer-ui.test.mjs`.
+- Verification passed: related customer/order/pricing/repository tests 88/88, direct Vite production build, Sites preparation, direct Sites worker tests 4/4, and safe-copy HTTP 200 with collapsed-rail, 78px CSS, category-change, and sake-variant bundle markers. No server, DB, order processing, importer, authentication API, reset, pull, merge, or commit was performed.
+- Physical A90 tap and screenshot acceptance remain unverified because the browser connection was rejected by its trusted-path guard. Manual next step: on A90 open `http://192.168.1.10:5173/customer/customer-01`, tap each major category including the already-selected one, confirm the sidebar becomes 78px and the center expands, then tap the full rail to reopen it.
+
+## Customer sake row variant controls 2026-08-19
+
+- Japanese-sake rows no longer render the combined `提供形態を選ぶ`/variant/plus control. Each existing variant is now an independent horizontal button, showing its existing name and volume (`グラス 110ml` or `徳利 180ml`) plus the shared tax-exclusive-large/tax-included-small price formatter.
+- Pressing a glass or tokuri button calls the existing `addSelection(item, { variant })` path directly, so the existing variant ID, price, snapshot, kitchen, history, and order handling remain in use. The unused sake selection modal state was removed from the customer row; non-sake plus buttons and shochu serving-option selection were not changed.
+- Reduced the sake image placeholder to a fixed 64px wide/108px high frame for the base layout and 52px wide/82px high at the A90-oriented breakpoint. Variant buttons remain horizontal and provide 112px/96px minimum height, exceeding the 48–56px tap target requirement.
+- Changed only the customer implementation/test/context files for this pass: `prototype/src/App.jsx`, `prototype/src/styles.css`, `prototype/tests/customer-ui.test.mjs`, and this section. No server, DB, importer, authentication API, menu data, or production target was changed.
+- Verification passed: related customer/order/pricing/repository tests 87/87, direct Vite production build, Sites preparation, direct Sites worker tests 4/4, and safe-copy HTTP 200. The served bundle contains `sake-variant-button` and no legacy `sake-select-button` or `sake-selection__options` markers. `pnpm run build` and `pnpm run test:sites` remain blocked before execution by the existing non-TTY modules-purge guard; no dependencies or pnpm settings were changed.
+- A90 physical interaction and rendered screenshot acceptance remain unverified because the browser connection was rejected by its trusted-path guard. Manual next step: open `http://192.168.1.10:5173/customer/customer-01` on A90, select 日本酒, confirm the two large variant buttons and prices are readable, tap each once, and verify other categories still use `＋`.
+
+## Customer shared header compaction 2026-08-19
+
+- The existing shared `CustomerScreen` structure was retained and the central product-list header was compacted through common CSS. `MENU` and the page title now sit on one compact baseline; the `大分類 > 細分類` breadcrumb and description remain in the same hierarchy, and the red divider stays below the title with a deliberate gap.
+- Reduced the customer content top padding, shared `.menu-heading` height/gaps, and shared `.subcategory-nav` vertical padding. The drink navigation remains four columns by two rows. The same rules apply to drink, food, special, seasonal, every subcategory, multi-item lists, and empty product-list states; staff, kitchen, admin, and pairing screens are not targeted.
+- Product rows, empty-state content, menu data, prices, sake variants, shochu serving choices, cart/order processing, server, DB, importer, authentication API, collapsed 78px rail, and major-category behavior were not changed for this pass. `App.jsx` already supplied the shared markup, so this pass changed only `prototype/src/styles.css`, `prototype/tests/customer-ui.test.mjs`, and this context entry.
+- Added a customer UI regression test that checks the shared compact header, four-column subcategory layout, and common empty-state/list rendering. Related customer/order/pricing/repository tests passed 86/86; direct Vite build passed; Sites preparation and direct Sites worker tests passed 4/4; safe-copy HTTP returned 200 and served the compact header CSS plus breadcrumb, subcategory, and empty-state bundle markers.
+- `pnpm run build` and `pnpm run test:sites` remain blocked before task execution by the existing non-TTY `ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY` modules-purge guard. No dependencies or pnpm settings were changed. `git diff --check` was run with no whitespace errors beyond existing LF/CRLF conversion warnings.
+- A rendered 1280x800 screenshot and physical A90 acceptance remain unverified: the browser connection was rejected by its trusted-path guard. Manual next step: open the safe-copy LAN URL `http://192.168.1.10:5173/customer/customer-01` on A90 and verify compact headings, no title/divider overlap, visible product rows or empty state, and both expanded/collapsed category navigation states.
+
+## Customer visual hierarchy adjustment 2026-08-19
+
+- Used the user-supplied `C:\Users\user\Pictures\焼酎.jpeg` and `C:\Users\user\Pictures\日本酒.jpeg` only as visual references for hierarchy, density, and control placement. No image pixels, product names, prices, capacities, totals, or catalog data from those images were copied into the app.
+- The customer menu heading now presents a breadcrumb-like `大分類 > 細分類` hierarchy, with `日本酒` displayed as `日本酒・地酒` in the heading while the existing `日本酒` subcategory ID and variant model remain unchanged.
+- Drink subcategories now use a fixed four-column/two-row layout instead of a horizontally scrolling strip. The existing four major categories and the 78px collapsed red rail with `カテゴリーを変更` remain intact.
+- Product rows now reserve a consistent `画像なし` frame for non-sake items so image/name/description/price/add controls remain aligned in one row without introducing menu imagery. Sake rows retain the existing detail button and variant modal, while the row action visibly lists the existing variant names/volumes before opening the modal.
+- Tax-exclusive large price/tax-included small price, no customer cart/history subtotal or total, existing shochu serving selection, right-side order panel, and order snapshot paths were preserved. Only `prototype/src/App.jsx`, `prototype/src/styles.css`, `prototype/tests/customer-ui.test.mjs`, and this context section were changed for this visual pass; server, DB, importer, and authentication API were not changed.
+- Verification passed: related customer/order/pricing/repository tests 85/85, direct Vite build, Sites preparation, direct Sites worker tests 4/4, safe-copy HTTP bundle markers for breadcrumb/two-row navigation/sake choices/image placeholder, and `git diff --check` with no whitespace errors beyond existing LF/CRLF warnings.
+- The safe-copy server is running from `server/var/safe-copies/initial-menu-20260818.sqlite3` at `http://127.0.0.1:5173/` and `http://192.168.1.10:5173/`. No production DB was used. `pnpm run test:sites` remains subject to the existing non-TTY modules-purge guard; direct tests were used without changing dependencies or pnpm settings.
+- A rendered 1280x800 screenshot comparison and physical A90 interaction acceptance remain unverified because the in-app Browser runtime could not be reconnected in this environment. Manual next step: open the safe-copy LAN URL on A90 and check both expanded/collapsed rails, two-row drink navigation, Japanese sake modal, and no-total cart/history behavior.
+
+## Customer category wireframe restructuring 2026-08-19
+
+- Product Design scope was limited to information architecture and wireframe behavior using `izakaya-preview.png` as the broad visual reference. No image generation, product image import, icon replacement, color/font recreation, or new design system was performed.
+- The customer screen now has four view-only major categories: `ドリンク`, `フード`, `名物`, and `季節・気まぐれ`. The initial state shows the major-category rail; selecting a major category collapses the rail to a 78px red bar showing the current category and `カテゴリーを変更`. Tapping the entire bar reopens the major-category selector.
+- The selected major category exposes a central upper subcategory navigation. Drink subcategories are `おすすめ`, `ビール`, `ハイボール`, `サワー・酎ハイ`, `焼酎`, `日本酒`, `ソフトドリンク`, and `ノンアル`. Existing catalog IDs are mapped for display only; no DB category or product rows were added. Categories/items not represented by the safe-copy drink IDs remain visible through the existing menu fallback under the drink view.
+- Food, special, and seasonal subcategory labels are wireframe-only because the current safe-copy catalog has no corresponding product data. The central product list and right order panel remain in place; the collapsed rail only releases horizontal space for them.
+- Existing sake variant selection, shochu serving selection, shared tax display, cart/history no-total rule, and order snapshot paths were retained. Server, DB, importer, and authentication API files were not changed for this UI task.
+- Verification passed: customer/order/pricing/repository tests 85/85; direct Vite build; Sites preparation and direct Sites worker tests 4/4; safe-copy server started with `server/var/safe-copies/initial-menu-20260818.sqlite3` and served the new subcategory/collapsed-rail bundle at `http://127.0.0.1:5173/` and `http://192.168.1.10:5173/`. `pnpm run test:sites` remained blocked by the existing non-TTY modules-purge guard; no dependency or pnpm setting was changed.
+- `git diff --check` reported no whitespace errors, only existing LF/CRLF conversion warnings. No reset, pull, merge, or commit was performed, and the pre-existing dirty worktree was preserved.
+- The in-app browser runtime could not be reconnected because its current Browser dependency path was rejected by the trusted-path guard. Therefore the 1280×800 rendered interaction screenshot and physical A90 flow are not claimed as completed; they remain manual acceptance steps against the safe-copy URL.
+- Next: on A90, open the safe-copy LAN URL, select each major category, verify the collapsed rail/reopen behavior and drink subcategory switching, then check Japanese-sake variant selection without submitting to production.
+
+## Sake variant selection restoration 2026-08-18
+
+- On the existing dirty worktree at `feature/sqlite-foundation` / `14e9ae3c5d565d992b20908cec9f5530ffe3c9e0`, the customer sake row was changed to fail closed and open an explicit variant-selection modal. The product name and right-side action no longer add a sake item directly; the action is labeled `提供形態を選ぶ`.
+- The modal offers the existing variant model, including `グラス 110ml` and `徳利 180ml`, and reuses `PriceDisplay`: tax-exclusive price is large and tax-included master price is shown smaller. Selecting a variant calls the existing `addSelection`; cancel, backdrop close, and the close control clear the pending selection without adding an item.
+- Existing snapshot, kitchen, and customer-history paths were retained. The selected `variantId`, variant name/volume, and variant tax-included price continue through the existing order payload and immutable order-item snapshot; shochu serving selection and non-sake add behavior were not changed.
+- Changed only the sake customer UI styling/test coverage in `prototype/src/App.jsx`, `prototype/src/styles.css`, and `prototype/tests/customer-ui.test.mjs` for this fix. No production DB or safe-copy catalog rows were changed, and no reset, pull, merge, or commit was performed.
+- Verification passed: focused customer/order/pricing/repository tests 84/84; direct Vite build, Sites preparation, and client inlining; the safe-copy HTTP response contains `sake-selection__option` and no `sake-variants`; `git diff --check` reported no whitespace errors (only existing LF/CRLF warnings).
+- The in-app browser reached the safe-copy customer pairing screen, but no registered customer credential was available there, so the post-pairing A90 product/modal, order, kitchen, and history flow remains a physical acceptance step. The safe-copy server remains the target for that check; production must not be used.
+- Next: pair the A90 against the running safe-copy server, verify the two variant choices and cancel behavior, then submit one test order and confirm the selected variant in kitchen/history without using production data.
+
+## Pairing QR regression and restoration 2026-08-18
+
+- Diagnosis: `prototype/src/qr-code.js` and QR-related CSS were present, but the current `App.jsx` did not import or render the QR generator; it rendered only the raw input code. `pairing-main.jsx` did not read a URL fragment. The served `prototype/dist/client` was older than the source and also contained the code-only UI. Git history showed the QR display in `f71f161`/`a79b82c`, then removed from the checkpoint in `25ae7e9`.
+- Restored the admin QR modal with a LAN URL fragment payload `pairing.html#p=<normalized-code>`. The pairing page now reads the fragment and pre-fills the code; the admin page does not display the raw code. QR generation/API failures now produce a visible alert instead of silently falling back to code-only output.
+- Rebuilt the client bundle with direct Vite plus the existing Sites preparation/inline scripts. The fresh served bundle contains the QR generator, QR modal, and fragment reader. No production DB was used or changed; the existing dirty worktree was retained and no reset, pull, merge, or commit was performed.
+- Browser verification against the running safe-copy server at `http://192.168.1.10:5173/admin.html#/admin/devices` showed the QR issue button, then a modal with an accessible `pairing QR code` image and no raw input-code text. `http://192.168.1.10:5173/pairing.html#p=ABCDEFGHIJKL` pre-filled the pairing-code field and showed the QR-import confirmation text.
+- Verification passed: related pairing/admin/bootstrap tests 11/11 (pairing QR tests 5/5), direct Vite build, Sites preparation/inline generation, and the safe-copy browser check. A physical A90 camera scan was not performed in this environment; that remains the final device-level acceptance.
+
+## Initial menu safe-copy application 2026-08-18
+
+- Created `server/var/safe-copies/initial-menu-20260818.sqlite3` as a non-production synthetic safe copy. It contains one synthetic pre-existing completed order, one order-item snapshot, and one prior `order.created` event; the production database was not used as the copy source or target and was not changed. A separate read-only path/state inspection was performed before creating the synthetic copy.
+- Dry-run against the copy used `targetKind: copy` and produced `dryRun: true`, `applied: false`, 0 errors, 45 image warnings, 46 creates, and 2 updates. The database digest and its pre-existing counts (`categories=1`, `menu_items=1`, `orders=1`, `order_items=1`, `event_log=1`) were unchanged.
+- The same copy was then applied with an explicit serialize backup at `server/var/safe-copies/initial-menu-20260818-before-import.sqlite3`. Apply completed with `applied: true`, 0 errors, and 45 image warnings. The backup passed `integrity_check=ok` and retained the pre-apply counts.
+- Post-apply verification passed: 7 categories, 41 menu items, 12 shochu items with 48 active serving options (4 each), and 8 active sake variants. Every sake glass variant is 110ml/900 yen and every 徳利 variant is 180ml/1000 yen. The nonalcohol beer is in category `nonalcohol` with `is_active=0`; categories/items containing `梅酒` or `果実酒` are absent; all 41 item master prices are present; no image URI was assigned.
+- Existing order data was preserved: `orders=1`, `order_items=1`, `event_log=49`, the original `order.created` event remains, and the order-item snapshot retains its pre-import name, kitchen alias, and 999-yen unit price. The 48 additional events are `menu.updated` events for catalog changes.
+- Started the combined server with `WARUN_DB_PATH` set to the safe copy and the existing `prototype/dist/client` web root. PC Web: `http://127.0.0.1:5173/`; LAN Web for the A90: `http://192.168.1.10:5173/`; PC admin: `http://127.0.0.1:5173/admin.html`. PC and LAN web roots returned HTTP 200; unauthenticated API access correctly returned HTTP 401. The server remains running for the manual PC/A90 check; the physical A90 pairing and visual acceptance are still pending.
+
+## Initial menu manuscript dry-run 2026-08-18
+
+- Converted the user-supplied import-preview manuscript to `docs/initial-menu-import-draft.md` in the stable-ID importer format: 7 categories and 41 items. It keeps tax-included integer master prices, stores 4 shochu serving options per each of 12 shochu items (48 options), and stores 2 explicit variants per each of 4 sake items (8 variants).
+- The nonalcohol beer is in its own `nonalcohol` category and is inactive because the source status is `要確認`. No ume/fruit-liquor category or items were added. No image URI or image mapping file was invented; the source did not provide a separate kitchen alias, so the draft temporarily uses each formal name as `kitchen_alias` for format validation.
+- Dry-run command used an empty temporary `fixture` SQLite database with no `--apply`. The result was `dryRun: true`, `applied: false`, 7 category creates, 41 item creates, 45 image warnings (41 item mappings and 4 sake detail mappings), and 0 errors. Direct count verification after dry-run found zero catalog rows; the temporary DB was removed. No production DB was opened or changed.
+
+## Non-production Markdown catalog importer 2026-08-18
+
+- Added a stable-ID Markdown importer for explicitly designated `fixture` or `copy` SQLite targets. It handles categories, menu items, product details, tax-included master prices, sake glass/tokuri variants, shochu serving options, and shochu section keys. The importer implementation and fixtures contain no production menu content or production image paths; the user-supplied initial manuscript is kept separately as a non-production draft.
+- Added a separate `target`/`image_uri` mapping table. Missing mappings produce warnings and preserve an existing image; unknown targets, duplicate mappings, empty URIs, and invalid references stop before apply.
+- Dry-run and apply share the same parsed/normalized diff plan. Results list `create`, `update`, `unchanged`, `warning`, and `error`. Apply creates a consistent SQLite serialize backup first, then uses one transaction; failures roll back catalog rows and events. Existing orders, order-item snapshots, history, and prior `event_log` rows are preserved.
+- Added the CLI `server/scripts/import-catalog-markdown.mjs` and the format guide `docs/catalog-import-format.md`. Without `--apply`, the CLI is dry-run; `targetKind: production` is rejected.
+- Verification passed: importer fixture tests 7/7, importer plus existing catalog repository tests 53/53, importer/script syntax checks, and `git diff --check`. The fixture covered dry-run immutability, apply, repeat unchanged, update/create, details/variants/options/section/images, pre-apply validation, rollback, order/history preservation, and image warnings.
+- The user-supplied initial manuscript has only been converted and dry-run checked; a production-approved Markdown/image mapping pair is not yet available, so no real catalog import has been run. The next operation is to review the draft and, after the formal image mapping and an explicitly approved non-production DB copy are supplied, run another dry-run.
+
+## Authenticated admin catalog write API 2026-08-18
+
+- Existing dirty changes were preserved. Added `PUT /v1/admin/catalog/menu-item`, which accepts one authenticated admin menu-item write including product details, sake variants, and shochu serving options. SQLite catalog rows and the `menu.updated` event are committed atomically.
+- The write contract uses `expectedVersion`; stale edits return HTTP 409 `CATALOG_CONFLICT`. Unauthenticated requests return 401 and non-admin devices return 403. The response exposes only `menuItemId`, the new `version`, and the committed event cursor.
+- The admin menu screen now loads the authenticated admin menu when an admin token is configured and submits the editor form through the API. Local demo mode remains available when the token is absent. Category edits, bulk catalog writes, Markdown import, and image mapping are not included in this endpoint.
+- Verification passed: server 334/334, admin catalog API 2/2, prototype related tests 15/15, Sites worker 4/4, JavaScript syntax checks, and `git diff --check`. No schema, production database, reset, pull, merge, or commit was performed.
+- `pnpm run build` first stopped at the existing non-TTY modules purge guard. A CI-mode retry recreated `prototype/node_modules` but registry package downloads failed with `EACCES`; therefore the production build and browser visual check are unverified in this continuation. No dependency or pnpm setting was changed.
+- Remaining risk: the API is optimistic-version safe but does not yet provide a durable idempotency-key table; category/bulk writes and formal Markdown/image import remain separate work. Next: implement the idempotent Markdown importer and category/catalog batch write against a safe non-production target.
+
+## Continuation 2026-08-18
+
+- Existing dirty changes were retained. The local admin menu editor now exposes and preserves all tasting-detail fields shown by the customer detail modal: aroma, sweetness, and finish.
+- At that checkpoint, verification passed: prototype 57/57, Sites worker 4/4, direct Vite production build plus Sites preparation/inline generation, and a 1280 x 800 CSS viewport admin-editor visual check. The authenticated admin catalog write API and Markdown importer were still unimplemented at that time; no schema or production data changes were made.
+
+## Shochu / sake stage 1 handoff 2026-08-17
+
+- Current Git baseline is `feature/sqlite-foundation` at `14e9ae3c5d565d992b20908cec9f5530ffe3c9e0`, ahead 4 / behind 16. The pre-existing dirty worktree and all operational SQLite files were preserved; no commit, reset, pull, production migration, or production data write was performed.
+- The formal price rule is now: DB/admin stores one tax-included master; customer product cards derive the tax-exclusive main price by rounding down and show the tax-included price as a smaller labelled value. Customer cart, confirmation, and customer order history still show no subtotal or total.
+- Additive schema v3 and migration add product details, price variants, shochu serving options, shochu section keys, and structured immutable selection snapshots on `order_items`. Legacy order request schema v1 keeps its existing fingerprint; new structured clients use request schema v2. A consistent backup of the real schema-v2 WAL database passed temporary v2-to-v3 migration, integrity, foreign-key, protected-row preservation, and second-initialize no-op checks.
+- Customer UI now has one-list shochu navigation with the non-orderable `麦・その他` divider and a one-at-a-time inline serving panel; sake keeps the existing three-column shell while exposing independent glass/tokuri price taps. A single data-driven product-detail modal hides empty fields and supports a 52px close target plus backdrop close. Admin's existing local editor exposes the new data fields, but a server-side admin write API is not yet implemented, so production daily edits are not yet durable.
+- A temporary real API/SQLite browser fixture at 1280 x 800 passed pairing, customer catalog, derived prices, shochu panel replacement, repeated/split selections, sake variants, modal content replacement, close controls, order submission, structured snapshots, `event_log`, and customer history. Cart, confirmation, and customer history each had zero total labels. The app retains its pre-existing 1024px minimum-width behavior below 900px; this stage did not redesign mobile behavior.
+- The supplied four-bottle composite was copied unchanged to `public/menu-images/sake-temporary-reference.jpg` as a temporary asset only. It was not guessed into four individual product mappings. No formal menu Markdown or individual image mapping has been supplied, so production categories/items/variants/images were not imported.
+- Verification passed: server 332/332, prototype 56/56, Sites worker 4/4, direct Vite production build, Sites preparation/inline generation, and production browser smoke. The standard pnpm wrapper remains blocked by the environment's existing ignored `esbuild@0.25.12` build-script policy; dependencies and pnpm settings were not changed.
+- Next: implement an idempotent Markdown importer and authenticated admin catalog write API, then run the provided formal Markdown and image mapping against a safe target before any authorized production migration.
+
 ## Persistent DB and real-device acceptance 2026-08-16 — PASS
 
 - After the Windows restart and one desktop-shortcut launch, the PC kitchen screen, LAN URL `192.168.1.10:5173`, connected state, and A90 customer screen all passed. The persistent database completed v1-to-v2 migration and both kitchen and customer devices recovered.
@@ -101,14 +275,11 @@
 - 客席4台はテーブルへ固定割り当てし、重複割り当てを許さない。
 - 有料API・有料SaaS・一時的な無料枠に依存しない。
 
-## 本番向けとして未実装
+## 本番運用として未実装
 
-- 複数実機間の通信
-- サーバーとデータベースへの永続保存
-- 認証と役割別の権限制御
-- 注文IDを一意制約として扱うサーバー側冪等性
-- 永続的なオフラインキュー、再接続検知、再送制御、同期失敗処理
-- バックアップ、復元、監視、障害復旧
+- 本番複数実機での通信運用、バックアップ、復元、監視、障害復旧
+- 管理カタログのカテゴリ・一括書き込み、永続的なidempotency-key管理、Markdown importer、正式な画像マッピング
+- 永続的なオフラインキュー、再接続検知、再送制御、同期失敗処理の本番運用
 
 現在の疑似通信断と自動再送はブラウザ内デモであり、本番の欠落防止・二重送信防止を保証しない。
 

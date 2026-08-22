@@ -234,7 +234,7 @@ test('rejects unknown and server-controlled item fields', () => {
 
 test('validates schemaVersion, clientOrderId, and clientCreatedAtMs', () => {
   const invalidOrders = [
-    validOrder({ schemaVersion: 2 }),
+    validOrder({ schemaVersion: 3 }),
     validOrder({ clientOrderId: 'not-a-v4-uuid' }),
     validOrder({ clientCreatedAtMs: -1 }),
     validOrder({ clientCreatedAtMs: 1.5 }),
@@ -244,6 +244,23 @@ test('validates schemaVersion, clientOrderId, and clientCreatedAtMs', () => {
       assertBodyError(error, ORDER_JSON_BODY_ERROR_CODES.INVALID_ORDER_REQUEST, 400)
     ));
   }
+});
+
+test('schemaVersion 2 accepts structured variants and keeps distinct selections separate', () => {
+  const result = parseOrderJsonText(JSON.stringify(validOrder({
+    schemaVersion: 2,
+    items: [
+      { menuItemId: 'sake', variantId: 'sake_glass', quantity: 1 },
+      { menuItemId: 'sake', variantId: 'sake_tokuri', quantity: 2 },
+      { menuItemId: 'shochu', servingOptionId: 'shochu_water', quantity: 1 },
+    ],
+  })));
+  assert.equal(result.schemaVersion, 2);
+  assert.equal(result.items.length, 3);
+  assert.throws(() => parseOrderJsonText(JSON.stringify(validOrder({
+    schemaVersion: 1,
+    items: [{ menuItemId: 'sake', variantId: 'sake_glass', quantity: 1 }],
+  }))));
 });
 
 test('accepts a valid clientCreatedAtMs without using it as server state', () => {

@@ -3,14 +3,17 @@ export const HTTP_ERROR_CODES = Object.freeze({
   AUTHORIZATION_FAILED: 'AUTHORIZATION_FAILED',
   BAD_REQUEST: 'BAD_REQUEST',
   INVALID_ORDER_REQUEST: 'INVALID_ORDER_REQUEST',
+  INVALID_CATALOG_REQUEST: 'INVALID_CATALOG_REQUEST',
   PAYLOAD_TOO_LARGE: 'PAYLOAD_TOO_LARGE',
   UNSUPPORTED_MEDIA_TYPE: 'UNSUPPORTED_MEDIA_TYPE',
   ORDER_CONFLICT: 'ORDER_CONFLICT',
+  CATALOG_CONFLICT: 'CATALOG_CONFLICT',
   ORDER_NOT_FOUND: 'ORDER_NOT_FOUND',
   SESSION_NOT_FOUND: 'SESSION_NOT_FOUND',
   SESSION_CONFLICT: 'SESSION_CONFLICT',
   SESSION_HAS_ACTIVE_ORDERS: 'SESSION_HAS_ACTIVE_ORDERS',
   MENU_ITEM_NOT_FOUND: 'MENU_ITEM_NOT_FOUND',
+  CATALOG_ITEM_NOT_FOUND: 'CATALOG_ITEM_NOT_FOUND',
   MENU_ITEM_SOLD_OUT: 'MENU_ITEM_SOLD_OUT',
   EVENT_HISTORY_UNAVAILABLE: 'EVENT_HISTORY_UNAVAILABLE',
   NOT_FOUND: 'NOT_FOUND',
@@ -42,6 +45,10 @@ const DEFINITIONS = Object.freeze({
     statusCode: 400,
     message: 'Invalid order request.',
   }),
+  [HTTP_ERROR_CODES.INVALID_CATALOG_REQUEST]: Object.freeze({
+    statusCode: 400,
+    message: 'Invalid catalog request.',
+  }),
   [HTTP_ERROR_CODES.PAYLOAD_TOO_LARGE]: Object.freeze({
     statusCode: 413,
     message: 'Request body is too large.',
@@ -53,6 +60,10 @@ const DEFINITIONS = Object.freeze({
   [HTTP_ERROR_CODES.ORDER_CONFLICT]: Object.freeze({
     statusCode: 409,
     message: 'Order conflicts with an existing request.',
+  }),
+  [HTTP_ERROR_CODES.CATALOG_CONFLICT]: Object.freeze({
+    statusCode: 409,
+    message: 'Catalog conflicts with a newer version.',
   }),
   [HTTP_ERROR_CODES.ORDER_NOT_FOUND]: Object.freeze({
     statusCode: 404,
@@ -73,6 +84,10 @@ const DEFINITIONS = Object.freeze({
   [HTTP_ERROR_CODES.MENU_ITEM_NOT_FOUND]: Object.freeze({
     statusCode: 422,
     message: 'A requested menu item is unavailable.',
+  }),
+  [HTTP_ERROR_CODES.CATALOG_ITEM_NOT_FOUND]: Object.freeze({
+    statusCode: 404,
+    message: 'Catalog item was not found.',
   }),
   [HTTP_ERROR_CODES.MENU_ITEM_SOLD_OUT]: Object.freeze({
     statusCode: 422,

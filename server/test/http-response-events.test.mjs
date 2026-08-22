@@ -95,13 +95,16 @@ function menuFor(audience, overrides = {}) {
       isSoldOut: false,
       sortOrder: 1,
       version: 1,
-      ...(audience === 'customer' ? { description: 'Salted beans' } : {}),
+      ...(audience === 'customer' ? { description: 'Salted beans', priceYen: 380, variants: [], servingOptions: [] } : {}),
       ...(audience !== 'customer' ? { kitchenAlias: 'Beans' } : {}),
       ...(audience === 'admin' ? {
         description: 'Salted beans',
         priceYen: 380,
         isActive: true,
         updatedAtMs: 1000,
+        detail: { enabled: false },
+        variants: [],
+        servingOptions: [],
       } : {}),
       requestFingerprint: 'must-not-leak',
     }],
@@ -430,7 +433,8 @@ test('customer snapshot has exactly audience, root cursor, device, and menu', ()
   assert.equal(response.menu.audience, 'customer');
   assert.equal(Object.hasOwn(response, 'activeOrders'), false);
   assert.equal(Object.hasOwn(response, 'openStaffCalls'), false);
-  assert.equal(JSON.stringify(response).includes('priceYen'), false);
+  assert.equal(response.menu.items[0].priceYen, 380);
+  assert.equal(JSON.stringify(response).includes('totalAmountYen'), false);
   assertNoForbidden(response);
 });
 

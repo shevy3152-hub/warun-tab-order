@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { createServer } from 'node:http';
 
 import {
@@ -36,6 +36,7 @@ import {
   createErrorResponse,
   createEventHistoryUnavailableResponse,
   mapCustomerOrderHistoryResponse,
+  mapCatalogWriteResponse,
   mapDeviceConfigResponse,
   mapEventReplayResponse,
   mapHealthResponse,
@@ -44,6 +45,7 @@ import {
   mapOrderReceiptResponse,
   mapTableSessionCloseResponse,
   mapSnapshotResponse,
+  mapPairingPreflightResponse,
   writeJsonResponse,
 } from './http-response.mjs';
 import {
@@ -63,12 +65,14 @@ const ROUTE_METHODS = new Map([
   ['/v1/tables/sessions/close', 'POST'],
   ['/v1/kitchen/order-history', 'GET'],
   ['/v1/admin/order-history', 'GET'],
+  ['/v1/admin/pairing-preflight', 'GET'],
   ['/v1/snapshot', 'GET'],
   ['/v1/events', 'GET'],
   ['/v1/events/replay', 'GET'],
   ['/v1/admin/pairing-codes', 'POST'],
   ['/v1/pairings/claim', 'POST'],
   ['/v1/admin/devices/revoke', 'POST'],
+  ['/v1/admin/catalog/menu-item', 'PUT'],
 ]);
 const READ_ONLY_ROUTE_METHODS = new Map([
   ['/v1/health', 'GET'],
@@ -222,6 +226,63 @@ function safeRequestId(requestIdFactory) {
   return randomUUID();
 }
 
+function requestOrigin(request) {
+  const host = typeof request?.headers?.host === 'string' ? request.headers.host.trim() : '';
+  return host ? `http://${host}` : '';
+}
+
+function pairingRegistrationUrl(code, origin) {
+  if (typeof code !== 'string' || !code || typeof origin !== 'string' || !origin) return undefined;
+  const url = new URL('/pairing.html', origin);
+  url.hash = `p=${encodeURIComponent(code)}`;
+  return url.toString();
+}
+
+function pairingDiagnosticDeviceHash(deviceId) {
+  if (typeof deviceId !== 'string' || deviceId.length === 0) return null;
+  return createHash('sha256').update(deviceId, 'utf8').digest('hex').slice(0, 16);
+}
+
+function writePairingDiagnostic(pairingDiagnosticLogger, { now, status, deviceIdHash, result }) {
+  if (typeof pairingDiagnosticLogger !== 'function') return;
+  try {
+    pairingDiagnosticLogger(Object.freeze({
+      timestamp: new Date(now()).toISOString(),
+      status,
+      deviceIdHash,
+      result,
+    }));
+  } catch {
+    // Diagnostics must never change the pairing response or transaction result.
+  }
+}
+
+function pairingDiagnosticFailureResult(error, httpError, diagnosticStage) {
+  if (httpError.statusCode !== 500) return httpError.code;
+  let detail = '';
+  if (isPairingServiceError(error) && typeof error.code === 'string') {
+    detail = error.code;
+  } else if (typeof error?.code === 'string' && /^(?:SQLITE_|ERR_)/.test(error.code)) {
+    detail = error.code;
+  } else if (typeof error?.name === 'string' && error.name !== 'Error') {
+    detail = error.name;
+  }
+  return `INTERNAL_ERROR:${diagnosticStage}${detail ? `:${detail}` : ''}`;
+}
+
+function runtimeHealthHeaders(runtimeInfo) {
+  if (!runtimeInfo) return undefined;
+  return {
+    'X-Warun-Environment': runtimeInfo.environment,
+    'X-Warun-Database-Target': runtimeInfo.databaseTarget,
+    'X-Warun-Database-Identity': runtimeInfo.databaseIdentity,
+    'X-Warun-API-Port': String(runtimeInfo.apiPort),
+    'X-Warun-Web-Port': String(runtimeInfo.webPort),
+    'X-Warun-LAN-IPv4': runtimeInfo.lanIPv4.join(','),
+    ...(Number.isSafeInteger(runtimeInfo.processId) ? { 'X-Warun-Process-Id': String(runtimeInfo.processId) } : {}),
+  };
+}
+
 function defaultServiceStateReader(database) {
   if (!database || typeof database.prepare !== 'function') {
     throw createHttpError(HTTP_ERROR_CODES.INTERNAL_ERROR);
@@ -323,6 +384,24 @@ function mapApplicationError(error) {
       || error.code === CATALOG_ERROR_CODES.DEVICE_NOT_ASSIGNED
     ) {
       return createHttpError(HTTP_ERROR_CODES.AUTHORIZATION_FAILED);
+    }
+    if (error.code === CATALOG_ERROR_CODES.INVALID_WRITE_REQUEST) {
+      return createHttpError(HTTP_ERROR_CODES.INVALID_CATALOG_REQUEST);
+    }
+    if (error.code === CATALOG_ERROR_CODES.VERSION_CONFLICT) {
+      return createHttpError(HTTP_ERROR_CODES.CATALOG_CONFLICT);
+    }
+    if (error.code === CATALOG_ERROR_CODES.CATEGORY_NOT_FOUND) {
+      return createHttpError(HTTP_ERROR_CODES.CATALOG_ITEM_NOT_FOUND);
+    }
+    if (error.code === CATALOG_ERROR_CODES.MENU_ITEM_NOT_FOUND) {
+      return createHttpError(HTTP_ERROR_CODES.CATALOG_ITEM_NOT_FOUND);
+    }
+    if (error.code === CATALOG_ERROR_CODES.ID_CONFLICT) {
+      return createHttpError(HTTP_ERROR_CODES.CATALOG_CONFLICT);
+    }
+    if (error.code === CATALOG_ERROR_CODES.DATABASE_FAILURE && hasBusyCause(error)) {
+      return createHttpError(HTTP_ERROR_CODES.SERVICE_UNAVAILABLE);
     }
     return createHttpError(HTTP_ERROR_CODES.INTERNAL_ERROR);
   }
@@ -508,9 +587,11 @@ function createConfiguredHttpServer({
   snapshotService = undefined,
   sseHub = undefined,
   pairingService = undefined,
+  runtimeInfo = undefined,
   readServiceState = undefined,
   requestIdFactory = randomUUID,
   now = Date.now,
+  pairingDiagnosticLogger = undefined,
 } = {}, { integrated }) {
   if (
     !authenticator
@@ -526,7 +607,8 @@ function createConfiguredHttpServer({
   if (
     integrated
     && (
-      !orderRepository
+      typeof catalog.writeMenuItem !== 'function'
+      || !orderRepository
       || typeof orderRepository.createOrder !== 'function'
       || typeof orderRepository.getCustomerHistory !== 'function'
       || typeof orderRepository.getHistory !== 'function'
@@ -578,41 +660,87 @@ function createConfiguredHttpServer({
         } catch {
           throw createHttpError(HTTP_ERROR_CODES.SERVICE_UNAVAILABLE);
         }
-        writeJsonResponse(response, { statusCode: 200, body, requestId });
+        writeJsonResponse(response, { statusCode: 200, body, requestId, headers: runtimeHealthHeaders(runtimeInfo) });
         return;
       }
 
       if (target.path === '/v1/pairings/claim') {
         const pairings = requireService(pairingService, 'claimPairingCode');
-        const body = await readJsonBody(request);
-        const claim = pairings.claimPairingCodeRequest({
-          pairingCode: body?.pairingCode,
-          deviceId: body?.deviceId,
-          displayName: body?.displayName,
-          appVersion: body?.appVersion,
-        });
-        const claimedPrincipal = authenticator.authenticateDeviceToken(claim.deviceToken);
-        const config = mapDeviceConfigResponse(catalog.getDeviceSettings(claimedPrincipal));
-        writeJsonResponse(response, {
-          statusCode: 201,
-          body: { deviceToken: claim.deviceToken, config },
-          requestId,
-        });
-        return;
+        let deviceIdHash = null;
+        let diagnosticStage = 'read';
+        try {
+          const body = await readJsonBody(request);
+          deviceIdHash = pairingDiagnosticDeviceHash(body?.deviceId);
+          diagnosticStage = 'claim';
+          const claim = pairings.claimPairingCodeRequest({
+            pairingCode: body?.pairingCode,
+            deviceId: body?.deviceId,
+            displayName: body?.displayName,
+            appVersion: body?.appVersion,
+          });
+          diagnosticStage = 'authenticate';
+          const claimedPrincipal = authenticator.authenticateDeviceToken(claim.deviceToken);
+          diagnosticStage = 'device-config';
+          const config = mapDeviceConfigResponse(catalog.getDeviceSettings(claimedPrincipal));
+          diagnosticStage = 'response';
+          writePairingDiagnostic(pairingDiagnosticLogger, { now, status: 201, deviceIdHash, result: 'claimed' });
+          writeJsonResponse(response, {
+            statusCode: 201,
+            body: { deviceToken: claim.deviceToken, config },
+            requestId,
+          });
+          return;
+        } catch (error) {
+          const httpError = mapApplicationError(error);
+          writePairingDiagnostic(pairingDiagnosticLogger, {
+            now,
+            status: httpError.statusCode,
+            deviceIdHash,
+            result: pairingDiagnosticFailureResult(error, httpError, diagnosticStage),
+          });
+          throw error;
+        }
       }
 
       principal = authenticateRequest(request, authenticator);
+
+      if (target.path === '/v1/admin/pairing-preflight') {
+        authorizeDeviceRole(principal, ['admin']);
+        const pairings = requireService(pairingService, 'getPairingTableState');
+        const body = mapPairingPreflightResponse({
+          runtimeInfo: runtimeInfo ?? {
+            environment: 'unknown',
+            databasePath: 'unknown',
+            databaseTarget: 'unknown',
+            isProduction: false,
+            apiPort: 1,
+            webPort: 1,
+            lanIPv4: [],
+            webOrigins: ['http://127.0.0.1:1'],
+            pairingUrlOrigin: 'http://127.0.0.1:1',
+            pairingUrlTemplate: 'http://127.0.0.1:1/pairing.html#p={code}',
+          },
+          tables: pairings.getPairingTableState(),
+          requestOrigin: requestOrigin(request),
+        });
+        writeJsonResponse(response, { statusCode: 200, body, requestId });
+        return;
+      }
 
       if (target.path === '/v1/orders') {
         const orders = requireService(orderRepository, 'createOrder');
         authorizeDeviceRole(principal, ['customer']);
         const body = await readOrderJsonBody(request);
         const result = orders.createOrder({
+          schemaVersion: body.schemaVersion,
           clientOrderId: body.clientOrderId,
           authenticatedDeviceId: principal.deviceId,
           items: body.items.map((item) => ({
             menuItemId: item.menuItemId,
             quantity: item.quantity,
+            ...(item.variantId ? { variantId: item.variantId } : {}),
+            ...(item.temperature ? { temperature: item.temperature } : {}),
+            ...(item.servingOptionId ? { servingOptionId: item.servingOptionId } : {}),
           })),
         });
         await notifyCommittedSafely(sseHub, result);
@@ -697,11 +825,31 @@ function createConfiguredHttpServer({
             tableId: body?.tableId,
             expiresAtMs: body?.expiresAtMs,
           }, { createdByDeviceId: principal.deviceId });
-          writeJsonResponse(response, { statusCode: 201, body: pairing, requestId });
+          const pairingUrl = pairingRegistrationUrl(pairing.code, runtimeInfo?.pairingUrlOrigin);
+          writeJsonResponse(response, {
+            statusCode: 201,
+            body: pairingUrl ? { ...pairing, pairingUrl } : pairing,
+            requestId,
+          });
           return;
         }
-        const revoked = pairings.revokeDeviceRequest({ deviceId: body?.deviceId, actorDeviceId: principal.deviceId });
+        const revoked = pairings.revokeDeviceRequest({ deviceId: body?.deviceId }, { actorDeviceId: principal.deviceId });
         writeJsonResponse(response, { statusCode: 200, body: revoked, requestId });
+        return;
+      }
+
+      if (target.path === '/v1/admin/catalog/menu-item') {
+        authorizeDeviceRole(principal, ['admin']);
+        const catalogWriter = requireService(catalog, 'writeMenuItem');
+        const body = await readJsonBody(request);
+        const result = catalogWriter.writeMenuItem(principal, body);
+        await notifyCommittedSafely(sseHub, result);
+        if (response.destroyed) return;
+        writeJsonResponse(response, {
+          statusCode: 200,
+          body: mapCatalogWriteResponse(result),
+          requestId,
+        });
         return;
       }
 

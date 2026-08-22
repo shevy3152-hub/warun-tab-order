@@ -63,6 +63,45 @@ function optionalInteger(target, key, value, minimum = 0) {
   if (value !== undefined) target[key] = requireInteger(value, minimum);
 }
 
+function projectDetail(source) {
+  const value = requireObject(source);
+  const detail = { enabled: requireBoolean(value.enabled) };
+  for (const key of ['imageUri', 'reading', 'itemType', 'origin', 'producer', 'taste', 'aroma', 'sweetness', 'finish', 'recommendation', 'description']) {
+    optionalString(detail, key, value[key]);
+  }
+  return detail;
+}
+
+function projectVariant(source, admin = false) {
+  const value = requireObject(source);
+  const variant = {
+    variantId: requireString(value.variantId),
+    name: requireString(value.name),
+    volumeLabel: requireString(value.volumeLabel),
+    priceYen: requireInteger(value.priceYen),
+    sortOrder: requireInteger(value.sortOrder),
+  };
+  if (admin) {
+    variant.isActive = requireBoolean(value.isActive);
+    variant.version = requireInteger(value.version, 1);
+  }
+  return variant;
+}
+
+function projectServingOption(source, admin = false) {
+  const value = requireObject(source);
+  const option = {
+    servingOptionId: requireString(value.servingOptionId),
+    name: requireString(value.name),
+    sortOrder: requireInteger(value.sortOrder),
+  };
+  if (admin) {
+    option.isActive = requireBoolean(value.isActive);
+    option.version = requireInteger(value.version, 1);
+  }
+  return option;
+}
+
 function validateCursor(value) {
   const object = requireObject(value);
   const eventEpoch = requireString(object.eventEpoch);
@@ -114,16 +153,22 @@ function projectMenuItem(role, source) {
     formalName: requireString(value.formalName),
   };
   if (role === 'customer' || role === 'admin') item.description = requireString(value.description);
+  if (role === 'customer' || role === 'admin') item.priceYen = requireInteger(value.priceYen);
   if (role === 'kitchen' || role === 'admin') {
     item.kitchenAlias = requireString(value.kitchenAlias);
   }
-  if (role === 'admin') item.priceYen = requireInteger(value.priceYen);
   item.isSoldOut = requireBoolean(value.isSoldOut);
   if (role === 'admin') item.isActive = requireBoolean(value.isActive);
   item.sortOrder = requireInteger(value.sortOrder);
   item.version = requireInteger(value.version, 1);
   if (role === 'admin') item.updatedAtMs = requireInteger(value.updatedAtMs);
   optionalString(item, 'imageUri', value.imageUri);
+  optionalString(item, 'sectionKey', value.sectionKey);
+  if (role === 'customer' || role === 'admin') {
+    item.variants = requireArray(value.variants).map((variant) => projectVariant(variant, role === 'admin'));
+    item.servingOptions = requireArray(value.servingOptions).map((option) => projectServingOption(option, role === 'admin'));
+    if (value.detail !== undefined) item.detail = projectDetail(value.detail);
+  }
   return item;
 }
 

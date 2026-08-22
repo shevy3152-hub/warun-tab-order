@@ -178,6 +178,85 @@ function assertOrderError(action, code) {
   );
 }
 
+test('schemaVersion 2 preserves distinct sake variants and shochu serving options as separate snapshots', async () => {
+  await withFixture(({ database }) => {
+    const insertItem = database.prepare(`
+      INSERT INTO menu_items (
+        menu_item_id, category_id, formal_name, kitchen_alias, price_yen,
+        is_sold_out, is_active, sort_order, created_at_ms, updated_at_ms
+      ) VALUES (?, 'recommended', ?, ?, ?, 0, 1, ?, 1000, 1000)
+    `);
+    insertItem.run('sake', '架空日本酒', '架空酒', 0, 5);
+    insertItem.run('shochu', '架空焼酎', '架空焼酎', 550, 6);
+    const insertVariant = database.prepare(`
+      INSERT INTO menu_item_variants (
+        variant_id, menu_item_id, name, volume_label, price_yen,
+        sort_order, created_at_ms, updated_at_ms
+      ) VALUES (?, 'sake', ?, ?, ?, ?, 1000, 1000)
+    `);
+    insertVariant.run('sake_glass', 'グラス', '90ml', 700, 1);
+    insertVariant.run('sake_tokuri', '徳利1合', '180ml', 1300, 2);
+    const insertOption = database.prepare(`
+      INSERT INTO menu_item_serving_options (
+        serving_option_id, menu_item_id, name, sort_order, created_at_ms, updated_at_ms
+      ) VALUES (?, 'shochu', ?, ?, 1000, 1000)
+    `);
+    insertOption.run('shochu_rock', 'ロック', 1);
+    insertOption.run('shochu_water', '水割り', 2);
+
+    const result = makeRepository(database).createOrder(orderRequest({
+      schemaVersion: 2,
+      items: [
+        { menuItemId: 'sake', variantId: 'sake_glass', quantity: 1 },
+        { menuItemId: 'sake', variantId: 'sake_tokuri', quantity: 1 },
+        { menuItemId: 'shochu', servingOptionId: 'shochu_rock', quantity: 1 },
+        { menuItemId: 'shochu', servingOptionId: 'shochu_water', quantity: 2 },
+      ],
+    }));
+
+    assert.equal(result.order.items.length, 4);
+    assert.equal(result.order.totalAmountYen, 3650);
+    assert.deepEqual(result.order.items.map((item) => [
+      item.menuItemId,
+      item.variantNameSnapshot ?? item.servingOptionNameSnapshot,
+      item.unitPriceYenSnapshot,
+      item.quantity,
+    ]), [
+      ['sake', 'グラス', 700, 1],
+      ['sake', '徳利1合', 1300, 1],
+      ['shochu', 'ロック', 550, 1],
+      ['shochu', '水割り', 550, 2],
+    ]);
+  });
+});
+
+test('schemaVersion 3 validates sake temperatures and stores them as immutable snapshots', async () => {
+  await withFixture(({ database }) => {
+    database.prepare(`
+      INSERT INTO menu_item_variants (
+        variant_id, menu_item_id, name, volume_label, price_yen,
+        sort_order, temperature_options_json, created_at_ms, updated_at_ms
+      ) VALUES ('beer-glass', 'beer', 'グラス', '110ml', 900, 1, ?, 1000, 1000)
+    `).run(JSON.stringify(['冷酒']));
+
+    const result = makeRepository(database).createOrder(orderRequest({
+      schemaVersion: 3,
+      items: [{ menuItemId: 'beer', variantId: 'beer-glass', temperature: '冷酒', quantity: 1 }],
+    }));
+
+    assert.equal(result.order.items[0].temperatureSnapshot, '冷酒');
+    assert.equal(database.prepare('SELECT temperature_snapshot FROM order_items').get().temperature_snapshot, '冷酒');
+    assertOrderError(
+      () => makeRepository(database, { orderIds: [ORDER_B] }).createOrder(orderRequest({
+        clientOrderId: CLIENT_ORDER_B,
+        schemaVersion: 3,
+        items: [{ menuItemId: 'beer', variantId: 'beer-glass', temperature: '燗酒', quantity: 1 }],
+      })),
+      ORDER_ERROR_CODES.INVALID_ORDER_REQUEST,
+    );
+  });
+});
+
 function issuePrincipal(database, deviceId, byte) {
   const token = Buffer.alloc(32, byte).toString('base64url');
   const tokenHash = createHash('sha256').update(token, 'utf8').digest('hex');

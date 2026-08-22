@@ -12,7 +12,7 @@ Build app UI in `src/`. Keep `.openai/hosting.json`, `worker/index.js`, `scripts
 
 - Optimize the core UI and every visual review for a 10-inch landscape tablet at an exact 1280 x 800 CSS viewport and 100% browser zoom. Use the supplied larger mockups only as visual references; never review the implementation at 1600 x 1000.
 - Customer devices are fixed to tables 1 through 4 and never expose a table selector to guests.
-- Customer screens never show item prices or totals. Price snapshots remain available only to staff history and administration.
+- Customer menu cards show a derived tax-exclusive price with the tax-included master price. Customer carts and customer order history never show subtotals or totals.
 - Kitchen order cards keep unserved items above served items and move an order to history immediately after its final item is checked.
 - Payment, taxi booking, QR mirroring, menu imagery, sound, and completion animation remain outside this prototype.
 - Preserve the vermilion, warm-paper, black-rule, bold-Japanese visual language of the supplied izakaya reference.
@@ -20,4 +20,5 @@ Build app UI in `src/`. Keep `.openai/hosting.json`, `worker/index.js`, `scripts
 - Use a heavy square-gothic Japanese typeface for all Japanese UI going forward; prefer BIZ UDPGothic and use weight 800-900 for operational text.
 - Give the kitchen sidebar enough width to keep navigation readable, make each table panel correspondingly narrower, and use short staff-facing aliases for long menu names without changing the stored order-history name snapshots.
 - Menu administration stores both a formal menu name and a required kitchen-facing alias. Customer ordering and order-history snapshots use the formal name; the kitchen screen prefers the alias.
+- Do not use paid APIs, paid SaaS products, or designs that depend on a temporary free tier. Keep the production system self-hosted on the local network with open-source components wherever practical.
 - Before starting any implementation or modification, tell the user the estimated work time and the scope covered by that estimate, then begin the work.

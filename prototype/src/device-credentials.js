@@ -3,6 +3,24 @@ const DB_VERSION = 1;
 const STORE_NAME = "credentials";
 const RECORD_KEY = "customer";
 
+export class PairingClaimError extends Error {
+  constructor(message, { status = 0, code = "PAIRING_REQUEST_FAILED" } = {}) {
+    super(message);
+    this.name = "PairingClaimError";
+    this.status = status;
+    this.code = code;
+  }
+}
+
+export function pairingClaimErrorMessage(error) {
+  if (error?.status === 410 || error?.code === "PAIRING_EXPIRED") return "コード期限切れ：管理画面で新しいQRを発行してください。";
+  if (error?.status === 409 || error?.code === "PAIRING_CONFLICT" || error?.code === "DEVICE_CONFLICT") return "既存端末競合：この端末は登録済みです。管理画面で状態を確認してください。";
+  if (error?.status === 400 || error?.code === "PAIRING_INVALID") return "入力内容またはQRのコードが不正です。新しいQRを読み取ってください。";
+  if (error?.status === 404) return "登録APIが見つかりません。表示中のURLを確認してください。";
+  if (error?.status === 401) return "登録APIの認証に失敗しました。管理画面のsafe-copy設定を確認してください。";
+  return "登録に失敗しました。コードの有効期限、入力内容、接続先を確認してください。";
+}
+
 function clone(value) {
   return value ? { ...value } : value;
 }
@@ -78,9 +96,13 @@ export async function claimCustomerDevice({ store, baseUrl, pairingCode, deviceI
     headers: { Accept: "application/json", "Content-Type": "application/json" },
     body: JSON.stringify({ pairingCode, deviceId, displayName, appVersion }),
   });
-  if (!response.ok) throw new Error("Pairing failed.");
+  if (!response.ok) {
+    let body;
+    try { body = await response.json(); } catch { /* Keep the status-based error. */ }
+    throw new PairingClaimError("Pairing failed.", { status: response.status, code: body?.error?.code });
+  }
   const body = await response.json();
-  if (typeof body?.deviceToken !== "string" || !body.config) throw new Error("Pairing response was invalid.");
+  if (typeof body?.deviceToken !== "string" || !body.config) throw new PairingClaimError("Pairing response was invalid.", { status: 503, code: "PAIRING_RESPONSE_INVALID" });
   await store.save({ deviceId, token: body.deviceToken, config: body.config });
   return { deviceId, config: body.config };
 }

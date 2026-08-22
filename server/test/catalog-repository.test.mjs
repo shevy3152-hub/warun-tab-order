@@ -547,10 +547,10 @@ test('customer menu retains sold-out items with an explicit sold-out flag', asyn
   });
 });
 
-test('customer menu never exposes prices', async () => {
+test('customer menu exposes only the tax-included item price needed for display and ordering', async () => {
   await withCatalogFixture(({ authenticator, catalog }) => {
     const menu = catalog.getMenuForPrincipal(authenticate(authenticator, CUSTOMER_TOKEN));
-    assert.equal(menu.items.every((item) => !Object.hasOwn(item, 'priceYen')), true);
+    assert.equal(menu.items.every((item) => Number.isInteger(item.priceYen)), true);
     assert.equal(JSON.stringify(menu).includes('price_yen'), false);
   });
 });
@@ -604,7 +604,10 @@ test('customer menu returns only the identifiers and fields needed for ordering'
       'imageUri',
       'isSoldOut',
       'menuItemId',
+      'priceYen',
+      'servingOptions',
       'sortOrder',
+      'variants',
       'version',
     ]);
     const edamame = menu.items.find(({ menuItemId }) => menuItemId === 'edamame');
@@ -874,7 +877,7 @@ test('customer, kitchen, and admin menus do not leak forbidden cross-role fields
     const admin = catalog.getMenuForPrincipal(authenticate(authenticator, ADMIN_TOKEN));
 
     assert.equal(customer.items.every((item) => (
-      !('priceYen' in item) && !('kitchenAlias' in item) && !('isActive' in item)
+      'priceYen' in item && !('kitchenAlias' in item) && !('isActive' in item)
     )), true);
     assert.equal(kitchen.items.every((item) => (
       !('priceYen' in item) && !('description' in item) && 'kitchenAlias' in item

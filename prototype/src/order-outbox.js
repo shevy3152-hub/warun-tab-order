@@ -58,11 +58,21 @@ function normalizeItems(items) {
   return items.map((item) => {
     const menuItemId = typeof item?.menuItemId === "string" ? item.menuItemId : "";
     const quantity = Number(item?.quantity);
-    if (!menuItemId || !Number.isSafeInteger(quantity) || quantity < 1 || seen.has(menuItemId)) {
+    const variantId = typeof item?.variantId === "string" && item.variantId ? item.variantId : null;
+    const servingOptionId = typeof item?.servingOptionId === "string" && item.servingOptionId ? item.servingOptionId : null;
+    const temperature = typeof item?.temperature === "string" && item.temperature ? item.temperature : null;
+    const selectionKey = `${menuItemId}\u0000${variantId ?? ""}\u0000${servingOptionId ?? ""}\u0000${temperature ?? ""}`;
+    if (!menuItemId || !Number.isSafeInteger(quantity) || quantity < 1 || seen.has(selectionKey) || (variantId && servingOptionId)) {
       throw new TypeError("Order items are invalid.");
     }
-    seen.add(menuItemId);
-    return { menuItemId, quantity };
+    seen.add(selectionKey);
+    return {
+      menuItemId,
+      quantity,
+      ...(variantId ? { variantId } : {}),
+      ...(temperature ? { temperature } : {}),
+      ...(servingOptionId ? { servingOptionId } : {}),
+    };
   });
 }
 
@@ -71,7 +81,7 @@ export function createOrderPayload({ clientOrderId, items }) {
     throw new TypeError("clientOrderId must be a UUID v4.");
   }
   return {
-    schemaVersion: 1,
+    schemaVersion: items.some((item) => item?.temperature) ? 3 : 2,
     clientOrderId,
     items: normalizeItems(items),
   };
@@ -373,6 +383,27 @@ export async function fetchCustomerOrderHistory({
   return body.orders;
 }
 
+export async function fetchCustomerMenu({
+  config,
+  env = globalThis,
+  fetchImpl = env.fetch,
+} = {}) {
+  const endpoint = config?.baseUrl ? `${config.baseUrl}/menu` : null;
+  if (!config?.enabled || !endpoint || typeof fetchImpl !== "function") {
+    throw new Error("Customer menu API is not configured.");
+  }
+  const response = await fetchImpl(endpoint, {
+    method: "GET",
+    headers: { Accept: "application/json", Authorization: `Bearer ${config.token}` },
+  });
+  if (response.status !== 200) throw new Error("Customer menu request failed.");
+  const body = await response.json();
+  if (!body || body.audience !== "customer" || !Array.isArray(body.categories) || !Array.isArray(body.items)) {
+    throw new Error("Customer menu response is invalid.");
+  }
+  return body;
+}
+
 export function subscribeCustomerInvalidations({
   config,
   env = globalThis,
@@ -672,6 +703,7 @@ export function createCustomerOrderClient({
       subscribeInvalidations() { return () => {}; },
       get() { return Promise.resolve(null); },
       getHistory() { return Promise.resolve([]); },
+      getMenu() { return Promise.resolve(null); },
       list() { return Promise.resolve([]); },
     };
   }
@@ -692,6 +724,13 @@ export function createCustomerOrderClient({
     configReason: hasDurableStore ? config.reason : "INDEXEDDB_UNAVAILABLE",
     getHistory() {
       return fetchCustomerOrderHistory({
+        config,
+        env: global,
+        fetchImpl: options.fetchImpl || global.fetch,
+      });
+    },
+    getMenu() {
+      return fetchCustomerMenu({
         config,
         env: global,
         fetchImpl: options.fetchImpl || global.fetch,

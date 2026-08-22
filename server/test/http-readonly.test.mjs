@@ -242,7 +242,7 @@ test('01 health is public and returns 200', async () => {
     assert.equal(response.statusCode, 200);
     assert.equal(response.json.status, 'ready');
     assert.equal(response.json.db, 'ready');
-    assert.equal(response.json.schemaVersion, 2);
+    assert.equal(response.json.schemaVersion, 4);
   }, { now: () => 1_786_300_000_000 });
 });
 
@@ -493,11 +493,12 @@ test('28 customer menu returns 200', async () => {
   });
 });
 
-test('29 customer menu contains no price', async () => {
-  await withFixture(async ({ port }) => assertNoKeys(
-    (await request({ port, path: '/v1/menu', headers: authHeaders(CUSTOMER_TOKEN) })).json,
-    /price/i,
-  ));
+test('29 customer menu contains the tax-included master price required for display', async () => {
+  await withFixture(async ({ port }) => {
+    const menu = (await request({ port, path: '/v1/menu', headers: authHeaders(CUSTOMER_TOKEN) })).json;
+    assert.equal(menu.items.every((item) => Number.isSafeInteger(item.priceYen)), true);
+    assertNoKeys(menu, /unitPriceYenSnapshot|lineTotalYen|totalAmountYen|kitchenAlias/i);
+  });
 });
 
 test('30 customer menu contains no kitchen alias', async () => {
@@ -569,7 +570,8 @@ test('38 query and body role claims cannot expand customer visibility', async ()
     const query = await request({ port, path: '/v1/menu?role=admin', headers: authHeaders(CUSTOMER_TOKEN) });
     assert.equal(query.statusCode, 200);
     assert.equal(query.json.audience, 'customer');
-    assertNoKeys(query.json, /price|kitchenAlias/i);
+    assertNoKeys(query.json, /kitchenAlias/i);
+    assert.equal(query.json.items.every((item) => Number.isSafeInteger(item.priceYen)), true);
     const body = JSON.stringify({ role: 'admin' });
     const bodyResponse = await request({
       port,
@@ -578,7 +580,8 @@ test('38 query and body role claims cannot expand customer visibility', async ()
       body,
     });
     assert.equal(bodyResponse.json.audience, 'customer');
-    assertNoKeys(bodyResponse.json, /price|kitchenAlias/i);
+    assertNoKeys(bodyResponse.json, /kitchenAlias/i);
+    assert.equal(bodyResponse.json.items.every((item) => Number.isSafeInteger(item.priceYen)), true);
   });
 });
 
@@ -675,7 +678,8 @@ test('46 concurrent reads do not mix principals or role-scoped data', async () =
     for (const { response, role } of results) {
       assert.equal(response.statusCode, 200);
       assert.equal(response.json.audience, role);
-      if (role !== 'admin') assertNoKeys(response.json, /price/i);
+      if (role === 'kitchen') assertNoKeys(response.json, /price/i);
+      if (role === 'customer') assert.equal(response.json.items.every((item) => Number.isSafeInteger(item.priceYen)), true);
       if (role === 'customer') assertNoKeys(response.json, /kitchenAlias/i);
     }
     assert.equal(new Set(results.map(({ response }) => response.headers['x-request-id'])).size, results.length);
@@ -730,11 +734,15 @@ test('50 response DTOs exactly match the role-scoped OpenAPI schemas', async () 
     const menuRequired = ['audience', 'eventEpoch', 'lastEventId', 'categories', 'items'];
     const publicCategory = ['categoryId', 'name', 'sortOrder'];
     const adminCategory = [...publicCategory, 'isVisible', 'version', 'updatedAtMs'];
-    const customerItem = ['menuItemId', 'categoryId', 'formalName', 'description', 'isSoldOut', 'sortOrder', 'version'];
+    const customerItem = [
+      'menuItemId', 'categoryId', 'formalName', 'description', 'priceYen', 'isSoldOut',
+      'sortOrder', 'version', 'variants', 'servingOptions',
+    ];
     const kitchenItem = ['menuItemId', 'categoryId', 'formalName', 'kitchenAlias', 'isSoldOut', 'sortOrder', 'version'];
     const adminItem = [
       'menuItemId', 'categoryId', 'formalName', 'kitchenAlias', 'description', 'priceYen',
-      'isSoldOut', 'isActive', 'sortOrder', 'version', 'updatedAtMs',
+      'isSoldOut', 'isActive', 'sortOrder', 'version', 'updatedAtMs', 'detail',
+      'variants', 'servingOptions',
     ];
     for (const [token, role] of [[CUSTOMER_TOKEN, 'customer'], [KITCHEN_TOKEN, 'kitchen'], [ADMIN_TOKEN, 'admin']]) {
       const config = (await request({ port, path: '/v1/device/config', headers: authHeaders(token) })).json;
@@ -749,7 +757,7 @@ test('50 response DTOs exactly match the role-scoped OpenAPI schemas', async () 
       const categoryKeys = role === 'admin' ? adminCategory : publicCategory;
       const itemKeys = role === 'customer' ? customerItem : role === 'kitchen' ? kitchenItem : adminItem;
       menu.categories.forEach((category) => assertExactKeys(category, categoryKeys));
-      menu.items.forEach((item) => assertExactKeys(item, itemKeys, ['imageUri']));
+      menu.items.forEach((item) => assertExactKeys(item, itemKeys, ['imageUri', 'sectionKey', 'detail']));
     }
   });
 });
