@@ -205,10 +205,7 @@ h1, h2, h3, p { margin: 0; }
 .menu-section-divider b { color: var(--red); font-size: 24px; }
 .menu-section-divider span { margin-top: 4px; font-size: 13px; font-weight: 700; }
 .shochu-menu-row { grid-template-rows: minmax(123px, auto) auto; }
-.serving-options { grid-column: 1 / -1; width: 100%; padding: 14px 18px 18px; border-top: 1px dashed var(--red); background: #fff8ee; }
-.serving-options > b { display: block; margin-bottom: 10px; font-size: 15px; }
-.serving-options > div { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
-.serving-options button { min-height: 52px; border: 1px solid var(--red); background: #fff; color: var(--red); font-weight: 900; }
+.shochu-serving-button { min-width: 0; min-height: 58px; padding: 10px 12px; border: 2px solid var(--red); background: #fffaf3; color: var(--red); display: flex; align-items: center; justify-content: center; font-size: 15px; font-weight: 900; touch-action: manipulation; user-select: none; -webkit-user-select: none; -webkit-tap-highlight-color: transparent; }
 .sake-menu-row { min-height: 154px; grid-template-columns: 60px 72px minmax(0, 1fr) minmax(196px, 28%); gap: 12px; padding: 10px 0; }
 .product-image-button { width: 96px; height: 132px; padding: 0; border: 1px solid #b8afa2; background: #fff; overflow: hidden; }
 .sake-menu-row .product-image-button { width: 64px; height: 108px; }
@@ -222,26 +219,26 @@ h1, h2, h3, p { margin: 0; }
 .sake-serve-button span { font-size: 16px; white-space: nowrap; }
 .sake-serve-button small { font-size: 11px; font-weight: 800; }
 .sake-serve-button:disabled { border-color: #c8c1b7; background: #e7e2da; color: #777; }
-.sake-serving-modal { display: grid; gap: 18px; }
-.sake-serving-modal .modal-lead { padding-block: 0; }
-.sake-serving-options { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
-.sake-serving-option { min-width: 0; min-height: 132px; padding: 14px; border: 2px solid var(--line); background: #fffaf3; color: var(--ink); display: flex; flex-direction: column; align-items: flex-start; justify-content: space-between; gap: 8px; text-align: left; }
-.sake-serving-option.is-selected { border-color: var(--red); box-shadow: inset 0 0 0 2px var(--red); color: var(--red); }
-.sake-serving-option__heading { display: flex; flex-direction: column; gap: 3px; }
-.sake-serving-option__heading b { font-size: 18px; }
-.sake-serving-option__heading small, .sake-serving-option__temperatures { font-size: 12px; font-weight: 800; }
-.sake-serving-option .menu-price { align-items: flex-start; }
-.sake-serving-option .menu-price b { font-size: 32px; }
-.sake-serving-option .menu-price small { font-size: 11px; }
-.sake-temperature-picker { display: grid; grid-template-columns: 72px 1fr; align-items: center; gap: 12px; padding: 14px; border: 1px solid var(--line); background: #f2e8da; }
-.sake-temperature-picker > b { color: var(--red); }
-.sake-temperature-picker > div { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
-.sake-temperature-picker button { min-height: 52px; border: 1px solid var(--red); background: #fffaf3; color: var(--red); font-weight: 900; }
-.sake-temperature-picker button.is-selected { background: var(--red); color: #fff; }
-.sake-selection-confirm { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 12px; padding: 14px; border-top: 1px solid var(--red); border-bottom: 1px solid var(--red); }
-.sake-selection-confirm > span { color: var(--muted); font-size: 12px; font-weight: 800; }
-.sake-selection-confirm > b { font-size: 17px; }
-.sake-selection-confirm .menu-price b { font-size: 28px; }
+.sake-serving-modal { display: grid; gap: 10px; }
+.sake-serving-modal .modal-lead { padding: 0 0 2px; text-align: left; font-size: 15px; }
+.sake-serving-options { display: grid; gap: 6px; }
+.sake-serving-row { min-height: 76px; display: grid; grid-template-columns: minmax(190px, .95fr) minmax(220px, 1.05fr); gap: 8px; }
+.sake-serving-option { min-width: 0; min-height: 72px; padding: 8px 12px; border: 2px solid var(--line); background: #fffaf3; color: var(--ink); display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px; text-align: left; }
+.sake-serving-row.is-selected .sake-serving-option { border-color: var(--red); box-shadow: inset 0 0 0 2px var(--red); color: var(--red); }
+.sake-serving-option__heading { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.sake-serving-option__heading b { font-size: 18px; white-space: nowrap; }
+.sake-serving-option__heading small { font-size: 11px; font-weight: 800; }
+.sake-serving-option .menu-price { align-items: flex-end; }
+.sake-serving-option .menu-price b { font-size: 27px; }
+.sake-serving-option .menu-price small { font-size: 10px; }
+.sake-temperature-options { min-width: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; align-items: stretch; }
+.sake-temperature-options button { min-width: 0; min-height: 56px; border: 1px solid var(--red); background: #fffaf3; color: var(--red); font-size: 16px; font-weight: 900; }
+.sake-temperature-options button:only-child { grid-column: 1 / -1; }
+.sake-temperature-options button.is-selected { background: var(--red); color: #fff; }
+.sake-temperature-fixed { min-width: 0; min-height: 56px; border: 1px solid var(--line); background: #eee8dc; color: var(--red); display: grid; place-items: center; font-size: 16px; font-weight: 900; }
+.sake-selection-error { margin: 0; color: var(--red); font-size: 14px; font-weight: 900; text-align: right; }
+.modal--sake .modal-actions { margin-top: 6px; }
+.modal--sake .modal-actions .button--large { min-height: 52px; }
 .product-detail { display: grid; grid-template-columns: minmax(220px, 36%) 1fr; gap: 28px; }
 .product-detail > img { width: 100%; max-height: 460px; object-fit: contain; background: #fff; }
 .product-detail__reading { color: var(--muted); font-size: 14px; }
@@ -271,11 +268,33 @@ h1, h2, h3, p { margin: 0; }
 .modal-backdrop { position: fixed; inset: 0; z-index: 100; background: rgb(20 16 12 / 56%); display: grid; place-items: center; padding: 30px; }
 .modal { width: min(620px, 92vw); max-height: 88vh; overflow: auto; background: var(--paper); border: 2px solid var(--ink); box-shadow: var(--shadow); }
 .modal--wide { width: min(900px, 92vw); }
+.modal--sake { align-self: start; margin-top: 20px; max-height: calc(100vh - 40px); overflow: hidden; }
+.modal--sake .modal__header { min-height: 66px; padding: 10px 18px; }
+.modal--sake .modal__header h2 { font-size: 24px; }
+.modal--sake .modal__body { padding: 14px 18px 16px; }
+.modal--shochu { align-self: start; margin-top: 20px; width: min(680px, 92vw); max-height: calc(100vh - 40px); max-height: calc(100dvh - 40px); overflow: visible; display: flex; flex-direction: column; }
+.modal--shochu .modal__header { min-height: 66px; padding: 10px 18px; }
+.modal--shochu .modal__header h2 { max-width: calc(100% - 64px); font-size: clamp(28px, 3.2vw, 38px); line-height: 1.1; overflow-wrap: anywhere; }
+.modal--shochu .modal__body { min-height: 0; padding: 14px 18px 16px; overflow: visible; display: flex; flex-direction: column; }
 .modal__header { min-height: 78px; padding: 16px 22px; border-bottom: 2px solid var(--red); display: flex; align-items: center; justify-content: space-between; }
 .modal__header h2 { font-size: 28px; color: var(--red); letter-spacing: .05em; }
 .modal__body { padding: 26px; }
 .modal-lead { text-align: center; font-size: 18px; font-weight: 700; padding-block: 20px; }
 .modal-actions { margin-top: 26px; display: flex; justify-content: flex-end; gap: 12px; }
+.shochu-selection-modal { min-height: 0; display: flex; flex-direction: column; gap: 10px; }
+.shochu-selection-modal .modal-lead { padding: 0 0 2px; text-align: left; font-size: 15px; }
+.shochu-selection-list { display: grid; gap: 6px; }
+.shochu-selection-row { min-height: 58px; display: grid; grid-template-columns: minmax(0, 1fr) 218px; align-items: center; gap: 12px; padding: 6px 10px; border: 1px solid var(--line); background: #fffaf3; touch-action: manipulation; user-select: none; -webkit-user-select: none; -webkit-tap-highlight-color: transparent; }
+.shochu-selection-row > b { font-size: 19px; }
+.shochu-quantity-control { display: grid; grid-template-columns: 56px 1fr 56px; min-height: 52px; border: 1px solid var(--red); }
+.shochu-quantity-control { touch-action: manipulation; user-select: none; -webkit-user-select: none; -webkit-tap-highlight-color: transparent; }
+.shochu-quantity-control button { border: 0; background: var(--red); color: #fff; display: grid; place-items: center; touch-action: manipulation; user-select: none; -webkit-user-select: none; -webkit-tap-highlight-color: transparent; }
+.shochu-quantity-control button:disabled { background: #d8d4cd; color: #777; cursor: default; }
+.shochu-quantity-control > b { display: grid; place-items: center; font-size: 22px; }
+.shochu-selection-footer { display: flex; flex-direction: column; gap: 6px; visibility: visible; opacity: 1; flex: 0 0 auto; box-sizing: border-box; width: 100%; padding: 8px; border: 2px solid var(--line); background: #fff; }
+.modal--shochu .modal-actions { width: 100%; margin-top: 0; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.6fr); gap: 8px; }
+.modal--shochu .modal-actions .button { min-width: 0; width: 100%; overflow-wrap: anywhere; }
+.modal--shochu .modal-actions .button--large { min-height: 52px; }
 .confirm-list { display: grid; }
 .confirm-list > div { min-height: 55px; border-bottom: 1px dashed var(--line); display: flex; align-items: center; justify-content: space-between; font-size: 18px; }
 .price-hidden-note { margin-top: 18px; color: var(--muted); font-size: 13px; }
@@ -564,18 +583,42 @@ h1, h2, h3, p { margin: 0; }
   .sake-serve-button { min-height: 56px; padding-inline: 8px; }
   .sake-serve-button span { font-size: 13px; }
   .sake-serve-button small { font-size: 9px; }
-  .sake-serving-options { gap: 8px; }
-  .sake-serving-option { min-height: 120px; padding: 10px; }
-  .sake-serving-option__heading b { font-size: 14px; }
-  .sake-serving-option .menu-price b { font-size: 25px; }
+  .shochu-serving-button { min-height: 56px; padding-inline: 8px; font-size: 13px; }
+  .modal--sake { width: min(650px, 94vw); margin-top: 12px; max-height: calc(100vh - 24px); }
+  .modal--sake .modal__body { padding: 12px 14px 14px; }
+  .modal--shochu { width: min(650px, 94vw); margin-top: 12px; max-height: calc(100vh - 24px); }
+  .modal--shochu .modal__body { padding: 12px 14px 14px; }
+  .sake-serving-row { grid-template-columns: minmax(170px, .9fr) minmax(190px, 1.1fr); gap: 6px; }
+  .sake-serving-option { min-height: 66px; padding: 7px 9px; }
+  .sake-serving-option__heading b { font-size: 15px; }
+  .sake-serving-option__heading small { font-size: 10px; }
+  .sake-serving-option .menu-price b { font-size: 23px; }
   .sake-serving-option .menu-price small { font-size: 9px; }
-  .sake-selection-confirm { grid-template-columns: 1fr auto; }
-  .sake-selection-confirm > span { grid-column: 1 / -1; }
+  .sake-temperature-options { gap: 5px; }
+  .sake-temperature-options button { min-height: 52px; font-size: 14px; }
+  .shochu-selection-row { grid-template-columns: minmax(0, 1fr) 190px; gap: 8px; }
+  .shochu-quantity-control { grid-template-columns: 50px 1fr 50px; min-height: 52px; }
   .staff-app { grid-template-columns: 200px minmax(0, 1fr); }
   .staff-topbar { grid-template-columns: 220px 1fr auto; gap: 14px; }
   .staff-title h1 { font-size: 34px; }
   .staff-title p { display: none; }
   .staff-topbar__right .connection { display: none; }
+}
+
+@media (orientation: landscape) and (max-height: 700px) {
+  .modal-backdrop { padding: 8px 16px; }
+  .modal--shochu { margin-top: 8px; max-height: calc(100vh - 16px); max-height: calc(100dvh - 16px); }
+  .modal--shochu .modal__header { min-height: 54px; padding: 6px 14px; }
+  .modal--shochu .modal__header h2 { font-size: clamp(26px, 3.2vw, 36px); }
+  .modal--shochu .modal__body { padding: 8px 14px 10px; }
+  .shochu-selection-modal { gap: 6px; }
+  .shochu-selection-modal .modal-lead { padding: 0; font-size: 13px; line-height: 1.3; }
+  .shochu-selection-list { gap: 3px; }
+  .shochu-selection-row { min-height: 54px; padding: 0 8px; grid-template-columns: minmax(0, 1fr) 210px; gap: 8px; }
+  .shochu-selection-row > b { font-size: 17px; }
+  .shochu-selection-footer { gap: 4px; padding: 6px; }
+  .modal--shochu .modal-actions { gap: 6px; }
+  .modal--shochu .modal-actions .button { min-height: 52px; padding-block: 8px; }
 }
 
 @media (max-width: 900px) {
@@ -591,11 +634,48 @@ h1, h2, h3, p { margin: 0; }
 }
 
 /* Pairing QR: keep the complete code and quiet zone inside the admin viewport. */
+.communication-diagnostics {
+  margin: 0 0 18px;
+  padding: 18px 20px;
+  border: 2px solid var(--ink);
+  background: #fff;
+}
+.communication-diagnostics__heading {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 18px;
+}
+.communication-diagnostics__heading h2 { margin: 4px 0; font-size: 28px; }
+.communication-diagnostics__heading p { margin: 6px 0 0; color: var(--muted); font-size: 13px; font-weight: 700; }
+.communication-diagnostics__heading .button { min-height: 48px; min-width: 92px; }
+.communication-diagnostics__grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(280px, .9fr);
+  gap: 16px;
+  margin-top: 16px;
+}
+.communication-diagnostics__facts,
+.communication-diagnostics__results { display: grid; gap: 7px; }
+.communication-diagnostics__facts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.communication-diagnostics__facts p,
+.communication-diagnostics__results article { margin: 0; padding: 10px 12px; border: 1px solid var(--line); background: #fffaf3; }
+.communication-diagnostics__facts p { display: grid; gap: 3px; }
+.communication-diagnostics__facts b,
+.communication-diagnostics__results b { color: var(--red); font-size: 12px; }
+.communication-diagnostics__facts span { font-weight: 900; overflow-wrap: anywhere; }
+.communication-diagnostics__results article { display: grid; gap: 4px; }
+.communication-diagnostics__results strong { font-size: 18px; overflow-wrap: anywhere; }
+.communication-diagnostics__results small { color: var(--muted); font-weight: 700; overflow-wrap: anywhere; }
+
 .pairing-admin-panel {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(220px, min(70vmin, 480px));
   gap: 14px 24px;
   align-items: start;
+}
+@media (max-width: 900px) {
+  .communication-diagnostics__grid { grid-template-columns: 1fr; }
 }
 .pairing-admin-panel > :not(.pairing-qr) { grid-column: 1; }
 .pairing-admin-panel .pairing-qr {

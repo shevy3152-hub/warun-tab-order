@@ -9,6 +9,7 @@ import test from 'node:test';
 import { createDeviceAuthenticator } from '../src/auth/device-auth.mjs';
 import { createCatalogRepository } from '../src/catalog/catalog-repository.mjs';
 import { initializeDatabase } from '../src/db/database.mjs';
+import { createDiagnosticRecorder } from '../src/diagnostics/diagnostic-recorder.mjs';
 import { createEventRepository } from '../src/events/event-repository.mjs';
 import { createSnapshotService } from '../src/events/snapshot-service.mjs';
 import { createSseHub } from '../src/events/sse-hub.mjs';
@@ -78,6 +79,7 @@ async function withFixture(run) {
   let snapshots;
   let hub;
   const diagnostics = [];
+  const communicationDiagnostics = createDiagnosticRecorder({ now: () => 1_000 });
   try {
     const database = connection.database;
     database.prepare(`INSERT INTO devices (device_id, role, display_name, token_hash, status, paired_at_ms, created_at_ms, updated_at_ms) VALUES (?, 'admin', 'Admin', ?, 'active', 1, 1, 1)`).run(ADMIN_ID, hash(ADMIN_TOKEN));
@@ -100,6 +102,7 @@ async function withFixture(run) {
       sseHub: hub,
       pairingService: createPairingService({ database }),
       pairingDiagnosticLogger: (entry) => diagnostics.push(entry),
+      diagnosticRecorder: communicationDiagnostics,
       runtimeInfo: createRuntimeInfo({
         databasePath,
         repositoryRoot: directory,
@@ -110,7 +113,7 @@ async function withFixture(run) {
       }),
     });
     const port = await listen(server);
-    await run({ port, database, diagnostics });
+    await run({ port, database, diagnostics, communicationDiagnostics });
   } finally {
     await closeServer(server).catch(() => {});
     try { hub?.close(); } catch {}
@@ -186,6 +189,30 @@ test('pairing preflight and issuance expose the actual safe-copy/runtime state',
       orderItems: database.prepare('SELECT COUNT(*) AS count FROM order_items').get().count,
       events: database.prepare('SELECT COUNT(*) AS count FROM event_log').get().count,
     }, protectedCountsBeforeRevoke);
+  });
+});
+
+test('admin diagnostics reports safe runtime state and bounded request outcomes without request bodies', async () => {
+  await withFixture(async ({ port, database, communicationDiagnostics }) => {
+    const unauthorized = await request({ port, path: '/v1/admin/order-history' });
+    assert.equal(unauthorized.statusCode, 401);
+    assert.equal(unauthorized.json.error.code, 'AUTHENTICATION_FAILED');
+
+    const history = await request({ port, path: '/v1/admin/order-history', token: ADMIN_TOKEN });
+    assert.equal(history.statusCode, 200);
+    assert.equal(history.json.orders.length, 0);
+
+    const diagnostics = await request({ port, path: '/v1/admin/diagnostics', token: ADMIN_TOKEN });
+    assert.equal(diagnostics.statusCode, 200);
+    assert.equal(diagnostics.json.runtime.databaseTarget, 'safe-copy');
+    assert.equal(diagnostics.json.runtime.isProduction, false);
+    assert.equal(diagnostics.json.schemaVersion, 4);
+    assert.equal(diagnostics.json.storage.orders, database.prepare('SELECT COUNT(*) AS count FROM orders').get().count);
+    assert.equal(diagnostics.json.latestOrderRetrieval.endpoint, 'GET /v1/admin/order-history');
+    assert.equal(diagnostics.json.latestOrderRetrieval.status, 200);
+    assert.equal(communicationDiagnostics.list().some((entry) => entry.classification === 'auth_rejected'), true);
+    assert.doesNotMatch(JSON.stringify(diagnostics.json), /Authorization|Bearer|token|pairingCode|body/);
+    assert.doesNotMatch(JSON.stringify(diagnostics.json), /deviceId|deviceDisplayName/);
   });
 });
 

@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { createDeviceAuthenticator } from "./auth/device-auth.mjs";
 import { createCatalogRepository } from "./catalog/catalog-repository.mjs";
 import { initializeDatabase } from "./db/database.mjs";
+import { createDiagnosticRecorder } from "./diagnostics/diagnostic-recorder.mjs";
 import { createEventRepository } from "./events/event-repository.mjs";
 import { createSseHub } from "./events/sse-hub.mjs";
 import { createSnapshotService } from "./events/snapshot-service.mjs";
@@ -105,6 +106,7 @@ export function createWarunServer({ databasePath, runtimeInfo = undefined, now =
   const snapshotService = createSnapshotService({ catalog, eventRepository });
   const sseHub = createSseHub({ eventRepository });
   const pairingDiagnosticLogger = createPairingDiagnosticLogger(process.env.WARUN_PAIRING_DIAGNOSTIC_LOG_PATH);
+  const diagnosticRecorder = createDiagnosticRecorder({ logPath: process.env.WARUN_COMMUNICATION_DIAGNOSTIC_LOG_PATH });
   const server = createHttpServer({
     database,
     authenticator,
@@ -117,6 +119,7 @@ export function createWarunServer({ databasePath, runtimeInfo = undefined, now =
     pairingService,
     runtimeInfo,
     pairingDiagnosticLogger,
+    diagnosticRecorder,
   });
 
   const closeDependencies = () => {

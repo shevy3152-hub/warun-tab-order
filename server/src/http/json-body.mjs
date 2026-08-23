@@ -49,13 +49,14 @@ const MAX_ORDER_LINES = 50;
 const MAX_QUANTITY = 99;
 const MAX_JSON_DEPTH = 64;
 const JSON_WHITESPACE = new Set([' ', '\t', '\r', '\n']);
+const TEMPERATURES = new Set(['冷酒', '燗酒']);
 const TOP_LEVEL_KEYS = new Set([
   'schemaVersion',
   'clientOrderId',
   'clientCreatedAtMs',
   'items',
 ]);
-const ITEM_KEYS = new Set(['menuItemId', 'quantity', 'variantId', 'servingOptionId']);
+const ITEM_KEYS = new Set(['menuItemId', 'quantity', 'variantId', 'servingOptionId', 'temperature']);
 
 function bodyError(code, options = undefined) {
   return new OrderJsonBodyError(code, options);
@@ -365,7 +366,7 @@ function requireExactKeys(value, allowedKeys, requiredKeys) {
 
 function validateOrderRequest(value) {
   requireExactKeys(value, TOP_LEVEL_KEYS, ['schemaVersion', 'clientOrderId', 'items']);
-  if (![1, 2].includes(value.schemaVersion) || !CLIENT_ORDER_ID_PATTERN.test(value.clientOrderId)) {
+  if (![1, 2, 3].includes(value.schemaVersion) || !CLIENT_ORDER_ID_PATTERN.test(value.clientOrderId)) {
     throw bodyError(ORDER_JSON_BODY_ERROR_CODES.INVALID_ORDER_REQUEST);
   }
   if (
@@ -392,18 +393,23 @@ function validateOrderRequest(value) {
     }
     const variantId = item.variantId ?? null;
     const servingOptionId = item.servingOptionId ?? null;
+    const temperature = item.temperature ?? null;
     for (const selectionId of [variantId, servingOptionId]) {
       if (selectionId !== null && (typeof selectionId !== 'string' || !MENU_ITEM_ID_PATTERN.test(selectionId))) {
         throw bodyError(ORDER_JSON_BODY_ERROR_CODES.INVALID_ORDER_REQUEST);
       }
     }
+    if (temperature !== null && (typeof temperature !== 'string' || !TEMPERATURES.has(temperature))) {
+      throw bodyError(ORDER_JSON_BODY_ERROR_CODES.INVALID_ORDER_REQUEST);
+    }
     if (
       (variantId !== null && servingOptionId !== null)
-      || (value.schemaVersion === 1 && (variantId !== null || servingOptionId !== null))
+      || (value.schemaVersion === 1 && (variantId !== null || servingOptionId !== null || temperature !== null))
+      || (value.schemaVersion < 3 && temperature !== null)
     ) {
       throw bodyError(ORDER_JSON_BODY_ERROR_CODES.INVALID_ORDER_REQUEST);
     }
-    const selectionKey = `${item.menuItemId}\u0000${variantId ?? ''}\u0000${servingOptionId ?? ''}`;
+    const selectionKey = `${item.menuItemId}\u0000${variantId ?? ''}\u0000${servingOptionId ?? ''}\u0000${temperature ?? ''}`;
     if (seenSelections.has(selectionKey)) throw bodyError(ORDER_JSON_BODY_ERROR_CODES.INVALID_ORDER_REQUEST);
     seenSelections.add(selectionKey);
     return Object.freeze({
@@ -411,6 +417,7 @@ function validateOrderRequest(value) {
       quantity: item.quantity,
       ...(variantId ? { variantId } : {}),
       ...(servingOptionId ? { servingOptionId } : {}),
+      ...(temperature ? { temperature } : {}),
     });
   });
 

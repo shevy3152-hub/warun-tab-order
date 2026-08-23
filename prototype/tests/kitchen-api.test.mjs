@@ -26,7 +26,7 @@ test("kitchen API uses the runtime token and maps active snapshot orders", async
             acceptedAtMs: 1786786940836,
             status: "new",
             totalAmountYen: 960,
-            items: [{ orderItemId: 11, menuItemId: "edamame", formalNameSnapshot: "枝豆", kitchenAliasSnapshot: "枝豆", quantity: 1, isServed: false, servedAtMs: null }],
+            items: [{ orderItemId: 11, menuItemId: "edamame", formalNameSnapshot: "枝豆", kitchenAliasSnapshot: "枝豆", variantNameSnapshot: "徳利2合", variantVolumeSnapshot: "360ml", temperatureSnapshot: "冷酒", quantity: 1, isServed: false, servedAtMs: null }],
           }],
         };
       },
@@ -37,6 +37,7 @@ test("kitchen API uses the runtime token and maps active snapshot orders", async
   const orders = await fetchKitchenOrders({ env });
   assert.equal(orders[0].tableId, "1");
   assert.equal(orders[0].items[0].isServed, false);
+  assert.equal(orders[0].items[0].temperatureSnapshot, "冷酒");
   assert.equal(calls[0].url, "http://192.168.1.10:5173/v1/snapshot");
   assert.equal(calls[0].options.headers.Authorization, `Bearer ${TOKEN}`);
 });

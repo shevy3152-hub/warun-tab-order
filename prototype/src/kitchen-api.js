@@ -48,6 +48,7 @@ export async function fetchKitchenSnapshot({ env = globalThis, fetchImpl = env.f
         variantId: item.variantId,
         variantNameSnapshot: item.variantNameSnapshot,
         variantVolumeSnapshot: item.variantVolumeSnapshot,
+        temperatureSnapshot: item.temperatureSnapshot,
         servingOptionId: item.servingOptionId,
         servingOptionNameSnapshot: item.servingOptionNameSnapshot,
         quantity: item.quantity,

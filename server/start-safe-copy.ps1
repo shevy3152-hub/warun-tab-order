@@ -24,7 +24,10 @@ $RuntimeRoot = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 
 $StatePath = Join-Path $RuntimeRoot 'runtime-state.json'
 $LogRoot = Join-Path $RuntimeRoot 'logs'
 $AdminTokenPath = Join-Path $RuntimeRoot 'admin-token'
+$KitchenTokenPath = Join-Path $RuntimeRoot 'kitchen-token'
+$KitchenTokenProvisionScript = Join-Path $ServerRoot 'scripts\provision-safe-copy-kitchen-token.mjs'
 $PairingDiagnosticLogPath = Join-Path $LogRoot 'pairing-claims.ndjson'
+$CommunicationDiagnosticLogPath = Join-Path $LogRoot 'communication.ndjson'
 
 function Test-PathUnder {
   param([Parameter(Mandatory)][string]$Child, [Parameter(Mandatory)][string]$Parent)
@@ -62,6 +65,13 @@ function Get-Health {
   return Invoke-WebRequest -UseBasicParsing -Uri $Uri -TimeoutSec 5
 }
 
+function Get-HealthProcessId {
+  param([Parameter(Mandatory)]$HealthResponse)
+  $headerValue = @($HealthResponse.Headers['X-Warun-Process-Id']) | Select-Object -First 1
+  if ([string]::IsNullOrWhiteSpace([string]$headerValue)) { throw 'Health response did not include a process identity.' }
+  return [int]$headerValue
+}
+
 function Read-SafeCopyAdminToken {
   if (-not (Test-Path -LiteralPath $AdminTokenPath -PathType Leaf)) {
     throw 'The safe-copy admin token store is missing. Run provision-safe-copy-admin-token.mjs once before starting the server.'
@@ -69,6 +79,41 @@ function Read-SafeCopyAdminToken {
   $token = (Get-Content -LiteralPath $AdminTokenPath -Raw -ErrorAction Stop).Trim()
   if ($token -notmatch '^[A-Za-z0-9_-]{43}$') { throw 'The safe-copy admin token store is invalid.' }
   return $token
+}
+
+function Read-SafeCopyKitchenToken {
+  if (-not (Test-Path -LiteralPath $KitchenTokenPath -PathType Leaf)) {
+    throw 'The safe-copy kitchen token store is missing.'
+  }
+  $token = (Get-Content -LiteralPath $KitchenTokenPath -Raw -ErrorAction Stop).Trim()
+  if ($token -notmatch '^[A-Za-z0-9_-]{43}$') { throw 'The safe-copy kitchen token store is invalid.' }
+  return $token
+}
+
+function Invoke-SafeCopyKitchenTokenOperation {
+  param([Parameter(Mandatory)][ValidateSet('check', 'ensure')][string]$Mode)
+  $arguments = @(
+    $KitchenTokenProvisionScript,
+    '--mode', $Mode,
+    '--db', $DatabasePath,
+    '--token-file', $KitchenTokenPath
+  )
+  & $node.Source @arguments | Out-Host
+  if ($LASTEXITCODE -ne 0) { throw 'The safe-copy kitchen token check/provision failed; startup was stopped.' }
+  return Read-SafeCopyKitchenToken
+}
+
+function Assert-SafeCopyInjectedKitchenToken {
+  param([Parameter(Mandatory)][string]$Token, [Parameter(Mandatory)][int]$Port)
+  $response = Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$Port/admin.html" -TimeoutSec 5
+  if ($response.StatusCode -ne 200) { throw 'The safe-copy admin shell did not return HTTP 200 for kitchen token verification.' }
+  $html = [string]$response.Content
+  $metaMatch = [regex]::Match($html, '<meta\s+name=["'']warun-kitchen-token["'']\s+content=["''](?<token>[A-Za-z0-9_-]{43})["'']\s*>', [Text.RegularExpressions.RegexOptions]::IgnoreCase)
+  $runtimeMatch = [regex]::Match($html, 'kitchenToken:(?<token>"[A-Za-z0-9_-]{43}")')
+  if (-not $metaMatch.Success -or -not $runtimeMatch.Success) { throw 'The safe-copy admin shell did not contain the expected kitchen runtime configuration.' }
+  $metaToken = $metaMatch.Groups['token'].Value
+  $runtimeToken = $runtimeMatch.Groups['token'].Value.Trim('"')
+  if ($metaToken -cne $Token -or $runtimeToken -cne $Token) { throw 'The running safe-copy process is serving a different kitchen token than the persisted store.' }
 }
 
 function Get-AdminPreflight {
@@ -115,6 +160,8 @@ function Write-RuntimeInfo {
 }
 
 Assert-SafeCopyFile
+$node = Get-Command node.exe -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+if ($null -eq $node) { throw 'node.exe was not found on PATH.' }
 $SafeCopyAdminToken = Read-SafeCopyAdminToken
 $lanAddresses = @(Get-LanIPv4)
 $webPids = @(Get-ListeningProcessIds $WebPort)
@@ -132,7 +179,7 @@ if ($existingPids.Count -gt 0) {
   if ($health.StatusCode -ne 200 -or $health.Headers['X-Warun-Environment'] -ne 'safe-copy' -or $health.Headers['X-Warun-Database-Target'] -ne 'safe-copy' -or $health.Headers['X-Warun-Database-Identity'] -ne (Get-DatabaseIdentity $DatabasePath)) {
     throw "Port conflict: an existing process is not the expected safe-copy server (PID $processId)."
   }
-  if ([int]$health.Headers['X-Warun-Process-Id'] -ne $processId) { throw "Port conflict: health belongs to a different process than PID $processId." }
+  if ((Get-HealthProcessId -HealthResponse $health) -ne $processId) { throw "Port conflict: health belongs to a different process than PID $processId." }
   if ($null -eq (Get-AdminPreflight -Token $SafeCopyAdminToken -Port $ApiPort)) {
     Stop-Process -Id $processId -Force
     $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
@@ -146,9 +193,16 @@ if ($existingPids.Count -gt 0) {
   }
 }
 
+$SafeCopyKitchenToken = if ($existingPids.Count -gt 0) {
+  Invoke-SafeCopyKitchenTokenOperation -Mode 'check'
+} else {
+  Invoke-SafeCopyKitchenTokenOperation -Mode 'ensure'
+}
+if ($existingPids.Count -gt 0) {
+  Assert-SafeCopyInjectedKitchenToken -Token $SafeCopyKitchenToken -Port $WebPort
+}
+
 if ($existingPids.Count -eq 0) {
-  $node = Get-Command node.exe -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
-  if ($null -eq $node) { throw 'node.exe was not found on PATH.' }
   [void](New-Item -ItemType Directory -Path $RuntimeRoot -Force)
   [void](New-Item -ItemType Directory -Path $LogRoot -Force)
   $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
@@ -161,7 +215,9 @@ if ($existingPids.Count -eq 0) {
   $env:WARUN_DB_PATH = $DatabasePath
   $env:WARUN_WEB_ROOT = $WebRoot
   $env:WARUN_ADMIN_API_TOKEN = $SafeCopyAdminToken
+  $env:WARUN_KITCHEN_API_TOKEN = $SafeCopyKitchenToken
   $env:WARUN_PAIRING_DIAGNOSTIC_LOG_PATH = $PairingDiagnosticLogPath
+  $env:WARUN_COMMUNICATION_DIAGNOSTIC_LOG_PATH = $CommunicationDiagnosticLogPath
   $process = Start-Process -FilePath $node.Source -ArgumentList @('src/run-server.mjs') -WorkingDirectory $ServerRoot -WindowStyle Hidden -RedirectStandardOutput $stdoutLog -RedirectStandardError $stderrLog -PassThru
   $processId = $process.Id
   $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
@@ -185,12 +241,13 @@ if ($health.StatusCode -ne 200 -or $healthBody.status -ne 'ready' -or $healthBod
 if ($health.Headers['X-Warun-Environment'] -ne 'safe-copy' -or $health.Headers['X-Warun-Database-Target'] -ne 'safe-copy' -or $health.Headers['X-Warun-Database-Identity'] -ne (Get-DatabaseIdentity $DatabasePath)) {
   throw 'The running process is not identified as the requested safe-copy runtime.'
 }
-if ([int]$health.Headers['X-Warun-Process-Id'] -ne $processId) { throw 'Health belongs to a different process than the safe-copy listener.' }
+if ((Get-HealthProcessId -HealthResponse $health) -ne $processId) { throw 'Health belongs to a different process than the safe-copy listener.' }
 $preflight = Get-AdminPreflight -Token $SafeCopyAdminToken -Port $ApiPort
 if ($null -eq $preflight -or $preflight.StatusCode -ne 200) {
   if ($existingPids.Count -eq 0 -and $null -ne $processId) { Stop-Process -Id $processId -Force -ErrorAction SilentlyContinue }
   throw 'safe-copy admin preflight did not return HTTP 200.'
 }
+Assert-SafeCopyInjectedKitchenToken -Token $SafeCopyKitchenToken -Port $WebPort
 
 [void](New-Item -ItemType Directory -Path $RuntimeRoot -Force)
 $lanOrigin = if ($lanAddresses.Count -gt 0) { "http://$($lanAddresses[0]):$WebPort" } else { "http://127.0.0.1:$WebPort" }
@@ -216,6 +273,8 @@ if ($webHealth.StatusCode -ne 200) { throw 'The local admin web endpoint did not
 Write-RuntimeInfo -RuntimeInfo $runtimeInfo
 Write-Output "Health: HTTP $($health.StatusCode), status=$($healthBody.status), db=$($healthBody.db), schemaVersion=$($healthBody.schemaVersion)"
 Write-Output "Process: PID $processId, safe-copy DB identity confirmed"
+
+Remove-Variable SafeCopyAdminToken, SafeCopyKitchenToken -ErrorAction SilentlyContinue
 
 if (-not $NoBrowser) {
   $adminUrl = "http://127.0.0.1:$WebPort/admin.html#/admin/devices"

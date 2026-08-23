@@ -72,6 +72,21 @@ function seedDatabase(database) {
   insertMenuItem.run('edamame', 'Edamame formal', 'Edamame', 'Green soybeans', 380, 0, 1);
   insertMenuItem.run('beer', 'Beer formal', 'Beer', 'Cold beer', 680, 0, 2);
   insertMenuItem.run('soldout', 'Sold-out formal', 'Sold', 'Unavailable', 480, 1, 3);
+  insertMenuItem.run('shochu', 'Shochu formal', 'Shochu', 'Shochu', 550, 0, 4);
+  insertMenuItem.run('sake', 'Sake formal', 'Sake', 'Sake', 700, 0, 5);
+  database.prepare(`
+    INSERT INTO menu_item_variants (
+      variant_id, menu_item_id, name, volume_label, price_yen,
+      sort_order, temperature_options_json, created_at_ms, updated_at_ms
+    ) VALUES ('sake_tokuri', 'sake', '徳利1合', '180ml', 1300, 1, ?, 1000, 1000)
+  `).run(JSON.stringify(['冷酒', '燗酒']));
+  const insertServingOption = database.prepare(`
+    INSERT INTO menu_item_serving_options (
+      serving_option_id, menu_item_id, name, sort_order, created_at_ms, updated_at_ms
+    ) VALUES (?, 'shochu', ?, ?, 1000, 1000)
+  `);
+  insertServingOption.run('shochu_water', '水割り', 1);
+  insertServingOption.run('shochu_soda', 'ソーダ割り', 2);
 }
 
 function currentCursor(database) {
@@ -352,6 +367,71 @@ test('created order is safely acknowledged, committed atomically, and then wakes
       /token|hash|price|unitPrice|totalAmount|kitchenAlias|formalName/i,
     );
     stream.close();
+  });
+});
+
+test('customer order E2E preserves shochu serving snapshots through database, kitchen, and customer history', async () => {
+  await withFixture(async ({ port, database }) => {
+    const clientOrderId = uuid(1_050);
+    const created = await postOrder(port, CUSTOMER_A_TOKEN, orderBody(clientOrderId, [
+      { menuItemId: 'shochu', servingOptionId: 'shochu_water', quantity: 1 },
+      { menuItemId: 'shochu', servingOptionId: 'shochu_soda', quantity: 2 },
+    ], { schemaVersion: 2 }));
+    assert.equal(created.statusCode, 201);
+    assert.equal(created.headers['idempotency-result'], 'created');
+
+    const stored = database.prepare('SELECT order_id, session_id, status FROM orders WHERE client_order_id = ?').get(clientOrderId);
+    assert.equal(stored.status, 'new');
+    assert.equal(database.prepare('SELECT COUNT(*) AS count FROM table_sessions WHERE session_id = ?').get(stored.session_id).count, 1);
+    assert.deepEqual(database.prepare(`
+      SELECT serving_option_name_snapshot, quantity
+      FROM order_items
+      WHERE order_id = ?
+      ORDER BY line_index
+    `).all(stored.order_id).map((item) => [item.serving_option_name_snapshot, item.quantity]).sort(), [
+      ['ソーダ割り', 2],
+      ['水割り', 1],
+    ]);
+    assert.equal(database.prepare('SELECT COUNT(*) AS count FROM event_log WHERE aggregate_id = ?').get(stored.order_id).count, 1);
+
+    const kitchen = await request({ port, path: '/v1/snapshot', headers: bearer(KITCHEN_TOKEN) });
+    assert.equal(kitchen.statusCode, 200);
+    const kitchenOrder = kitchen.json.activeOrders.find((order) => order.clientOrderId === clientOrderId);
+    assert.deepEqual(kitchenOrder.items.map((item) => [item.servingOptionNameSnapshot, item.quantity]).sort(), [
+      ['ソーダ割り', 2],
+      ['水割り', 1],
+    ]);
+
+    const customerHistory = await request({ port, path: '/v1/customer/order-history', headers: bearer(CUSTOMER_A_TOKEN) });
+    assert.equal(customerHistory.statusCode, 200);
+    const customerOrder = customerHistory.json.orders.find((order) => order.clientOrderId === clientOrderId);
+    assert.deepEqual(customerOrder.items.map((item) => [item.servingOptionNameSnapshot, item.quantity]).sort(), [
+      ['ソーダ割り', 2],
+      ['水割り', 1],
+    ]);
+  });
+});
+
+test('HTTP order boundary accepts App.jsx sake temperature payload and stores snapshots', async () => {
+  await withFixture(async ({ port, database }) => {
+    const clientOrderId = uuid(1_075);
+    const created = await postOrder(port, CUSTOMER_A_TOKEN, orderBody(clientOrderId, [
+      { menuItemId: 'sake', variantId: 'sake_tokuri', temperature: '燗酒', quantity: 1 },
+    ], { schemaVersion: 3 }));
+    assert.equal(created.statusCode, 201);
+    assert.equal(created.headers['idempotency-result'], 'created');
+    const stored = database.prepare(`
+      SELECT oi.variant_id, oi.variant_name_snapshot, oi.variant_volume_snapshot, oi.temperature_snapshot
+      FROM order_items AS oi
+      JOIN orders AS o ON o.order_id = oi.order_id
+      WHERE o.client_order_id = ?
+    `).get(clientOrderId);
+    assert.deepEqual({ ...stored }, {
+      variant_id: 'sake_tokuri',
+      variant_name_snapshot: '徳利1合',
+      variant_volume_snapshot: '180ml',
+      temperature_snapshot: '燗酒',
+    });
   });
 });
 

@@ -197,6 +197,12 @@ function projectOrderItem(source) {
   };
   optionalString(item, 'menuItemId', value.menuItemId);
   optionalInteger(item, 'servedAtMs', value.servedAtMs);
+  optionalString(item, 'variantId', value.variantId);
+  optionalString(item, 'variantNameSnapshot', value.variantNameSnapshot);
+  optionalString(item, 'variantVolumeSnapshot', value.variantVolumeSnapshot);
+  optionalString(item, 'temperatureSnapshot', value.temperatureSnapshot);
+  optionalString(item, 'servingOptionId', value.servingOptionId);
+  optionalString(item, 'servingOptionNameSnapshot', value.servingOptionNameSnapshot);
   return item;
 }
 

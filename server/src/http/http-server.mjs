@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { createServer } from 'node:http';
 
+import { diagnosticEndpoint } from '../diagnostics/diagnostic-recorder.mjs';
 import {
   AUTH_ERROR_CODES,
   isDeviceAuthError,
@@ -65,6 +66,7 @@ const ROUTE_METHODS = new Map([
   ['/v1/tables/sessions/close', 'POST'],
   ['/v1/kitchen/order-history', 'GET'],
   ['/v1/admin/order-history', 'GET'],
+  ['/v1/admin/diagnostics', 'GET'],
   ['/v1/admin/pairing-preflight', 'GET'],
   ['/v1/snapshot', 'GET'],
   ['/v1/events', 'GET'],
@@ -283,6 +285,21 @@ function runtimeHealthHeaders(runtimeInfo) {
   };
 }
 
+function recordRequestDiagnostic(diagnosticRecorder, context, { requestId, status, errorCode = null, stage = undefined, resultCount = undefined, activeOrderCount = undefined, openSessionCount = undefined, now = Date.now } = {}) {
+  if (!diagnosticRecorder || typeof diagnosticRecorder.record !== 'function' || !context?.endpoint) return;
+  diagnosticRecorder.record({
+    endpoint: context.endpoint,
+    requestId,
+    status,
+    errorCode,
+    durationMs: Math.max(0, now() - context.startedAtMs),
+    stage: stage ?? context.stage,
+    ...(Number.isSafeInteger(resultCount) ? { resultCount } : {}),
+    ...(Number.isSafeInteger(activeOrderCount) ? { activeOrderCount } : {}),
+    ...(Number.isSafeInteger(openSessionCount) ? { openSessionCount } : {}),
+  });
+}
+
 function defaultServiceStateReader(database) {
   if (!database || typeof database.prepare !== 'function') {
     throw createHttpError(HTTP_ERROR_CODES.INTERNAL_ERROR);
@@ -321,6 +338,68 @@ function defaultServiceStateReader(database) {
       eventEpoch: row.event_epoch,
       lastEventId: row.last_event_id,
     };
+  };
+}
+
+function readDiagnosticStorageSummary(database) {
+  const counts = database.prepare(`
+    SELECT
+      (SELECT COUNT(*) FROM orders) AS orders,
+      (SELECT COUNT(*) FROM order_items) AS order_items,
+      (SELECT COUNT(*) FROM event_log) AS event_log
+  `).get();
+  const statuses = database.prepare(`
+    SELECT status, COUNT(*) AS count
+    FROM orders
+    GROUP BY status
+    ORDER BY status
+  `).all();
+  const schema = database.prepare('SELECT schema_version FROM system_state WHERE singleton_id = 1').get();
+  return {
+    orders: Number(counts?.orders ?? 0),
+    orderItems: Number(counts?.order_items ?? 0),
+    eventLog: Number(counts?.event_log ?? 0),
+    orderStatuses: statuses.map((row) => ({ status: row.status, count: Number(row.count) })),
+    schemaVersion: Number(schema?.schema_version ?? 0),
+  };
+}
+
+function diagnosticOverview({ database, runtimeInfo, pairingService, diagnosticRecorder, principal, now = Date.now } = {}) {
+  const tableState = requireService(pairingService, 'getPairingTableState').getPairingTableState();
+  const tables = {
+    available: tableState.available.map(({ tableId, label }) => ({ tableId, label })),
+    assigned: tableState.assigned.map(({ tableId, label, deviceStatus }) => ({ tableId, label, deviceStatus })),
+  };
+  const recent = diagnosticRecorder && typeof diagnosticRecorder.list === 'function'
+    ? diagnosticRecorder.list()
+    : [];
+  const latestOrderSend = recent.find((entry) => entry.endpoint === 'POST /v1/orders') ?? null;
+  const latestOrderRetrieval = recent.find((entry) => [
+    'GET /v1/admin/order-history',
+    'GET /v1/kitchen/order-history',
+    'GET /v1/snapshot',
+  ].includes(entry.endpoint)) ?? null;
+  const generatedAt = new Date(now()).toISOString();
+  const storage = readDiagnosticStorageSummary(database);
+  return {
+    generatedAt,
+    runtime: {
+      lanIPv4: Array.isArray(runtimeInfo?.lanIPv4) ? runtimeInfo.lanIPv4 : [],
+      webPort: Number(runtimeInfo?.webPort ?? 0),
+      apiPort: Number(runtimeInfo?.apiPort ?? 0),
+      processId: Number.isSafeInteger(runtimeInfo?.processId) ? runtimeInfo.processId : null,
+      databaseTarget: runtimeInfo?.databaseTarget ?? 'unknown',
+      isProduction: runtimeInfo?.isProduction === true,
+      environment: runtimeInfo?.environment ?? 'unknown',
+    },
+    health: { status: 'ready', db: 'ready', schemaVersion: storage.schemaVersion },
+    schemaVersion: storage.schemaVersion,
+    authentication: { status: 'valid', role: principal?.role ?? 'admin' },
+    tables,
+    storage,
+    latestOrderSend,
+    latestOrderRetrieval,
+    recent: recent.slice(0, 30),
   };
 }
 
@@ -550,6 +629,9 @@ function sendError({
   allow,
   principal,
   eventRepository,
+  diagnosticRecorder,
+  diagnosticContext,
+  now = Date.now,
 }) {
   response.removeHeader?.('X-Event-Epoch');
   let httpError = mapApplicationError(error);
@@ -568,6 +650,13 @@ function sendError({
     }
   }
   body ??= createErrorResponse(httpError, requestId);
+
+  recordRequestDiagnostic(diagnosticRecorder, diagnosticContext, {
+    requestId,
+    status: httpError.statusCode,
+    errorCode: httpError.code,
+    now,
+  });
 
   writeJsonResponse(response, {
     statusCode: httpError.statusCode,
@@ -592,6 +681,7 @@ function createConfiguredHttpServer({
   requestIdFactory = randomUUID,
   now = Date.now,
   pairingDiagnosticLogger = undefined,
+  diagnosticRecorder = undefined,
 } = {}, { integrated }) {
   if (
     !authenticator
@@ -639,6 +729,7 @@ function createConfiguredHttpServer({
     const requestId = safeRequestId(requestIdFactory);
     let principal;
     let allowedMethod;
+    let diagnosticContext;
 
     const handle = async () => {
       const target = requestTarget(request.url);
@@ -651,6 +742,10 @@ function createConfiguredHttpServer({
         drainRequest(request);
         throw createHttpError(HTTP_ERROR_CODES.METHOD_NOT_ALLOWED);
       }
+      const endpoint = diagnosticEndpoint(request.method, target.path);
+      diagnosticContext = endpoint
+        ? { endpoint, startedAtMs: now(), stage: 'received' }
+        : undefined;
 
       if (target.path === '/v1/health') {
         drainRequest(request);
@@ -670,20 +765,25 @@ function createConfiguredHttpServer({
         let diagnosticStage = 'read';
         try {
           const body = await readJsonBody(request);
+          if (diagnosticContext) diagnosticContext.stage = 'body-read';
           deviceIdHash = pairingDiagnosticDeviceHash(body?.deviceId);
           diagnosticStage = 'claim';
+          if (diagnosticContext) diagnosticContext.stage = 'claim';
           const claim = pairings.claimPairingCodeRequest({
             pairingCode: body?.pairingCode,
             deviceId: body?.deviceId,
             displayName: body?.displayName,
             appVersion: body?.appVersion,
           });
+          if (diagnosticContext) diagnosticContext.stage = 'saved';
           diagnosticStage = 'authenticate';
           const claimedPrincipal = authenticator.authenticateDeviceToken(claim.deviceToken);
           diagnosticStage = 'device-config';
           const config = mapDeviceConfigResponse(catalog.getDeviceSettings(claimedPrincipal));
           diagnosticStage = 'response';
+          if (diagnosticContext) diagnosticContext.stage = 'response';
           writePairingDiagnostic(pairingDiagnosticLogger, { now, status: 201, deviceIdHash, result: 'claimed' });
+          recordRequestDiagnostic(diagnosticRecorder, diagnosticContext, { requestId, status: 201, now });
           writeJsonResponse(response, {
             statusCode: 201,
             body: { deviceToken: claim.deviceToken, config },
@@ -703,9 +803,11 @@ function createConfiguredHttpServer({
       }
 
       principal = authenticateRequest(request, authenticator);
+      if (diagnosticContext) diagnosticContext.stage = 'authenticated';
 
       if (target.path === '/v1/admin/pairing-preflight') {
         authorizeDeviceRole(principal, ['admin']);
+        if (diagnosticContext) diagnosticContext.stage = 'retrieved';
         const pairings = requireService(pairingService, 'getPairingTableState');
         const body = mapPairingPreflightResponse({
           runtimeInfo: runtimeInfo ?? {
@@ -723,6 +825,21 @@ function createConfiguredHttpServer({
           tables: pairings.getPairingTableState(),
           requestOrigin: requestOrigin(request),
         });
+        recordRequestDiagnostic(diagnosticRecorder, diagnosticContext, { requestId, status: 200, resultCount: body.tables.available.length + body.tables.assigned.length, now });
+        writeJsonResponse(response, { statusCode: 200, body, requestId });
+        return;
+      }
+
+      if (target.path === '/v1/admin/diagnostics') {
+        authorizeDeviceRole(principal, ['admin']);
+        const body = diagnosticOverview({
+          database,
+          runtimeInfo,
+          pairingService,
+          diagnosticRecorder,
+          principal,
+          now,
+        });
         writeJsonResponse(response, { statusCode: 200, body, requestId });
         return;
       }
@@ -730,7 +847,11 @@ function createConfiguredHttpServer({
       if (target.path === '/v1/orders') {
         const orders = requireService(orderRepository, 'createOrder');
         authorizeDeviceRole(principal, ['customer']);
+        if (diagnosticContext) diagnosticContext.stage = 'authorized';
+        if (diagnosticContext) diagnosticContext.stage = 'body-read';
         const body = await readOrderJsonBody(request);
+        if (diagnosticContext) diagnosticContext.stage = 'validated';
+        if (diagnosticContext) diagnosticContext.stage = 'repository-validation';
         const result = orders.createOrder({
           schemaVersion: body.schemaVersion,
           clientOrderId: body.clientOrderId,
@@ -743,9 +864,16 @@ function createConfiguredHttpServer({
             ...(item.servingOptionId ? { servingOptionId: item.servingOptionId } : {}),
           })),
         });
+        if (diagnosticContext) diagnosticContext.stage = 'saved';
         await notifyCommittedSafely(sseHub, result);
         if (response.destroyed) return;
         const receipt = mapOrderReceiptResponse(result);
+        if (diagnosticContext) diagnosticContext.stage = 'response';
+        recordRequestDiagnostic(diagnosticRecorder, diagnosticContext, {
+          requestId,
+          status: result.idempotencyResult === 'created' ? 201 : 200,
+          now,
+        });
         writeJsonResponse(response, {
           statusCode: result.idempotencyResult === 'created' ? 201 : 200,
           body: receipt,
@@ -795,10 +923,14 @@ function createConfiguredHttpServer({
 
       if (target.path === '/v1/kitchen/order-history' || target.path === '/v1/admin/order-history') {
         authorizeDeviceRole(principal, target.path === '/v1/kitchen/order-history' ? ['kitchen', 'admin'] : ['admin']);
+        if (diagnosticContext) diagnosticContext.stage = 'retrieve';
         const orders = requireService(orderRepository, 'getHistory');
+        const history = orders.getHistory(principal);
+        if (diagnosticContext) diagnosticContext.stage = 'retrieved';
+        recordRequestDiagnostic(diagnosticRecorder, diagnosticContext, { requestId, status: 200, resultCount: history.length, now });
         writeJsonResponse(response, {
           statusCode: 200,
-          body: mapOrderHistoryResponse(orders.getHistory(principal)),
+          body: mapOrderHistoryResponse(history),
           requestId,
         });
         return;
@@ -818,7 +950,9 @@ function createConfiguredHttpServer({
       if (target.path === '/v1/admin/pairing-codes' || target.path === '/v1/admin/devices/revoke') {
         authorizeDeviceRole(principal, ['admin']);
         const pairings = requireService(pairingService, target.path === '/v1/admin/pairing-codes' ? 'createPairingCode' : 'revokeDevice');
+        if (diagnosticContext) diagnosticContext.stage = 'body-read';
         const body = await readJsonBody(request);
+        if (diagnosticContext) diagnosticContext.stage = 'mutation';
         if (target.path === '/v1/admin/pairing-codes') {
           const pairing = pairings.createPairingCodeRequest({
             role: body?.role,
@@ -826,6 +960,8 @@ function createConfiguredHttpServer({
             expiresAtMs: body?.expiresAtMs,
           }, { createdByDeviceId: principal.deviceId });
           const pairingUrl = pairingRegistrationUrl(pairing.code, runtimeInfo?.pairingUrlOrigin);
+          if (diagnosticContext) diagnosticContext.stage = 'saved';
+          recordRequestDiagnostic(diagnosticRecorder, diagnosticContext, { requestId, status: 201, now });
           writeJsonResponse(response, {
             statusCode: 201,
             body: pairingUrl ? { ...pairing, pairingUrl } : pairing,
@@ -834,6 +970,8 @@ function createConfiguredHttpServer({
           return;
         }
         const revoked = pairings.revokeDeviceRequest({ deviceId: body?.deviceId }, { actorDeviceId: principal.deviceId });
+        if (diagnosticContext) diagnosticContext.stage = 'saved';
+        recordRequestDiagnostic(diagnosticRecorder, diagnosticContext, { requestId, status: 200, now });
         writeJsonResponse(response, { statusCode: 200, body: revoked, requestId });
         return;
       }
@@ -869,7 +1007,16 @@ function createConfiguredHttpServer({
 
       if (target.path === '/v1/snapshot') {
         const snapshots = requireService(snapshotService, 'getSnapshot');
+        if (diagnosticContext) diagnosticContext.stage = 'retrieve';
         const body = mapSnapshotResponse(snapshots.getSnapshot(principal));
+        if (diagnosticContext) diagnosticContext.stage = 'retrieved';
+        recordRequestDiagnostic(diagnosticRecorder, diagnosticContext, {
+          requestId,
+          status: 200,
+          activeOrderCount: body.activeOrders?.length,
+          openSessionCount: body.openSessions?.length,
+          now,
+        });
         writeJsonResponse(response, { statusCode: 200, body, requestId });
         return;
       }
@@ -921,6 +1068,9 @@ function createConfiguredHttpServer({
             allow: allowedMethod,
             principal,
             eventRepository,
+            diagnosticRecorder,
+            diagnosticContext,
+            now,
           });
         } catch {
           if (!response.destroyed) response.destroy();

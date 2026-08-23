@@ -88,6 +88,24 @@ export async function fetchAdminPairingPreflight({ env = globalThis, fetchImpl =
   return body;
 }
 
+export async function fetchAdminDiagnostics({ env = globalThis, fetchImpl = env.fetch } = {}) {
+  const { token, base, fetchImpl: request } = assertAdminTransport({ env, fetchImpl });
+  let response;
+  try {
+    response = await request(`${base}/admin/diagnostics`, {
+      headers: { Accept: "application/json", Authorization: `Bearer ${token}` },
+    });
+  } catch {
+    throw new AdminPairingError("通信診断APIへ接続できません。", { status: 503, code: "API_UNAVAILABLE" });
+  }
+  if (!response.ok) await responseError(response, "通信診断を取得できません。");
+  const body = await response.json();
+  if (!body?.runtime || !body?.authentication || !body?.tables || !body?.storage) {
+    throw new AdminPairingError("通信診断の応答が不正です。", { status: 503, code: "API_UNAVAILABLE" });
+  }
+  return body;
+}
+
 export async function issueCustomerPairingCode({ env = globalThis, tableId, expiresAtMs, fetchImpl = env.fetch } = {}) {
   const { token, base, fetchImpl: request } = assertAdminTransport({ env, fetchImpl });
   let response;

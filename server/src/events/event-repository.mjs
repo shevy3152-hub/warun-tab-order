@@ -128,6 +128,12 @@ function mapOrderItem(row) {
   };
   if (row.menu_item_id !== null) item.menuItemId = row.menu_item_id;
   if (row.served_at_ms !== null) item.servedAtMs = row.served_at_ms;
+  if (row.variant_id !== null) item.variantId = row.variant_id;
+  if (row.variant_name_snapshot !== null) item.variantNameSnapshot = row.variant_name_snapshot;
+  if (row.variant_volume_snapshot !== null) item.variantVolumeSnapshot = row.variant_volume_snapshot;
+  if (row.temperature_snapshot !== null) item.temperatureSnapshot = row.temperature_snapshot;
+  if (row.serving_option_id !== null) item.servingOptionId = row.serving_option_id;
+  if (row.serving_option_name_snapshot !== null) item.servingOptionNameSnapshot = row.serving_option_name_snapshot;
   return item;
 }
 
@@ -261,7 +267,13 @@ export function createEventRepository({ database } = {}) {
           quantity,
           line_total_yen,
           is_served,
-          served_at_ms
+          served_at_ms,
+          variant_id,
+          variant_name_snapshot,
+          variant_volume_snapshot,
+          temperature_snapshot,
+          serving_option_id,
+          serving_option_name_snapshot
         FROM order_items
         WHERE order_id = ?
         ORDER BY is_served, line_index, order_item_id

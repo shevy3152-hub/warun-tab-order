@@ -59,35 +59,85 @@ test("all customer product lists use a shared compact header", () => {
   assert.match(customerScreen, /このカテゴリの商品はまだありません/);
 });
 
-test("shochu uses jump navigation and one inline serving-option panel", () => {
+test("shochu uses a zero-based multi-quantity serving popup", () => {
   assert.match(customerScreen, /drink-jump-nav/);
   assert.match(customerScreen, /scrollIntoView/);
   assert.match(customerScreen, /menu-section-divider/);
-  assert.match(customerScreen, /expandedShochuId/);
-  assert.match(customerScreen, /servingOptions\.map/);
-  assert.match(customerScreen, /setExpandedShochuId\(null\)/);
+  assert.match(customerScreen, /const \[shochuSelection, setShochuSelection\] = useState\(null\)/);
+  assert.match(customerScreen, /const openShochuSelection = \(item\)/);
+  assert.match(customerScreen, /quantities: Object\.fromEntries\(options\.map\(\(option\) => \[option\.servingOptionId, 0\]\)\)/);
+  assert.match(customerScreen, /const adjustShochuQuantity = \(optionId, delta\)/);
+  assert.match(customerScreen, /const commitShochuSelection = \(\)/);
+  assert.match(customerScreen, /shochuSelectionTotal/);
+  assert.match(appSource, /ロック/);
+  assert.match(appSource, /水割り/);
+  assert.match(appSource, /ソーダ割り/);
+  assert.match(appSource, /お湯割り/);
+  assert.doesNotMatch(customerScreen, /shochu-selection-summary|今回の選択/);
+  assert.match(customerScreen, /点をカートに追加/);
+  assert.match(customerScreen, /shochu-selection-footer/);
+  assert.match(customerScreen, /disabled=\{!shochuSelectionTotal\}/);
+  assert.match(customerScreen, /addSelection\(shochuSelectionItem, \{ servingOption: option \}, quantity\)/);
+  assert.match(customerScreen, /onClose=\{\(\) => setShochuSelection\(null\)\}/);
+  assert.match(customerScreen, /onClick=\{\(\) => setShochuSelection\(null\)\}>キャンセル/);
+  assert.match(customerScreen, /className="shochu-serving-button"/);
+  assert.match(customerScreen, /className="shochu-quantity-control"/);
+  const adjustBlock = customerScreen.slice(customerScreen.indexOf("const adjustShochuQuantity"), customerScreen.indexOf("const commitShochuSelection"));
+  assert.doesNotMatch(adjustBlock, /addSelection|setShochuSelection\(null\)/);
+  const commitBlock = customerScreen.slice(customerScreen.indexOf("const commitShochuSelection"), customerScreen.indexOf("const addSakeSelection"));
+  assert.match(commitBlock, /quantity > 0/);
+  assert.match(commitBlock, /setShochuSelection\(null\)/);
+  assert.doesNotMatch(customerScreen, /shochu-serving-status|shochuSelections|expandedShochuId/);
+  assert.doesNotMatch(customerScreen, /addSelection\(item, \{ servingOption: option \}\)/);
+  assert.match(styles, /\.modal--shochu \{[^}]*overflow: visible/);
+  assert.match(styles, /\.shochu-selection-row \{[\s\S]*grid-template-columns/);
+  assert.match(styles, /\.shochu-quantity-control \{[\s\S]*min-height: 52px/);
+  assert.match(styles, /\.shochu-quantity-control button \{[\s\S]*display: grid/);
+  assert.match(styles, /\.shochu-selection-row \{[\s\S]*touch-action: manipulation[\s\S]*user-select: none[\s\S]*-webkit-tap-highlight-color: transparent/);
+  assert.match(styles, /\.shochu-quantity-control \{[\s\S]*touch-action: manipulation[\s\S]*user-select: none[\s\S]*-webkit-tap-highlight-color: transparent/);
+  assert.match(styles, /\.shochu-quantity-control button \{[\s\S]*touch-action: manipulation[\s\S]*user-select: none[\s\S]*-webkit-tap-highlight-color: transparent/);
+  assert.match(styles, /\.shochu-selection-footer \{[\s\S]*display: flex[\s\S]*visibility: visible[\s\S]*opacity: 1/);
+  assert.match(styles, /\.shochu-selection-footer \{[\s\S]*border: 2px solid var\(--line\)[\s\S]*background: #fff/);
+  assert.match(styles, /\.modal--shochu \.modal-actions \{[\s\S]*width: 100%[\s\S]*grid-template-columns/);
+  assert.match(styles, /\.modal--shochu \.modal-actions \.button \{[\s\S]*min-width: 0[\s\S]*width: 100%/);
+  assert.match(styles, /\.modal--shochu \.modal__header h2 \{[\s\S]*font-size: clamp/);
+  assert.match(styles, /\.modal--shochu \{[\s\S]*max-height: calc\(100dvh - 40px\)[\s\S]*overflow: visible/);
+  assert.match(styles, /@media \(orientation: landscape\) and \(max-height: 700px\)/);
+  assert.match(styles, /\.modal--shochu \{[\s\S]*max-height: calc\(100dvh - 16px\)/);
+  assert.match(styles, /\.shochu-selection-row \{[\s\S]*min-height: 54px/);
+  assert.match(styles, /\.shochu-quantity-control \{[\s\S]*min-height: 52px/);
+  assert.doesNotMatch(styles, /user-scalable\s*=\s*no/);
 });
 
-test("sake rows use one serving-method button and a confirmation popup", () => {
+test("sake rows use one serving-method button and a direct serving-temperature popup", () => {
   assert.match(customerScreen, /sake-serve-button/);
   assert.match(customerScreen, /提供方法を選ぶ/);
   assert.match(customerScreen, /sakeSelection/);
   assert.match(customerScreen, /提供方法・温度を選ぶ/);
+  assert.match(customerScreen, /sake-serving-row/);
+  assert.match(customerScreen, /sake-temperature-options/);
+  assert.match(customerScreen, /sake-temperature-fixed/);
+  assert.match(customerScreen, /variant\.name === "グラス"/);
+  assert.match(customerScreen, /variantId: null, temperature: null/);
+  assert.match(customerScreen, /sakeSelectionError/);
+  assert.match(customerScreen, /提供温度を選択してください/);
+  assert.match(customerScreen, /onClick=\{addSakeSelection\}/);
+  assert.doesNotMatch(customerScreen, /disabled=\{!selectedSakeVariant/);
   assert.match(customerScreen, /この内容で追加/);
-  assert.match(customerScreen, /sakeTemperatureOptions/);
   assert.match(customerScreen, /temperature/);
-  assert.doesNotMatch(customerScreen, /sake-variant-actions/);
-  assert.doesNotMatch(customerScreen, /sake-variant-button/);
+  assert.doesNotMatch(customerScreen, /sake-selection-confirm/);
+  assert.doesNotMatch(customerScreen, /selectedSakeTemperatures/);
   assert.match(customerScreen, /className="add-button"/);
 });
 
 test("sake serving popup keeps shared price formatting and A90 tap sizing", () => {
   assert.match(styles, /\.sake-serve-button \{[\s\S]*min-height: 58px/);
-  assert.match(styles, /\.sake-serving-options \{[\s\S]*grid-template-columns: repeat\(3/);
-  assert.match(styles, /\.sake-temperature-picker button \{[\s\S]*min-height: 52px/);
-  assert.match(styles, /\.sake-serving-option \.menu-price \{[\s\S]*align-items: flex-start/);
+  assert.match(styles, /\.modal--sake \{[\s\S]*align-self: start[\s\S]*overflow: hidden/);
+  assert.match(styles, /\.sake-serving-row \{[\s\S]*grid-template-columns/);
+  assert.match(styles, /\.sake-temperature-options button \{[\s\S]*min-height: 56px/);
+  assert.match(styles, /\.sake-serving-option \.menu-price \{[\s\S]*align-items: flex-end/);
   assert.match(styles, /\.sake-menu-row \.product-image-button \{[\s\S]*width: 64px/);
-  assert.match(styles, /\.sake-serving-option \{[\s\S]*min-height: 132px/);
+  assert.match(styles, /\.sake-serving-option \{[\s\S]*min-height: 72px/);
 });
 
 test("sake product details and order snapshots retain the shared selection model", () => {
@@ -106,6 +156,18 @@ test("admin detail editing covers every displayed tasting field", () => {
   assert.match(appSource, /form\.get\("aroma"\)/);
   assert.match(appSource, /form\.get\("sweetness"\)/);
   assert.match(appSource, /form\.get\("finish"\)/);
+});
+
+test("admin devices screen includes safe communication diagnostics without exposing request bodies", () => {
+  assert.match(appSource, /fetchAdminDiagnostics/);
+  assert.match(appSource, /communication-diagnostics/);
+  assert.match(appSource, /LAN IPv4/);
+  assert.match(appSource, /schemaVersion/);
+  assert.match(appSource, /直近の注文送信/);
+  assert.match(appSource, /直近の注文取得/);
+  assert.match(appSource, /実リクエスト未確認/);
+  assert.match(styles, /\.communication-diagnostics \{/);
+  assert.match(styles, /\.communication-diagnostics__results/);
 });
 
 test("API customer orders stay in memory instead of localStorage state", () => {

@@ -22,8 +22,8 @@ import {
 } from "@phosphor-icons/react";
 import { createCustomerOrderClient, resolveOrderApiConfig } from "./order-outbox.js";
 import { claimCustomerDevice, createIndexedDbCredentialStore, loadOrCreateCustomerDevice, pairingClaimErrorMessage, runtimeForCustomerCredentials } from "./device-credentials.js";
-import { customerOrderNoticeFromOutboxEvent } from "./customer-order-notice.js";
-import { AdminPairingError, configuredAdminToken, fetchAdminMenu, fetchAdminOrderHistory, fetchAdminPairingPreflight, issueCustomerPairingCode, revokeAdminDevice, saveAdminMenuItem } from "./admin-pairing.js";
+import { customerOrderErrorCategory, customerOrderNoticeFromOutboxEvent } from "./customer-order-notice.js";
+import { AdminPairingError, configuredAdminToken, fetchAdminDiagnostics, fetchAdminMenu, fetchAdminOrderHistory, fetchAdminPairingPreflight, issueCustomerPairingCode, revokeAdminDevice, saveAdminMenuItem } from "./admin-pairing.js";
 import { closeKitchenTableSession, fetchKitchenOrderHistory, fetchKitchenSnapshot, kitchenApiConfigured, markKitchenItemServed } from "./kitchen-api.js";
 import { bootstrapCustomerOrderClient } from "./customer-bootstrap.js";
 import { taxExcludedYen } from "./pricing.js";
@@ -236,7 +236,7 @@ function customerTransportLabel(order) {
     case "retrying": return "再送中";
     case "pending": return "送信待ち";
     case "synced": return "送信済み";
-    case "rejected": return "業務エラー";
+    case "rejected": return customerOrderErrorCategory(order.transportErrorCode).label;
     case "failed": return "送信失敗";
     default: return order.status === "completed" ? "提供済み" : order.status === "queued_offline" ? "送信待ち" : "準備中";
   }
@@ -286,6 +286,16 @@ function PriceDisplay({ priceYen }) {
 function sakeTemperatureOptions(variant) {
   if (Array.isArray(variant?.temperatureOptions) && variant.temperatureOptions.length > 0) return variant.temperatureOptions;
   return variant?.name === "グラス" ? ["冷酒"] : ["冷酒", "燗酒"];
+}
+
+const SHOCHU_SERVING_ORDER = ["ロック", "水割り", "ソーダ割り", "お湯割り"];
+
+function orderedShochuServingOptions(item) {
+  const servingOrder = (name) => {
+    const index = SHOCHU_SERVING_ORDER.indexOf(name);
+    return index === -1 ? SHOCHU_SERVING_ORDER.length : index;
+  };
+  return [...(item?.servingOptions ?? [])].sort((a, b) => servingOrder(a.name) - servingOrder(b.name));
 }
 
 function sakeVariantLabel(variant) {
@@ -339,10 +349,10 @@ function IconButton({ icon: Icon, children, badge, onClick, className = "" }) {
   );
 }
 
-function Modal({ title, children, onClose, wide = false }) {
+function Modal({ title, children, onClose, wide = false, className = "" }) {
   return (
     <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
-      <section className={`modal ${wide ? "modal--wide" : ""}`} role="dialog" aria-modal="true" aria-label={title}>
+      <section className={`modal ${wide ? "modal--wide" : ""} ${className}`.trim()} role="dialog" aria-modal="true" aria-label={title}>
         <header className="modal__header"><h2>{title}</h2><button className="icon-only" onClick={onClose} aria-label="閉じる"><X size={26} weight="bold" /></button></header>
         <div className="modal__body">{children}</div>
       </section>
@@ -453,7 +463,8 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
   const [modal, setModal] = useState(null);
   const [detailItem, setDetailItem] = useState(null);
   const [sakeSelection, setSakeSelection] = useState(null);
-  const [expandedShochuId, setExpandedShochuId] = useState(null);
+  const [sakeSelectionError, setSakeSelectionError] = useState("");
+  const [shochuSelection, setShochuSelection] = useState(null);
   const [notice, setNotice] = useState(null);
   const [apiOrders, setApiOrders] = useState([]);
   const [apiHistoryState, setApiHistoryState] = useState({ loading: false, error: false });
@@ -554,12 +565,15 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
       clientOrderId: pendingOrder.clientOrderId || pendingOrder.id,
       state: pendingOrder.transportState === "rejected" ? "rejected" : pendingOrder.transportState === "sending" ? "sending" : "pending",
       displayState: pendingOrder.transportState === "retrying" ? "retrying" : pendingOrder.transportState === "failed" ? "failed" : pendingOrder.transportState,
+      lastErrorCode: pendingOrder.transportErrorCode,
     });
     if (nextNotice) setNotice((current) => current?.kind === nextNotice.kind && current?.message === nextNotice.message ? current : nextNotice);
   }, [apiMode, customerHistory, state.orders]);
 
-  const addSelection = (item, selection = {}) => {
+  const addSelection = (item, selection = {}, quantity = 1) => {
     if (!item || item.isSoldOut) return;
+    const normalizedQuantity = Number.isInteger(quantity) && quantity > 0 ? quantity : 0;
+    if (!normalizedQuantity) return;
     const key = `${item.id}::${selection.variant?.variantId ?? ""}::${selection.servingOption?.servingOptionId ?? ""}::${selection.temperature ?? ""}`;
     setCart((current) => ({
       ...current,
@@ -568,7 +582,7 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
         variant: selection.variant,
         temperature: selection.temperature,
         servingOption: selection.servingOption,
-        quantity: (current[key]?.quantity ?? 0) + 1,
+        quantity: (current[key]?.quantity ?? 0) + normalizedQuantity,
       },
     }));
   };
@@ -623,7 +637,12 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
         if (result.state === "synced") {
           setNotice({ kind: "success", message: "送信済みです。ご注文を承りました。" });
         } else if (result.state === "rejected") {
-          setNotice({ kind: "error", message: "業務エラーのため送信できませんでした。内容をご確認ください。" });
+          setNotice(customerOrderNoticeFromOutboxEvent({
+            clientOrderId: outboxRecord.clientOrderId,
+            state: "rejected",
+            displayState: "business_error",
+            lastErrorCode: result.errorCode,
+          }));
         } else if (result.errorCode === "API_TOKEN_UNCONFIGURED" || result.errorCode === "API_BASE_UNCONFIGURED") {
           setNotice({ kind: "error", message: "API接続設定が未完了のため、送信待ちです。" });
         } else if (result.errorCode === "OFFLINE" || result.errorCode === "NETWORK_ERROR" || result.errorCode?.startsWith("HTTP_5")) {
@@ -668,25 +687,68 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
     setMajorCategoryId(nextMajorCategory.id);
     setCategoryId(nextMajorCategory.subcategories[0]?.id ?? "recommended");
     setMajorNavOpen(false);
-    setExpandedShochuId(null);
+    setShochuSelection(null);
     setSakeSelection(null);
+    setSakeSelectionError("");
   };
   const selectSubcategory = (nextCategoryId) => {
     setCategoryId(nextCategoryId);
     setMajorNavOpen(false);
-    setExpandedShochuId(null);
+    setShochuSelection(null);
     setSakeSelection(null);
+    setSakeSelectionError("");
   };
   const selectedSakeItem = sakeSelection ? menuItems.find((item) => item.id === sakeSelection.itemId) : null;
   const selectedSakeVariant = selectedSakeItem?.variants.find((variant) => variant.variantId === sakeSelection?.variantId) ?? null;
-  const selectedSakeTemperatures = sakeTemperatureOptions(selectedSakeVariant);
+  const shochuSelectionItem = shochuSelection ? menuItems.find((item) => item.id === shochuSelection.itemId) : null;
+  const shochuSelectionOptions = orderedShochuServingOptions(shochuSelectionItem);
+  const shochuSelectionTotal = Object.values(shochuSelection?.quantities ?? {}).reduce((sum, quantity) => sum + quantity, 0);
   const openSakeSelection = (item) => {
-    const firstVariant = item.variants[0] ?? null;
-    setSakeSelection(firstVariant ? {
+    setSakeSelection({ itemId: item.id, variantId: null, temperature: null });
+    setSakeSelectionError("");
+  };
+  const selectSakeVariant = (variant) => {
+    setSakeSelection((current) => current ? ({
+      ...current,
+      variantId: variant.variantId,
+      temperature: variant.name === "グラス" && sakeTemperatureOptions(variant).includes("冷酒") ? "冷酒" : null,
+    }) : current);
+    setSakeSelectionError("");
+  };
+  const selectSakeTemperature = (variant, temperature) => {
+    setSakeSelection((current) => current ? ({ ...current, variantId: variant.variantId, temperature }) : current);
+    setSakeSelectionError("");
+  };
+  const openShochuSelection = (item) => {
+    const options = orderedShochuServingOptions(item);
+    setShochuSelection({
       itemId: item.id,
-      variantId: firstVariant.variantId,
-      temperature: sakeTemperatureOptions(firstVariant)[0],
-    } : { itemId: item.id, variantId: null, temperature: null });
+      quantities: Object.fromEntries(options.map((option) => [option.servingOptionId, 0])),
+    });
+  };
+  const adjustShochuQuantity = (optionId, delta) => {
+    setShochuSelection((current) => {
+      if (!current) return current;
+      const nextQuantity = Math.max(0, (current.quantities[optionId] ?? 0) + delta);
+      return { ...current, quantities: { ...current.quantities, [optionId]: nextQuantity } };
+    });
+  };
+  const commitShochuSelection = () => {
+    if (!shochuSelection || !shochuSelectionItem || shochuSelectionTotal === 0) return;
+    for (const option of shochuSelectionOptions) {
+      const quantity = shochuSelection.quantities[option.servingOptionId] ?? 0;
+      if (quantity > 0) addSelection(shochuSelectionItem, { servingOption: option }, quantity);
+    }
+    setShochuSelection(null);
+  };
+  const addSakeSelection = () => {
+    if (!selectedSakeVariant || !sakeSelection?.temperature) {
+      setSakeSelectionError("提供温度を選択してください");
+      return;
+    }
+    addSelection(selectedSakeItem, { variant: selectedSakeVariant, temperature: sakeSelection.temperature });
+    setSakeSelection(null);
+    setSakeSelectionError("");
   };
 
   return (
@@ -735,10 +797,9 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
                   <article className={`menu-row ${isShochu ? "shochu-menu-row" : ""} ${item.isSoldOut ? "is-sold-out" : ""}`} key={item.id} ref={isShochu && item.sectionKey === "芋" && !previous ? imoRef : null}>
                     <div className="menu-row__index">{String(index + 1).padStart(2, "0")}</div>
                     <div className="product-image-placeholder" aria-hidden="true"><span>画像なし</span></div>
-                    <button className="menu-row__copy menu-row__copy--button" onClick={() => item.servingOptions.length ? setExpandedShochuId((current) => current === item.id ? null : item.id) : item.detail?.enabled ? setDetailItem(item) : undefined}><h2>{item.name}</h2><p>{item.description}</p></button>
+                    <button className="menu-row__copy menu-row__copy--button" onClick={() => item.detail?.enabled ? setDetailItem(item) : undefined} aria-label={`${item.name}の詳細を見る`}><h2>{item.name}</h2><p>{item.description}</p></button>
                     <PriceDisplay priceYen={item.price} />
-                    {item.isSoldOut ? <div className="sold-out-label"><b>売り切れ</b><small>SOLD OUT</small></div> : item.servingOptions.length ? <button className="add-button" onClick={() => setExpandedShochuId((current) => current === item.id ? null : item.id)} aria-label={`${item.name}の飲み方を選ぶ`}><Plus size={36} weight="bold" /></button> : <button className="add-button" onClick={() => addSelection(item)} aria-label={`${item.name}を追加`}><Plus size={36} weight="bold" /></button>}
-                    {expandedShochuId === item.id ? <div className="serving-options"><b>飲み方を選んでください</b><div>{item.servingOptions.map((option) => <button key={option.servingOptionId} onClick={() => { addSelection(item, { servingOption: option }); setExpandedShochuId(null); }}>{option.name}</button>)}</div></div> : null}
+                    {item.isSoldOut ? <div className="sold-out-label"><b>売り切れ</b><small>SOLD OUT</small></div> : item.servingOptions.length ? <button className="shochu-serving-button" onClick={() => openShochuSelection(item)} aria-label={`${item.name}の飲み方を選ぶ`}>飲み方を選ぶ</button> : <button className="add-button" onClick={() => addSelection(item)} aria-label={`${item.name}を追加`}><Plus size={36} weight="bold" /></button>}
                   </article>
                 );
                 return (
@@ -760,19 +821,43 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
       </section>
 
       {modal === "confirm" ? <Modal title="注文内容の確認" onClose={() => { if (!submitting) setModal(null); }}><div className="confirm-list">{cartRows.map((row) => <div key={row.key}><b>{selectionDisplayName(row.item, row)}</b><span>{row.quantity}点</span></div>)}</div><p className="price-hidden-note">内容をご確認のうえ、注文を送信してください。</p><div className="modal-actions"><button className="button button--quiet" onClick={() => setModal(null)} disabled={submitting}>戻る</button><button className="button button--primary button--large" onClick={submitOrder} disabled={submitting}>{submitting ? "送信中" : online ? "注文を送信" : "送信待ちに保存"}</button></div></Modal> : null}
-      {sakeSelection && selectedSakeItem ? <Modal title="提供方法・温度を選ぶ" onClose={() => setSakeSelection(null)} wide>
-        <div className="sake-serving-modal">
-          <p className="modal-lead">{selectedSakeItem.name}の提供方法を選択してください。</p>
-          <div className="sake-serving-options" aria-label={`${selectedSakeItem.name}の提供方法`}>
-            {selectedSakeItem.variants.map((variant) => <button type="button" key={variant.variantId} className={`sake-serving-option ${variant.variantId === selectedSakeVariant?.variantId ? "is-selected" : ""}`} onClick={() => setSakeSelection((current) => ({ ...current, variantId: variant.variantId, temperature: sakeTemperatureOptions(variant)[0] }))}>
-              <span className="sake-serving-option__heading"><b>{sakeVariantLabel(variant)}</b><small>{variant.volumeLabel}</small></span>
-              <PriceDisplay priceYen={variant.priceYen} />
-              <small className="sake-serving-option__temperatures">{sakeTemperatureOptions(variant).join("／")}</small>
-            </button>)}
+      {shochuSelection && shochuSelectionItem ? <Modal title={shochuSelectionItem.name} onClose={() => setShochuSelection(null)} className="modal--shochu">
+        <div className="shochu-selection-modal">
+          <p className="modal-lead">飲み方と数量を選択してください。</p>
+          <div className="shochu-selection-list" aria-label={`${shochuSelectionItem.name}の飲み方と数量`}>
+            {shochuSelectionOptions.map((option) => {
+              const quantity = shochuSelection.quantities[option.servingOptionId] ?? 0;
+              return <div className="shochu-selection-row" key={option.servingOptionId}>
+                <b>{option.name}</b>
+                <div className="shochu-quantity-control" aria-label={`${option.name}の数量`}>
+                  <button type="button" onClick={() => adjustShochuQuantity(option.servingOptionId, -1)} disabled={quantity === 0} aria-label={`${option.name}を1点減らす`}><Minus size={22} weight="bold" /></button>
+                  <b aria-live="polite">{quantity}</b>
+                  <button type="button" onClick={() => adjustShochuQuantity(option.servingOptionId, 1)} aria-label={`${option.name}を1点増やす`}><Plus size={22} weight="bold" /></button>
+                </div>
+              </div>;
+            })}
           </div>
-          {selectedSakeVariant ? <div className="sake-temperature-picker"><b>温度</b><div>{selectedSakeTemperatures.map((temperature) => <button type="button" key={temperature} className={temperature === sakeSelection.temperature ? "is-selected" : ""} onClick={() => setSakeSelection((current) => ({ ...current, temperature }))}>{temperature}</button>)}</div></div> : <p role="alert">この商品には有効な提供方法が登録されていません。</p>}
-          {selectedSakeVariant ? <div className="sake-selection-confirm"><span>選択内容</span><b>{sakeVariantLabel(selectedSakeVariant)} {selectedSakeVariant.volumeLabel}・{sakeSelection.temperature}</b><PriceDisplay priceYen={selectedSakeVariant.priceYen} /></div> : null}
-          <div className="modal-actions"><button className="button button--quiet" onClick={() => setSakeSelection(null)}>キャンセル</button><button className="button button--primary button--large" disabled={!selectedSakeVariant || !sakeSelection.temperature} onClick={() => { addSelection(selectedSakeItem, { variant: selectedSakeVariant, temperature: sakeSelection.temperature }); setSakeSelection(null); }}>この内容で追加</button></div>
+          <div className="shochu-selection-footer">
+            <div className="modal-actions"><button type="button" className="button button--quiet" onClick={() => setShochuSelection(null)}>キャンセル</button><button type="button" className="button button--primary button--large" disabled={!shochuSelectionTotal} onClick={commitShochuSelection}>{shochuSelectionTotal}点をカートに追加</button></div>
+          </div>
+        </div>
+      </Modal> : null}
+      {sakeSelection && selectedSakeItem ? <Modal title="提供方法・温度を選ぶ" onClose={() => setSakeSelection(null)} wide className="modal--sake">
+        <div className="sake-serving-modal">
+          <p className="modal-lead">{selectedSakeItem.name}の提供形態と温度を選択してください。</p>
+          <div className="sake-serving-options" aria-label={`${selectedSakeItem.name}の提供方法`}>
+            {selectedSakeItem.variants.map((variant) => <div className={`sake-serving-row ${variant.variantId === selectedSakeVariant?.variantId ? "is-selected" : ""}`} key={variant.variantId}>
+              <button type="button" className="sake-serving-option" onClick={() => selectSakeVariant(variant)} aria-pressed={variant.variantId === selectedSakeVariant?.variantId}>
+                <span className="sake-serving-option__heading"><b>{variant.name === "グラス" ? "グラス" : "徳利"}</b><small>{variant.name === "徳利1合" ? "1合" : variant.name === "徳利2合" ? "2合" : variant.volumeLabel}</small></span>
+                <PriceDisplay priceYen={variant.priceYen} />
+              </button>
+              {variant.name === "グラス" ? <span className="sake-temperature-fixed" aria-label="グラスは冷酒固定">冷酒</span> : <div className="sake-temperature-options" aria-label={`${sakeVariantLabel(variant)}の温度`}>
+                {sakeTemperatureOptions(variant).map((temperature) => <button type="button" key={temperature} className={variant.variantId === selectedSakeVariant?.variantId && temperature === sakeSelection.temperature ? "is-selected" : ""} onClick={() => selectSakeTemperature(variant, temperature)} aria-pressed={variant.variantId === selectedSakeVariant?.variantId && temperature === sakeSelection.temperature}>{temperature}</button>)}
+              </div>}
+            </div>)}
+          </div>
+          {sakeSelectionError ? <p className="sake-selection-error" role="alert">{sakeSelectionError}</p> : null}
+          <div className="modal-actions"><button className="button button--quiet" onClick={() => { setSakeSelection(null); setSakeSelectionError(""); }}>キャンセル</button><button className="button button--primary button--large" onClick={addSakeSelection}>この内容で追加</button></div>
         </div>
       </Modal> : null}
       {modal === "staff" ? <Modal title="スタッフを呼びますか？" onClose={() => setModal(null)}><p className="modal-lead">テーブル {device.tableId} からスタッフへお知らせします。</p><div className="modal-actions"><button className="button button--quiet" onClick={() => setModal(null)}>やめる</button><button className="button button--primary button--large" onClick={callStaff}><Bell size={22} weight="bold" /> 呼び出す</button></div></Modal> : null}
@@ -967,6 +1052,8 @@ function AdminScreen({ state, updateState, section = "menu" }) {
   const [disconnectingDeviceId, setDisconnectingDeviceId] = useState("");
   const [disconnectError, setDisconnectError] = useState("");
   const [pairingPreflight, setPairingPreflight] = useState({ loading: false, data: null, error: null });
+  const [diagnosticState, setDiagnosticState] = useState({ loading: false, data: null, error: null });
+  const [diagnosticRefreshKey, setDiagnosticRefreshKey] = useState(0);
   const [catalogState, setCatalogState] = useState({ loading: Boolean(configuredAdminToken(window)) && section === "menu", error: false, saving: false, message: "" });
   const adminApiMode = Boolean(configuredAdminToken(window));
   useEffect(() => {
@@ -1032,6 +1119,28 @@ function AdminScreen({ state, updateState, section = "menu" }) {
     void load();
     return () => { cancelled = true; };
   }, [section, adminApiMode]);
+  useEffect(() => {
+    if (!adminApiMode || section !== "devices") {
+      setDiagnosticState({ loading: false, data: null, error: null });
+      return undefined;
+    }
+    let cancelled = false;
+    const load = async () => {
+      setDiagnosticState((current) => ({ ...current, loading: true, error: null }));
+      try {
+        const data = await fetchAdminDiagnostics({ env: window });
+        if (!cancelled) setDiagnosticState({ loading: false, data, error: null });
+      } catch (error) {
+        if (!cancelled) setDiagnosticState({ loading: false, data: null, error });
+      }
+    };
+    void load();
+    const timer = window.setInterval(load, 15_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [section, adminApiMode, diagnosticRefreshKey]);
   const categoriesById = Object.fromEntries(state.categories.map((category) => [category.id, category]));
   const editingMenu = state.menuItems.find((item) => item.id === editingMenuId) ?? null;
   const setMenuItem = (id, patch) => updateState((current) => ({ ...current, menuItems: current.menuItems.map((item) => item.id === id ? { ...item, ...patch } : item) }));
@@ -1206,11 +1315,44 @@ function AdminScreen({ state, updateState, section = "menu" }) {
     : state.devices;
   const pairingBlockedMessage = pairingPreflight.error ? pairingErrorMessage(pairingPreflight.error) : pairingPreflightBlockMessage(pairingPreflight.data);
   const pairingCanIssue = !pairingPreflight.loading && !pairingPreflight.error && pairingBlockedMessage === "";
+  const diagnosticData = diagnosticState.data;
+  const latestOrderSend = diagnosticData?.latestOrderSend;
+  const latestOrderRetrieval = diagnosticData?.latestOrderRetrieval;
+  const diagnosticResultLabel = (entry) => entry
+    ? `${entry.status ?? "?"}${entry.errorCode ? `・${entry.errorCode}` : ""}`
+    : "実リクエスト未確認";
 
   return (
     <StaffShell route={`/admin/${section}`} title="メニュー管理" subtitle="メニューの追加・編集・並び順の変更ができます。" state={state} right={<button className="save-indicator" type="button"><Check size={24} weight="bold" /> {catalogState.saving ? "保存中" : catalogState.message || "保存する"}</button>}>
       <section className="admin-content">
         <nav className="admin-tabs">{adminTabs.map((tab) => <button key={tab.id} className={section === tab.id ? "is-active" : ""} onClick={() => { setShowAdd(false); setEditingMenuId(null); navigate(`/admin/${tab.id}`); }}><tab.icon size={24} weight="bold" /> {tab.label}</button>)}</nav>
+
+        {section === "devices" ? <section className="communication-diagnostics" aria-label="通信診断">
+          <div className="communication-diagnostics__heading">
+            <div><span className="section-kicker">CONNECTION DIAGNOSTICS</span><h2>通信診断</h2><p>safe-copyの実ランタイム、認証、注文送受信の観測結果です。未取得の通信は未確認として表示します。</p></div>
+            <button className="button button--quiet" type="button" onClick={() => setDiagnosticRefreshKey((key) => key + 1)}>再取得</button>
+          </div>
+          {diagnosticState.loading ? <p role="status">通信診断を取得中です。</p> : null}
+          {diagnosticState.error ? <p role="alert">通信診断を取得できませんでした。</p> : null}
+          {diagnosticData ? <div className="communication-diagnostics__grid">
+            <div className="communication-diagnostics__facts">
+              <p><b>LAN IPv4</b><span>{diagnosticData.runtime.lanIPv4?.join("・") || "未取得"}</span></p>
+              <p><b>Web / API</b><span>{diagnosticData.runtime.webPort} / {diagnosticData.runtime.apiPort}</span></p>
+              <p><b>稼働PID</b><span>{diagnosticData.runtime.processId ?? "未確認"}</span></p>
+              <p><b>health</b><span>{diagnosticData.health?.status === "ready" && diagnosticData.health?.db === "ready" ? "HTTP 200 / ready" : "未確認"}</span></p>
+              <p><b>DB</b><span>{diagnosticData.runtime.databaseTarget}{diagnosticData.runtime.isProduction ? "（production）" : "（production未使用）"}</span></p>
+              <p><b>schemaVersion</b><span>{diagnosticData.schemaVersion ?? "未確認"}</span></p>
+              <p><b>管理認証</b><span>{diagnosticData.authentication.status === "valid" ? "有効" : "未確認"}</span></p>
+              <p><b>端末 / 空きテーブル</b><span>{diagnosticData.tables.assigned?.length ?? 0}台 / {diagnosticData.tables.available?.length ?? 0}卓</span></p>
+              <p><b>最終更新</b><span>{diagnosticData.generatedAt ? new Date(diagnosticData.generatedAt).toLocaleString("ja-JP") : "未確認"}</span></p>
+            </div>
+            <div className="communication-diagnostics__results">
+              <article><b>直近の注文送信</b><strong>{diagnosticResultLabel(latestOrderSend)}</strong><small>{latestOrderSend ? `${latestOrderSend.requestId ?? "request ID未確認"}・${latestOrderSend.classification ?? "分類未確認"}` : "A90実通信は未確認"}</small></article>
+              <article><b>直近の注文取得</b><strong>{diagnosticResultLabel(latestOrderRetrieval)}</strong><small>{latestOrderRetrieval ? `${latestOrderRetrieval.requestId ?? "request ID未確認"}・${latestOrderRetrieval.classification ?? "分類未確認"}` : "管理／厨房の取得は未確認"}</small></article>
+              <article><b>保存件数</b><strong>orders {diagnosticData.storage.orders} / items {diagnosticData.storage.orderItems}</strong><small>event_log {diagnosticData.storage.eventLog}・保存本文は表示しません</small></article>
+            </div>
+          </div> : null}
+        </section> : null}
 
         {adminApiMode && catalogState.loading ? <p className="empty-state">管理カタログを読み込み中です。</p> : null}
         {adminApiMode && catalogState.error ? <p className="empty-state" role="alert">{catalogState.message}</p> : null}

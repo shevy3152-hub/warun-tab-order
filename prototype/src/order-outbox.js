@@ -50,6 +50,16 @@ function safeErrorCode(value, fallback = "UNKNOWN_ERROR") {
   return normalized || fallback;
 }
 
+async function responseErrorCode(response, status) {
+  let body;
+  try {
+    body = typeof response?.json === "function" ? await response.json() : null;
+  } catch {
+    body = null;
+  }
+  return safeErrorCode(body?.error?.code, `HTTP_${status}`);
+}
+
 function normalizeItems(items) {
   if (!Array.isArray(items) || items.length === 0) {
     throw new TypeError("Order items are required.");
@@ -331,7 +341,7 @@ export function createApiOrderTransport({
           return { kind: "success", idempotencyResult };
         }
         if (response.status >= 500) return { kind: "retry", errorCode: `HTTP_${response.status}` };
-        if (response.status >= 400) return { kind: "rejected", errorCode: `HTTP_${response.status}` };
+        if (response.status >= 400) return { kind: "rejected", errorCode: await responseErrorCode(response, response.status) };
         return { kind: "retry", errorCode: "INVALID_API_RESPONSE" };
       } catch (error) {
         return { kind: "retry", errorCode: controller?.signal.aborted ? "TIMEOUT" : "NETWORK_ERROR" };

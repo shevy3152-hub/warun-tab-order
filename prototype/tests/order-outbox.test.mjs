@@ -14,7 +14,7 @@ import {
   retryDelayForAttempt,
   subscribeCustomerInvalidations,
 } from "../src/order-outbox.js";
-import { customerOrderNoticeFromOutboxEvent } from "../src/customer-order-notice.js";
+import { customerOrderErrorCategory, customerOrderNoticeFromOutboxEvent } from "../src/customer-order-notice.js";
 
 const ITEM_ID = "edamame";
 
@@ -270,8 +270,37 @@ test("outbox success events map to a customer sent notice after recovery", () =>
     kind: "success",
     message: "送信済みです。ご注文を承りました。",
   });
-  assert.equal(customerOrderNoticeFromOutboxEvent({ clientOrderId: uuid(42), state: "rejected", displayState: "business_error" }).kind, "error");
+  assert.deepEqual(customerOrderNoticeFromOutboxEvent({ clientOrderId: uuid(42), state: "rejected", displayState: "business_error", lastErrorCode: "INVALID_ORDER_REQUEST" }), {
+    kind: "error",
+    message: "注文内容エラーのため送信できませんでした。内容を確認してください。",
+  });
   assert.equal(customerOrderNoticeFromOutboxEvent({ clientOrderId: uuid(43), state: "pending", displayState: "failed" }).kind, "failed");
+});
+
+test("customer order errors are shown as safe categories without exposing server details", () => {
+  assert.equal(customerOrderErrorCategory("AUTHENTICATION_FAILED").label, "認証切れ");
+  assert.equal(customerOrderErrorCategory("HTTP_409").label, "送信競合");
+  assert.equal(customerOrderErrorCategory("MENU_ITEM_SOLD_OUT").label, "注文内容エラー");
+  assert.equal(customerOrderErrorCategory("INTERNAL_ERROR").label, "サーバーエラー");
+  assert.equal(customerOrderErrorCategory("secret-token-or-stack-trace").label, "注文受付エラー");
+});
+
+test("API rejection preserves the server public error code without preserving response details", async () => {
+  const env = { navigator: { onLine: true } };
+  const transport = createApiOrderTransport({
+    config: { enabled: true, baseUrl: "http://safe-copy.test/v1", token: "runtime-secret-token" },
+    env,
+    fetchImpl: async () => ({
+      status: 422,
+      headers: { get: () => null },
+      async json() {
+        return { error: { code: "MENU_ITEM_SOLD_OUT", message: "A requested menu item is sold out." }, requestId: uuid(44) };
+      },
+    }),
+  });
+  const result = await transport.send(createOrderPayload({ clientOrderId: uuid(45), items: [{ menuItemId: ITEM_ID, quantity: 1 }] }));
+  assert.deepEqual(result, { kind: "rejected", errorCode: "MENU_ITEM_SOLD_OUT" });
+  assert.equal(JSON.stringify(result).includes("runtime-secret-token"), false);
 });
 
 test("retry delays use bounded exponential backoff instead of a tight loop", async () => {

@@ -234,7 +234,7 @@ test('rejects unknown and server-controlled item fields', () => {
 
 test('validates schemaVersion, clientOrderId, and clientCreatedAtMs', () => {
   const invalidOrders = [
-    validOrder({ schemaVersion: 3 }),
+    validOrder({ schemaVersion: 4 }),
     validOrder({ clientOrderId: 'not-a-v4-uuid' }),
     validOrder({ clientCreatedAtMs: -1 }),
     validOrder({ clientCreatedAtMs: 1.5 }),
@@ -261,6 +261,29 @@ test('schemaVersion 2 accepts structured variants and keeps distinct selections 
     schemaVersion: 1,
     items: [{ menuItemId: 'sake', variantId: 'sake_glass', quantity: 1 }],
   }))));
+});
+
+test('schemaVersion 3 accepts sake temperatures and rejects them for older schemas', () => {
+  const result = parseOrderJsonText(JSON.stringify(validOrder({
+    schemaVersion: 3,
+    items: [
+      { menuItemId: 'sake', variantId: 'sake_tokuri', temperature: '燗酒', quantity: 1 },
+      { menuItemId: 'sake', variantId: 'sake_glass', temperature: '冷酒', quantity: 1 },
+    ],
+  })));
+  assert.equal(result.schemaVersion, 3);
+  assert.deepEqual(result.items.map(({ menuItemId, variantId, temperature, quantity }) => ({ menuItemId, variantId, temperature, quantity })), [
+    { menuItemId: 'sake', variantId: 'sake_tokuri', temperature: '燗酒', quantity: 1 },
+    { menuItemId: 'sake', variantId: 'sake_glass', temperature: '冷酒', quantity: 1 },
+  ]);
+  for (const order of [
+    validOrder({ schemaVersion: 2, items: [{ menuItemId: 'sake', variantId: 'sake_glass', temperature: '冷酒', quantity: 1 }] }),
+    validOrder({ schemaVersion: 3, items: [{ menuItemId: 'sake', variantId: 'sake_glass', temperature: '常温', quantity: 1 }] }),
+  ]) {
+    assert.throws(() => parseOrderJsonText(JSON.stringify(order)), (error) => (
+      assertBodyError(error, ORDER_JSON_BODY_ERROR_CODES.INVALID_ORDER_REQUEST, 400)
+    ));
+  }
 });
 
 test('accepts a valid clientCreatedAtMs without using it as server state', () => {

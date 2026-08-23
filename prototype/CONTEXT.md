@@ -1,5 +1,92 @@
 # Persistent Context
 
+## Communication diagnostics safe-copy rollout 2026-08-24
+
+- Read-only precheck recorded safe-copy DB `server/var/safe-copies/initial-menu-20260818.sqlite3`, counts `orders=3`, `order_items=6`, `event_log=55`, ports `25173/28787`, PID `11736`, and no production DB use.
+- The existing `server/start-safe-copy.ps1` path was used with `-NoBrowser`; the reflected safe-copy PID is `12420`. Health, safe-copy target, schema v4, common Web/API listener PID, health PID, runtime-state PID, admin preflight, and `GET /v1/admin/diagnostics` all passed.
+- Post-restart counts remain `3/6/55`. No order POST, QR issuance, pairing claim, disconnect, production DB, existing device, or order data was changed. Admin HTML returned HTTP 200 and contains the diagnostics panel class and labels. Direct browser DOM inspection was not confirmed because browser initialization failed while creating temporary kernel assets.
+
+## Warun connection diagnostics Skill 2026-08-24
+
+- Skill Creatorで`warun-connection-diagnostics`を作成した。保存場所は`C:\Users\user\.codex\skills\warun-connection-diagnostics`で、safe-copy専用の読み取り診断順序と`scripts\diagnose-safe-copy.ps1`を含む。POST、再起動、再ペアリング、QR再発行、token変更、DB変更、Git変更を自動実行しない。
+- prototypeへ管理者向け通信診断欄を追加し、同一originの`GET /v1/admin/diagnostics`からLAN IPv4、Web/API、PID、safe-copy/production、schema、管理認証、端末/空きテーブル、直近送受信結果、request ID、公開error code、更新時刻を表示する。未観測のA90実通信は未確認と表示する。
+- serverは注文、pairing claim、pairing code発行、接続解除、管理/厨房注文取得の安全な診断記録を有界メモリとsafe-copy外部NDJSONへ記録する。Authorization、token、QR本文、注文本文、個人情報は記録しない。診断endpointの卓情報も卓ID・表示名・端末状態だけに限定し、端末IDは返さない。DB schemaと注文経路は変更していない。
+- 実測safe-copyはDB`server/var/safe-copies/initial-menu-20260818.sqlite3`、Web/API 25173/28787、LAN `192.168.1.5`、実PID 11736、health 200/schema4。`DEV_STATE.md`に残るPID 12964は旧記録であり、実測値を正とする。A90の実POSTは未確認で、再送は行っていない。
+- 検証済み: server 361/361、prototype 75/75、Direct Vite build 4580 modules、Sites worker 4/4、`git diff --check`。Skill validatorはPyYAML不足で未実行、frontmatter・命名・未完了TODOなしは手動確認。現行PID 11736への`GET /v1/admin/diagnostics`はHTTP 404で、live safe-copyへの新server反映とA90実機確認は次回の明示された受入作業まで未実施。
+
+## Sake temperature HTTP payload validation fix 2026-08-23
+
+- Code comparison identified the cause of the A90 customer error: `App.jsx`/`order-outbox.js` generated `schemaVersion: 3` with `variantId` and `temperature` for sake, while `server/src/http/json-body.mjs` accepted only schema versions 1/2 and did not allow the temperature item field. The deterministic server path was HTTP 400 with public code `INVALID_ORDER_REQUEST` before repository/DB writes.
+- The exact A90 response body was not captured by the existing safe-copy logs, so the code-level diagnosis is distinguished from a direct packet capture. Empty items are blocked by the customer cart guard and outbox normalization; shochu uses servingOptionId and existing snapshot handling remains intact.
+- The HTTP JSON boundary now accepts schemaVersion 3 and cold/warm temperature values, while rejecting temperature in older schemas, invalid temperatures, and invalid variant/serving combinations. Server resolves sake name/volume/temperature snapshots from the existing menu variant and keeps the existing order API and DB schema.
+- Added JSON boundary coverage and an HTTP E2E covering `徳利1合`/`180ml`/`燗酒`; existing water1/soda2 shochu E2E remains green. Safe-copy was restarted only with the existing DB and ports; post-restart health is 200/schema4, PID 11736, and DB counts remain 2/5/1/54.
+- Verification: server 359/359, prototype 73/73, Direct Vite build 4580 modules, direct Sites worker 4/4. No production DB, pairing, QR, resend, reset, pull, merge, commit, or push was used. Real A90 acceptance remains intentionally unperformed because the user prohibited resend.
+
+## A90 order send failure investigation 2026-08-23
+
+- One reported failed confirmation was investigated without resend or re-registration. Safe-copy counts stayed at `orders=2`, `order_items=5`, `table_sessions=1`, `event_log=54`; schema v4 and the existing latest `order.created` event remained unchanged, so no duplicate order was created.
+- The customer source resolves the API to same-origin `POST /v1/orders`; the body contains only schemaVersion, clientOrderId, and intent items, while the device token remains in the Authorization header. The live safe-copy runtime is DB `server/var/safe-copies/initial-menu-20260818.sqlite3`, Web 25173, API 28787, PID 11368, LAN `192.168.1.5`.
+- The exact A90 response status and public error code/message could not be recovered because the safe-copy runtime has no per-order access log and the in-app browser runtime is unavailable. Do not infer a 401/403/409/422/500 from the generic screen message alone.
+- Client-only handling now preserves a public 4xx error code from the API response and displays safe categories (`認証切れ`, `注文内容エラー`, `送信競合`, `サーバーエラー`) instead of the generic `業務エラー`. Server, DB schema, order API, idempotency, snapshot, kitchen, history, and pairing data were not changed for this classification fix.
+- Direct Vite build and HTTP-served bundle verification passed; the served bundle contains the safe categories and no generic `業務エラー` marker. Full prototype tests passed 73/73 and full server tests passed 357/357. `pnpm run test:sites` remains blocked before test execution by the existing non-TTY dependency-purge guard; run the direct Sites worker test separately when needed.
+- Remaining verification: obtain one real A90 POST status/body from a request-level diagnostic path or browser network capture, without retrying the order. The current read-only check found no live A90 TCP session.
+
+## Customer order E2E and safe-copy snapshot repair 2026-08-23
+
+- A90側`192.168.1.8`から現行safe-copy`192.168.1.5:25173`への接続を確認した。客席の注文APIは同一originの`POST /v1/orders`で、旧IP・旧ポート・別APIパスへ送る実装ではない。直近の実safe-copy注文はHTTP注文経路を通り、`orders=2`、`order_items=5`、`table_sessions=1`、`event_log=54`、schema v4、`status=new`として保存されていた。
+- DB保存後の厨房snapshotだけが、event repositoryのorder item SELECTとsnapshot projectionで`servingOptionId`／`servingOptionNameSnapshot`を落としていたため、そこだけを復旧した。customer historyは既存の同一safe-copy DB・同一open session・既存order repositoryを参照する経路を維持している。
+- `server/test/http-order-events.test.mjs`へ、水割り1・ソーダ割り2を送信してDB、厨房snapshot、客席履歴まで検証するHTTP E2Eを追加した。server全体357/357、prototype全体71/71が成功。server、DB schema、注文API契約、認証、outboxの新経路は追加していない。
+- safe-copyはPID 12964から11368へ再起動済み。health HTTP 200、schema v4、safe-copy DB identity、Web 25173/API 28787を確認し、launcherのPIDヘッダー配列処理を修正してruntime-stateも現行PIDへ更新した。production DB、既存注文、履歴、pairing情報は変更していない。
+- A90の実アドレスバー・実タップ・実レスポンス本文はブラウザ接続障害のため未取得。A90由来の実注文保存は確認済みで、正確な水割り1・ソーダ割り2の実機操作は同等HTTP E2Eで確認した。
+
+## Customer shochu popup footer white frame and title sizing 2026-08-23
+
+- 「今回の選択 n点」は焼酎ポップアップ下部から削除し、キャンセルと「n点をカートに追加」だけを白背景・枠線付きの`shochu-selection-footer`に収めた。アクションは枠内で`width:100%`、`min-width:0`として、長い追加ボタン文言が横画面で外へはみ出さないようにした。
+- 選択中の商品名をモーダルタイトルとして表示し、`clamp()`で可能な範囲まで大きくした。数量0時のdisabled、確定時だけ追加、キャンセル・×・背景クリックで破棄、数量操作の`touch-action: manipulation`は維持している。
+- server、DB、safe-copy、注文snapshot、厨房・履歴処理は変更していない。customer UI 18/18、prototype全体71/71、Direct Vite build 4580 modules、Sites worker 4/4、`git diff --check`を確認済み。A90実機の横画面表示と実タップは未確認。
+
+## Customer shochu popup landscape footer fix 2026-08-23
+
+- 焼酎ポップアップの下部フッターはDOM上常に存在し、横画面用`@media (orientation: landscape) and (max-height: 700px)`でタイトル・行間・余白を縮小して全要素を収める。数量ステッパーのタップ領域は52pxを維持する。
+- `modal--shochu`は`100dvh`を優先し、モーダル本体とbodyのoverflowでフッターを切らない。フッターは`display:flex`、`visibility:visible`、`opacity:1`、`flex-shrink:0`。`touch-action: manipulation`も数量操作部分に維持した。
+- prototype全テスト71/71、関連UI18/18、Direct Vite build 4580 modules、Sites worker 4/4、`git diff --check`、HTTP配信本文とdistのSHA-256一致を確認済み。A90実viewport取得と実タップはブラウザ接続障害のため未確認。server、DB、safe-copy、pairing情報、注文snapshotは変更していない。
+
+## Safe-copy shochu bundle delivery diagnosis 2026-08-23
+
+- A90の現行配信先はruntime-state基準で`http://192.168.1.5:25173/customer/customer-01`。旧記録の`192.168.1.11:25173`は接続不能で、25173/28787の待受はNode PID 12964のみ。
+- PID 12964は`node src/run-server.mjs`で、`WARUN_WEB_ROOT`は`prototype/dist/client`、DBは`server/var/safe-copies/initial-menu-20260818.sqlite3`。配信コードはリクエストごとにdistを読み、HTTPは`Cache-Control: no-store`を返す。
+- `prototype/dist/client/index.html`と127.0.0.1/LANのHTTP配信本文は同一SHA-256 `F3EF784AED512FD8DEB13A75CE33DE6921D9BFF812EE089CA9E0B76D022E0A86`で、「今回の選択」「カートに追加」「キャンセル」「touch-action:manipulation」を含む。古いbundle・dist・Nodeプロセスは原因ではないため、再起動は行っていない。
+- A90の実アドレスバーと画面状態はこの環境から直接確認できず、旧URLまたは保持中タブが原因候補として残る。production DB、既存注文、pairing情報は確認・変更していない。
+
+## Customer shochu popup footer and Android tap handling 2026-08-23
+
+- 焼酎ポップアップ下部を専用フッターにし、「今回の選択 n点」「n点をカートに追加」「キャンセル」を常に同一画面へ表示する。数量0では確定ボタンをdisabledにし、確定時だけ数量1以上をカートへ追加する。
+- 飲み方行・数量操作枠・数量ボタン・商品行の飲み方ボタンに`touch-action: manipulation`、`user-select: none`、`-webkit-tap-highlight-color: transparent`を適用した。ページ全体の`user-scalable=no`は使用しない。
+- 関連UIテスト18/18、prototype全テスト71/71、Direct Vite build 4580 modules、Sites worker 4/4、`git diff --check`、生成bundle内のフッター・ボタン・CSSマーカーを確認済み。A90実機タップと実ブラウザスクリーンショットは未確認。server、DB、safe-copy、注文snapshotは変更していない。
+
+## Customer shochu multi-quantity serving popup 2026-08-23
+
+- 焼酎の商品行は「飲み方を選ぶ」ボタンだけを表示し、商品行に選択中の飲み方名や選択状態を表示しない。ボタンを押すと、ロック・水割り・ソーダ割り・お湯割りを一覧にした一時ポップアップを開く。
+- 各飲み方の数量は0から始まり、−／数量／＋でポップアップ内だけを変更する。今回の選択合計が0の間は確定ボタンをdisabledにし、選択操作だけではカートを変更しない。確定時のみ数量1以上を既存selection keyへまとめて追加するため、同じ商品・同じ飲み方は数量加算、異なる飲み方は別明細になる。
+- キャンセル、×、背景クリックはドラフトを破棄して閉じる。既存の注文snapshot、厨房表示、履歴表示、servingOptionNameSnapshot処理と、日本酒・他カテゴリの追加動作は維持した。server、DB、注文API、認証、safe-copyは変更していない。
+- 変更ファイル: `prototype/src/App.jsx`、`prototype/src/styles.css`、`prototype/tests/customer-ui.test.mjs`、本コンテキスト、`DEV_STATE.md`。検証済み: prototype全テスト71/71、customer UI 18/18、Direct Vite build（4580 modules transformed）、Sites worker 4/4、`git diff --check`。
+- 未確認: A90実機の実タップ、1280×800実ブラウザスクリーンショット、既存カート明細を持った状態での手動回帰。次はsafe-copyを再起動せず、客席UIで数量選択・キャンセル・確定後のカート明細を確認する。
+
+## Customer sake serving popup density update 2026-08-23
+
+- 日本酒の客席UIは、案2の構成として提供形態と温度を同じポップアップ内で選ぶ。`グラス`、`徳利 1合`、`徳利 2合`を縦3行に詰め、グラスは冷酒固定の表示、徳利の各行右側だけに冷酒・燗酒ボタンを配置し、A90の画面内に収まるようポップアップを上寄せ・スクロールなしにした。
+- ポップアップを開いた直後は提供形態・温度とも未選択だが、「この内容で追加」は常に押下できる。グラスを選ぶと冷酒を自動選択し、徳利は温度ボタンを選ぶまで注文へ追加せず、「提供温度を選択してください」を表示する。中間の選択内容表示は設けない。
+- 税抜価格の大表示・税込価格の小表示は既存の`PriceDisplay`を再利用し、燗酒でも選択variantの税込マスター価格を使う既存の注文payload、order-item snapshot、厨房表示、履歴表示は変更していない。
+- 今回の変更対象は`prototype/src/App.jsx`、`prototype/src/styles.css`、`prototype/tests/customer-ui.test.mjs`、本コンテキストのみ。商品データ、DB、API、Sites保護対象ファイルは変更していない。safe-copyサーバーも再起動していない。
+- 検証済み: customer UI 18/18、prototype全体71/71、Direct Vite build（4580 modules transformed）、Sites準備、Sites worker 4/4、`git diff --check`。A90実機のタップ確認と1280×800の実ブラウザスクリーンショットは未実施で、safe-copyの客席URLで手動確認する次の作業として残す。
+
+## Customer shochu serving selection separation 2026-08-23 (superseded)
+
+- これは単一飲み方を商品行の状態として保持していた旧仕様の記録であり、現在は上記の複数数量ポップアップへ置き換えた。
+- 焼酎の飲み方ボタンは選択状態だけを更新し、カート追加を行わない。選択済みの飲み方は商品行のラベルと選択ボタンの色で表示し、商品行の`＋`が現在の選択を注文へ追加する。
+- 同じ飲み方で`＋`を複数回押した場合は既存のselection keyにより数量を加算し、飲み方を変更してから`＋`を押した場合はvariant相当の別スナップショット明細になる。カート追加済み明細は後から変更しない。
+- 飲み方未選択で`＋`を押すと選択パネルを開き、「飲み方を選択してください」を表示する。日本酒・他カテゴリ、注文snapshot、厨房表示、履歴表示、DB/APIは変更していない。
+
 ## Pairing claimの実原因とsafe-copy修復 2026-08-22
 
 - A90の有効期限内QR claimはsafe-copyへ到達したがHTTP 500、発生段階は`claim`だった。safe-copy DBの一時コピーで`UNIQUE constraint failed: pairing_codes.used_by_device_id`を再現し、過去に使用済みのpairing codeに残る同じdeviceIdがrevoked端末の再登録を阻害していたことを確認した。期限切れQRは別途HTTP 410 `PAIRING_EXPIRED`であり、今回の500原因ではない。
@@ -302,3 +389,23 @@
 - 実行した検証と未検証事項
 - 残るリスク
 - 次に行う作業を1つ
+
+## safe-copy厨房token恒久整合 2026-08-24
+
+- server側にsafe-copy専用厨房tokenの保存・DB hash照合・明示provision・不一致時safe-stopを追加した。保存先はリポジトリ外の`%LOCALAPPDATA%\WarunTabOrder\safe-copy\kitchen-token`で、管理tokenのfallbackは追加していない。
+- 既存DBにactive kitchen deviceがなかったため、safe-copy専用deviceを1件provisionし、既存のorders、order_items、event_log、注文snapshot処理は変更していない。safe-copyをPID`12420`から`17228`へ正式経路で1回再起動した。
+- 確認: Web/API `25173/28787`、health HTTP 200、schema v4、runtime-state／待受PID一致、管理preflight HTTP 200、管理token／厨房tokenのsnapshot HTTP 200、activeOrders 3件、診断APIの直近取得`retrieval_success`。
+- 検証: server 365/365、prototype 75/75、Direct Vite 4580 modules、Sites worker 4/4、`git diff --check`。pnpm経由buildは既存の依存承認エラーで未完了だが、Vite実体の直接buildは成功した。
+- 未確認: ブラウザ接続資材の欠落により、厨房画面の目視表示は未確認。token値、注文本文、個人情報は記録していない。次は注文送信なしで厨房画面の表示だけを実機／利用可能ブラウザで確認する。
+
+## 厨房日本酒温度表示のcommit前確認 2026-08-24
+
+- DBと実`GET /v1/snapshot`で、`W ダブリュー 甘口`の`徳利2合 / 360ml / 冷酒`を確認した。注文・明細の欠落ではなく、`kitchen-api.js`の変換漏れで`temperatureSnapshot`だけが厨房UIへ渡っていなかった。
+- `kitchen-api.js`で`temperatureSnapshot`を保持するよう修正した。既存の`App.jsx`描画はvariant名・容量・温度を同じ括弧内へ表示するため、厨房では提供方法を確認できる。
+- 厨房カードはテーブル単位の意図的集約で、同一テーブルの複数active order/itemsを1カード内へ表示する。badgeは注文数（`activeOrders.length`）であり、テーブル数ではない。
+- 実測時点のsafe-copyは`activeOrders=1`で、以前の3件という記録とは不一致。現HTTP・DBを正とする。prototype 75/75、Direct Vite、Sites worker 4/4を検証済み。commitは未実施。
+
+## 旧activeOrders遷移と厨房再読込確認 2026-08-24
+
+- 前回`activeOrders=3`だった旧3注文は、現在すべて`completed`で、各注文に`order.completed`イベントがある。自動消失・DB欠落ではなく、提供完了によるactive対象外化と判断した。現在の1件は後から作成された`new`注文。
+- ユーザー報告の厨房実機目視PASSは受領済みだが、今回の再読み込み後の独立目視はブラウザ接続資材エラーで未確認。配信bundleと温度表示変換の修正は確認済み。

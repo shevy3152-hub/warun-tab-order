@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { AdminPairingError, fetchAdminPairingPreflight, issueCustomerPairingCode, pairingCodeFromLocation, pairingRegistrationUrl, revokeAdminDevice } from "../src/admin-pairing.js";
+import { AdminPairingError, fetchAdminDiagnostics, fetchAdminPairingPreflight, issueCustomerPairingCode, pairingCodeFromLocation, pairingRegistrationUrl, revokeAdminDevice } from "../src/admin-pairing.js";
 import { pairingCodeQrSvg } from "../src/qr-code.js";
 
 const CODE = "A".repeat(43);
@@ -102,6 +102,38 @@ test("pairing preflight uses the same-origin admin endpoint", async () => {
   assert.equal(request.url, "http://example.test:25173/v1/admin/pairing-preflight");
   assert.equal(request.options.headers.Authorization, `Bearer ${TOKEN}`);
   assert.deepEqual(result.tables.available.map((table) => table.tableId), [2]);
+});
+
+test("admin diagnostics uses a read-only same-origin endpoint and exposes no request body", async () => {
+  let request;
+  const result = await fetchAdminDiagnostics({
+    env: { location: { origin: "http://example.test:25173" }, WARUN_ADMIN_API_TOKEN: TOKEN },
+    fetchImpl: async (url, options) => {
+      request = { url, options };
+      return {
+        ok: true,
+        status: 200,
+        async json() {
+          return {
+            runtime: { lanIPv4: ["192.0.2.1"], webPort: 25173, apiPort: 28787, processId: 17, databaseTarget: "safe-copy", isProduction: false },
+            schemaVersion: 4,
+            authentication: { status: "valid", role: "admin" },
+            tables: { available: [], assigned: [] },
+            storage: { orders: 0, orderItems: 0, eventLog: 0 },
+            latestOrderSend: { status: 201, requestId: "00000000-0000-4000-8000-000000000017", endpoint: "POST /v1/orders" },
+            latestOrderRetrieval: null,
+            recent: [],
+          };
+        },
+      };
+    },
+  });
+  assert.equal(request.url, "http://example.test:25173/v1/admin/diagnostics");
+  assert.equal(request.options.method, undefined);
+  assert.equal(request.options.body, undefined);
+  assert.equal(request.options.headers.Authorization, `Bearer ${TOKEN}`);
+  assert.equal(result.runtime.databaseTarget, "safe-copy");
+  assert.equal(result.schemaVersion, 4);
 });
 
 test("admin source renders a QR modal and does not fall back to raw code display", () => {
