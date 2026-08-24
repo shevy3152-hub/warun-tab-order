@@ -39,6 +39,7 @@ node server/scripts/import-catalog-markdown.mjs \
 
 ### detail
 - enabled: true
+- show_image_in_list: false
 - itemType: 日本酒
 - taste: Fixture Taste
 
@@ -49,6 +50,8 @@ node server/scripts/import-catalog-markdown.mjs \
 ```
 
 `variants`は日本酒のグラス／徳利などの価格選択、`temperature_options`は提供可能な温度（`冷酒` または `燗酒`）をカンマ区切りで指定する。省略時はグラスを冷酒のみ、それ以外を冷酒・燗酒として扱う。`serving_options`は焼酎の飲み方を表す。`section_key`は焼酎内区分を表す。価格は既存仕様どおり税込マスター価格の整数円で、税抜価格は保存しない。
+
+`detail.show_image_in_list`は任意のbooleanで、商品画像URIを保持したまま客席一覧の画像枠を表示するか指定する。省略時は既存商品の設定を保持し、新規商品はfalseとする。日本酒と既存の焼酎画像は客席UI側の既定表示を維持する。
 
 ## 画像対応表
 

@@ -36,6 +36,7 @@ const CONTENT_TYPES = Object.freeze({
   ".json": "application/json; charset=utf-8",
   ".svg": "image/svg+xml",
   ".ttf": "font/ttf",
+  ".webp": "image/webp",
 });
 
 function injectAdminRuntime(html, adminRuntimeToken, kitchenRuntimeToken) {

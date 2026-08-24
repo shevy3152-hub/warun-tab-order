@@ -105,7 +105,9 @@ export function normalizeCatalogWriteRequest(request) {
   const detail = {
     enabled: rawDetail.enabled ?? false,
     imageUri: normalizeOptionalImage(rawDetail.imageUri, 'detail.imageUri'),
+    showImageInList: rawDetail.showImageInList ?? false,
   };
+  if (typeof detail.showImageInList !== 'boolean') throw invalidWrite('detail.showImageInList must be boolean.');
   for (const field of DETAIL_TEXT_FIELDS) {
     detail[field] = normalizeOptionalText(rawDetail[field], `detail.${field}`, 2_000);
   }
@@ -195,10 +197,14 @@ function optionalText(target, key, value) {
   return target;
 }
 
-function mapDetail(row, includeDisabled = false) {
-  if (!row || (row.detail_enabled !== 1 && !includeDisabled)) return undefined;
+function mapDetail(row, includeDisabled = false, includeListSetting = false) {
+  if (!row) return undefined;
+  const hasListImageSetting = Object.hasOwn(row, 'show_image_in_list');
+  const showImageInList = row.show_image_in_list === 1;
+  if (row.detail_enabled !== 1 && !includeDisabled && !showImageInList) return undefined;
   const detail = { enabled: row.detail_enabled === 1 };
   optionalText(detail, 'imageUri', row.detail_image_uri);
+  if (includeListSetting && hasListImageSetting && (includeDisabled || showImageInList)) detail.showImageInList = showImageInList;
   optionalText(detail, 'reading', row.reading);
   optionalText(detail, 'itemType', row.item_type);
   optionalText(detail, 'origin', row.origin);
@@ -268,7 +274,7 @@ function mapCustomerMenuItem(row) {
     version: row.version,
   }, row.image_uri);
   optionalText(item, 'sectionKey', row.section_key);
-  const detail = mapDetail(row);
+  const detail = mapDetail(row, false, true);
   if (detail) item.detail = detail;
   return item;
 }
@@ -300,7 +306,7 @@ function mapAdminMenuItem(row) {
     updatedAtMs: row.updated_at_ms,
   }, row.image_uri);
   optionalText(item, 'sectionKey', row.section_key);
-  item.detail = mapDetail(row, true) ?? { enabled: false };
+  item.detail = mapDetail(row, true, true) ?? { enabled: false };
   return item;
 }
 
@@ -405,14 +411,14 @@ export function createCatalogRepository({ database, now = Date.now } = {}) {
       `),
       insertDetail: database.prepare(`
         INSERT INTO menu_item_details (
-          menu_item_id, detail_enabled, detail_image_uri, reading, item_type,
+          menu_item_id, detail_enabled, show_image_in_list, detail_image_uri, reading, item_type,
           origin, producer, taste, aroma, sweetness, finish, recommendation,
           detail_description, version, created_at_ms, updated_at_ms
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
       `),
       updateDetail: database.prepare(`
         UPDATE menu_item_details
-        SET detail_enabled = ?, detail_image_uri = ?, reading = ?, item_type = ?,
+        SET detail_enabled = ?, show_image_in_list = ?, detail_image_uri = ?, reading = ?, item_type = ?,
             origin = ?, producer = ?, taste = ?, aroma = ?, sweetness = ?,
             finish = ?, recommendation = ?, detail_description = ?,
             version = version + 1, updated_at_ms = ?
@@ -487,6 +493,7 @@ export function createCatalogRepository({ database, now = Date.now } = {}) {
           m.version,
           m.section_key,
           d.detail_enabled,
+          d.show_image_in_list,
           d.detail_image_uri,
           d.reading,
           d.item_type,
@@ -539,6 +546,7 @@ export function createCatalogRepository({ database, now = Date.now } = {}) {
           m.updated_at_ms
           ,m.section_key
           ,d.detail_enabled
+          ,d.show_image_in_list
           ,d.detail_image_uri
           ,d.reading
           ,d.item_type
@@ -832,6 +840,7 @@ export function createCatalogRepository({ database, now = Date.now } = {}) {
       const currentDetail = statements.findWriteDetail.get(normalized.menuItemId);
       const detailValues = [
         normalized.detail.enabled ? 1 : 0,
+        normalized.detail.showImageInList ? 1 : 0,
         normalized.detail.imageUri,
         ...DETAIL_TEXT_FIELDS.map((field) => normalized.detail[field]),
       ];

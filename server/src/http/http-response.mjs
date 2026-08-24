@@ -39,7 +39,7 @@ const EVENT_TYPES_BY_ROLE = Object.freeze({
     'table.assignment_updated',
   ]),
 });
-const SUPPORTED_SCHEMA_VERSION = 4;
+const SUPPORTED_SCHEMA_VERSION = 5;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const OPAQUE_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
 
@@ -112,6 +112,7 @@ function mapProductDetail(detail) {
   for (const key of ['imageUri', 'reading', 'itemType', 'origin', 'producer', 'taste', 'aroma', 'sweetness', 'finish', 'recommendation', 'description']) {
     optionalStringField(detail, response, key);
   }
+  if (Object.hasOwn(detail, 'showImageInList')) response.showImageInList = requireBoolean(detail.showImageInList);
   return response;
 }
 

@@ -300,6 +300,16 @@ function PriceDisplay({ priceYen }) {
   return <span className="menu-price"><b>{yen(taxExcludedYen(priceYen))}</b><small>税込 {yen(priceYen)}</small></span>;
 }
 
+function shochuThumbUri(uri) {
+  return typeof uri === "string" ? uri.replace(/-thumb-v1(\.webp(?:[?#].*)?)$/, "-thumb-v2$1") : uri;
+}
+
+function listImageVisible(item) {
+  if (item?.categoryId === "sake") return true;
+  if (Object.hasOwn(item?.detail ?? {}, "showImageInList")) return item.detail.showImageInList === true;
+  return item?.categoryId === "shochu";
+}
+
 const SAKE_COLD = "冷酒";
 const SAKE_WARM = "燗酒";
 
@@ -829,20 +839,21 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
               {apiMenuState.loading ? <div className="empty-state"><ListBullets size={42} /><p>メニューを読み込んでいます。</p></div> : apiMenuState.error ? <div className="empty-state"><ListBullets size={42} /><p>メニューを取得できません。</p></div> : currentItems.length ? currentItems.map((item, index) => {
                 const previous = currentItems[index - 1];
                 const isOtherStart = isShochu && item.sectionKey !== "芋" && (index === 0 || previous?.sectionKey === "芋");
+                const showListImage = listImageVisible(item);
                 const row = isSake ? (
                   <article className={`menu-row sake-menu-row ${item.isSoldOut ? "is-sold-out" : ""}`} key={item.id}>
                     <div className="menu-row__index">{String(index + 1).padStart(2, "0")}</div>
                     <button className="product-image-button" onClick={() => setDetailItem(item)} aria-label={`${item.name}の詳細を見る`} disabled={!item.imageUri && !item.detail?.enabled}>{item.imageUri ? <img src={item.imageUri} alt="" /> : <span>画像なし</span>}</button>
-                    <button className="menu-row__copy menu-row__copy--button" onClick={() => item.detail?.enabled ? setDetailItem(item) : undefined} disabled={!item.detail?.enabled} aria-label={item.name + "の詳細を見る"}><h2>{item.name}</h2>{item.detail?.reading ? <small>{item.detail.reading}</small> : null}{item.detail?.itemType ? <b className="sake-type">{item.detail.itemType}</b> : null}<p>{item.description}</p></button>
+                    <button className="menu-row__copy menu-row__copy--button" onClick={() => item.detail?.enabled ? setDetailItem(item) : undefined} disabled={!item.detail?.enabled} aria-label={item.name + "の詳細を見る"}><h2>{item.name}</h2><small className="menu-row__detail-hint">タップで明細</small></button>
                     <button className="sake-serve-button" onClick={() => openSakeSelection(item)} disabled={item.isSoldOut || !item.variants.length} aria-label={`${item.name}の提供方法を選ぶ`}><span>提供方法を選ぶ</span><small>グラス／徳利</small></button>
                   </article>
                 ) : (
-                  <article className={`menu-row ${isShochu ? "shochu-menu-row" : ""} ${item.isSoldOut ? "is-sold-out" : ""}`} key={item.id} ref={isShochu && item.sectionKey === "芋" && !previous ? imoRef : null}>
+                  <article className={`menu-row ${isShochu ? "shochu-menu-row" : ""} ${showListImage ? "" : "menu-row--no-image"} ${item.isSoldOut ? "is-sold-out" : ""}`} key={item.id} ref={isShochu && item.sectionKey === "芋" && !previous ? imoRef : null}>
                     <div className="menu-row__index">{String(index + 1).padStart(2, "0")}</div>
-                    <div className="product-image-placeholder" aria-hidden="true"><span>画像なし</span></div>
-                    <button className="menu-row__copy menu-row__copy--button" onClick={() => item.detail?.enabled ? setDetailItem(item) : undefined} aria-label={`${item.name}の詳細を見る`}><h2>{item.name}</h2><p>{item.description}</p></button>
+                    {showListImage ? <button className="product-image-button" onClick={() => setDetailItem(item)} aria-label={`${item.name}の詳細を見る`} disabled={!item.imageUri && !item.detail?.enabled}>{item.imageUri ? <img src={isShochu ? shochuThumbUri(item.imageUri) : item.imageUri} alt="" /> : <span>画像なし</span>}</button> : null}
+                    <button className="menu-row__copy menu-row__copy--button" onClick={() => item.detail?.enabled ? setDetailItem(item) : undefined} aria-label={`${item.name}の詳細を見る`}><h2>{item.name}</h2><small className="menu-row__detail-hint">タップで明細</small></button>
                     <PriceDisplay priceYen={item.price} />
-                    {item.isSoldOut ? <div className="sold-out-label"><b>売り切れ</b><small>SOLD OUT</small></div> : item.servingOptions.length ? <button className="shochu-serving-button" onClick={() => openShochuSelection(item)} aria-label={`${item.name}の飲み方を選ぶ`}>飲み方を選ぶ</button> : <button className="add-button" onClick={() => addSelection(item)} aria-label={`${item.name}を追加`}><Plus size={36} weight="bold" /></button>}
+                    {item.isSoldOut ? <div className="sold-out-label"><b>売り切れ</b><small>SOLD OUT</small></div> : item.servingOptions.length ? <button className="shochu-serving-button" onClick={() => openShochuSelection(item)} aria-label={`${item.name}の飲み方選択`}>飲み方選択</button> : <button className="add-button" onClick={() => addSelection(item)} aria-label={`${item.name}を追加`}><Plus size={36} weight="bold" /></button>}
                   </article>
                 );
                 return (
@@ -906,7 +917,7 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
       {modal === "staff" ? <Modal title="スタッフを呼びますか？" onClose={() => setModal(null)}><p className="modal-lead">テーブル {device.tableId} からスタッフへお知らせします。</p><div className="modal-actions"><button className="button button--quiet" onClick={() => setModal(null)}>やめる</button><button className="button button--primary button--large" onClick={callStaff}><Bell size={22} weight="bold" /> 呼び出す</button></div></Modal> : null}
       {modal === "feature" ? <Modal title="確認" onClose={() => setModal(null)}><p className="modal-lead">この機能は次の実装段階で接続します。</p><div className="modal-actions"><button className="button button--primary" onClick={() => setModal(null)}>閉じる</button></div></Modal> : null}
       {modal === "history" ? <Modal title="これまでのご注文" onClose={() => setModal(null)} wide><div className="customer-history">{apiMode && apiHistoryState.loading ? <div className="empty-state"><ClipboardText size={42} /><p>注文履歴を読み込んでいます。</p></div> : apiMode && apiHistoryState.error ? <div className="empty-state"><ClipboardText size={42} /><p>注文履歴を取得できません。</p></div> : customerHistory.length ? customerHistory.map((order) => <article key={order.id}><header><b>{formatTime(order.createdAt)} のご注文</b><span className={`status-chip status-${order.status}`}>{customerTransportLabel(order)}</span></header>{order.items.map((item) => <div key={item.id}><span>{selectionDisplayName({ name: item.nameSnapshot }, item)}</span><b>{item.quantity}点</b></div>)}</article>) : <div className="empty-state"><ClipboardText size={42} /><p>注文履歴はまだありません。</p></div>}</div></Modal> : null}
-      {detailItem ? <Modal title={detailItem.name} onClose={() => setDetailItem(null)} wide><div className="product-detail">{detailItem.detail?.imageUri || detailItem.imageUri ? <img src={detailItem.detail?.imageUri || detailItem.imageUri} alt={detailItem.name} /> : null}<div><p className="product-detail__reading">{detailItem.detail?.reading}</p>{detailItem.detail?.itemType ? <span className="category-tag">{detailItem.detail.itemType}</span> : null}<p>{detailItem.detail?.description || detailItem.description}</p><dl>{[["産地", "origin"], ["蔵元", "producer"], ["味の特徴", "taste"], ["香り", "aroma"], ["甘辛", "sweetness"], ["キレ", "finish"]].filter(([, key]) => detailItem.detail?.[key]).map(([label, key]) => <div key={key}><dt>{label}</dt><dd>{detailItem.detail[key]}</dd></div>)}</dl>{detailItem.detail?.recommendation ? <blockquote>{detailItem.detail.recommendation}</blockquote> : null}</div></div></Modal> : null}
+      {detailItem ? <Modal title={detailItem.name} onClose={() => setDetailItem(null)} wide className="modal--product-detail"><div className="product-detail">{detailItem.detail?.imageUri || detailItem.imageUri ? <img src={detailItem.detail?.imageUri || detailItem.imageUri} alt={detailItem.name} /> : null}<div><p className="product-detail__reading">{detailItem.detail?.reading || ""}</p>{detailItem.detail?.itemType ? <span className="category-tag">{detailItem.detail.itemType}</span> : null}<p className="product-detail__description">{detailItem.detail?.description || detailItem.description}</p><dl>{[["産地", "origin"], ["蔵元", "producer"], ["味の特徴", "taste"], ["香り", "aroma"], ["甘辛", "sweetness"], ["キレ", "finish"]].filter(([, key]) => detailItem.detail?.[key]).map(([label, key]) => <div key={key}><dt>{label}</dt><dd>{detailItem.detail[key]}</dd></div>)}</dl>{detailItem.detail?.recommendation ? <blockquote>{detailItem.detail.recommendation}</blockquote> : null}</div></div><div className="modal-actions product-detail__actions"><button className="button button--quiet" onClick={() => setDetailItem(null)}>一覧へ戻る</button></div></Modal> : null}
     </div>
   );
 }
@@ -1235,6 +1246,7 @@ function AdminScreen({ state, updateState, section = "menu" }) {
       sectionKey: form.get("sectionKey")?.toString().trim() || undefined,
       detail: {
         enabled: form.get("detailEnabled") === "on",
+        showImageInList: form.get("categoryId") === "sake" || form.get("showImageInList") === "on",
         imageUri: form.get("detailImageUri")?.toString().trim() || undefined,
         reading: form.get("reading")?.toString().trim() || undefined,
         itemType: form.get("itemType")?.toString().trim() || undefined,
@@ -1398,6 +1410,7 @@ function AdminScreen({ state, updateState, section = "menu" }) {
             <label>税込マスター価格<input name="price" type="number" min="0" step="1" defaultValue={editingMenu?.price ?? 500} /></label>
             <label className="menu-editor__wide">短い説明<textarea name="description" defaultValue={editingMenu?.description ?? ""} /></label>
             <label>商品画像URI<input name="imageUri" defaultValue={editingMenu?.imageUri ?? ""} /></label>
+            <label className="menu-editor__check"><input type="checkbox" name="showImageInList" defaultChecked={editingMenu?.detail?.showImageInList ?? editingMenu?.categoryId === "shochu"} /> 一覧に画像を表示（日本酒は常時表示）</label>
             <label>焼酎内の区分<select name="sectionKey" defaultValue={editingMenu?.sectionKey ?? ""}><option value="">なし</option><option value="芋">芋</option><option value="麦・その他">麦・その他</option></select></label>
             <label className="menu-editor__check"><input type="checkbox" name="shochuOptions" defaultChecked={Boolean(editingMenu?.servingOptions?.length)} /> 焼酎の標準4種の飲み方を使用</label>
             <fieldset className="sake-variant-editor"><legend>日本酒variant（税込・提供温度）</legend><div><label>グラス 110ml<input name="glassPrice" type="number" min="0" defaultValue={editingMenu?.variants?.find((variant) => variant.name === "グラス")?.priceYen ?? ""} /></label><label><input type="checkbox" name="glassCold" defaultChecked={editingMenu?.variants?.find((variant) => variant.name === "グラス")?.temperatureOptions?.includes("冷酒") ?? true} /> 冷酒</label><label><input type="checkbox" name="glassHot" defaultChecked={editingMenu?.variants?.find((variant) => variant.name === "グラス")?.temperatureOptions?.includes("燗酒") ?? false} /> 燗酒</label></div><div><label>徳利1合 180ml<input name="tokuriPrice" type="number" min="0" defaultValue={editingMenu?.variants?.find((variant) => variant.name === "徳利1合")?.priceYen ?? ""} /></label><label><input type="checkbox" name="tokuriCold" defaultChecked={editingMenu?.variants?.find((variant) => variant.name === "徳利1合")?.temperatureOptions?.includes("冷酒") ?? true} /> 冷酒</label><label><input type="checkbox" name="tokuriHot" defaultChecked={editingMenu?.variants?.find((variant) => variant.name === "徳利1合")?.temperatureOptions?.includes("燗酒") ?? true} /> 燗酒</label></div><div><label>徳利2合 360ml<input name="tokuri2Price" type="number" min="0" defaultValue={editingMenu?.variants?.find((variant) => variant.name === "徳利2合")?.priceYen ?? ""} /></label><label><input type="checkbox" name="tokuri2Cold" defaultChecked={editingMenu?.variants?.find((variant) => variant.name === "徳利2合")?.temperatureOptions?.includes("冷酒") ?? true} /> 冷酒</label><label><input type="checkbox" name="tokuri2Hot" defaultChecked={editingMenu?.variants?.find((variant) => variant.name === "徳利2合")?.temperatureOptions?.includes("燗酒") ?? true} /> 燗酒</label></div></fieldset>

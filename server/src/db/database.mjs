@@ -5,7 +5,7 @@ import { DatabaseSync } from 'node:sqlite';
 
 export const LEGACY_SCHEMA_VERSION = 1;
 export const SESSION_SCHEMA_VERSION = 2;
-export const SCHEMA_VERSION = 4;
+export const SCHEMA_VERSION = 5;
 
 export const REQUIRED_TABLES = Object.freeze([
   'system_state',
@@ -84,6 +84,14 @@ export const DEFAULT_V4_MIGRATION_PATH = resolve(
   '..',
   'docs',
   'schema-v4-migration.sql',
+);
+export const DEFAULT_V5_MIGRATION_PATH = resolve(
+  moduleDirectory,
+  '..',
+  '..',
+  '..',
+  'docs',
+  'schema-v5-migration.sql',
 );
 
 export class DatabaseInitializationError extends Error {
@@ -328,6 +336,20 @@ function migrateSchemaV3ToV4(database, migrationPath) {
     throw new DatabaseInitializationError(
       'MIGRATION_FAILED',
       'The sake temperature schema migration failed.',
+      { cause: error },
+    );
+  }
+}
+
+function migrateSchemaV4ToV5(database, migrationPath) {
+  try {
+    const migrationSql = readFileSync(migrationPath, 'utf8');
+    database.exec(migrationSql);
+  } catch (error) {
+    try { if (database.isTransaction) database.exec('ROLLBACK;'); } catch {}
+    throw new DatabaseInitializationError(
+      'MIGRATION_FAILED',
+      'The menu list image visibility migration failed.',
       { cause: error },
     );
   }
@@ -601,11 +623,13 @@ export function initializeDatabase({
   schemaPath = DEFAULT_SCHEMA_PATH,
   v3MigrationPath = DEFAULT_V3_MIGRATION_PATH,
   v4MigrationPath = DEFAULT_V4_MIGRATION_PATH,
+  v5MigrationPath = DEFAULT_V5_MIGRATION_PATH,
 } = {}) {
   const resolvedDatabasePath = resolveFilePath(databasePath, 'databasePath');
   const resolvedSchemaPath = resolveFilePath(schemaPath, 'schemaPath');
   const resolvedV3MigrationPath = resolveFilePath(v3MigrationPath, 'v3MigrationPath');
   const resolvedV4MigrationPath = resolveFilePath(v4MigrationPath, 'v4MigrationPath');
+  const resolvedV5MigrationPath = resolveFilePath(v5MigrationPath, 'v5MigrationPath');
 
   mkdirSync(dirname(resolvedDatabasePath), { recursive: true });
 
@@ -638,6 +662,12 @@ export function initializeDatabase({
 
     if (currentVersion === 3) {
       migrateSchemaV3ToV4(database, resolvedV4MigrationPath);
+      enableWriteAheadLogging(database);
+      currentVersion = 4;
+    }
+
+    if (currentVersion === 4) {
+      migrateSchemaV4ToV5(database, resolvedV5MigrationPath);
       enableWriteAheadLogging(database);
       currentVersion = SCHEMA_VERSION;
     } else if (currentVersion === SCHEMA_VERSION) {

@@ -206,7 +206,7 @@ test('admin diagnostics reports safe runtime state and bounded request outcomes 
     assert.equal(diagnostics.statusCode, 200);
     assert.equal(diagnostics.json.runtime.databaseTarget, 'safe-copy');
     assert.equal(diagnostics.json.runtime.isProduction, false);
-    assert.equal(diagnostics.json.schemaVersion, 4);
+    assert.equal(diagnostics.json.schemaVersion, 5);
     assert.equal(diagnostics.json.storage.orders, database.prepare('SELECT COUNT(*) AS count FROM orders').get().count);
     assert.equal(diagnostics.json.latestOrderRetrieval.endpoint, 'GET /v1/admin/order-history');
     assert.equal(diagnostics.json.latestOrderRetrieval.status, 200);

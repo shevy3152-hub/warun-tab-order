@@ -195,6 +195,30 @@ test('applying the same fixture Markdown twice produces unchanged results withou
   });
 });
 
+test('an image-only update does not advance unchanged serving option versions', async () => {
+  await withFixture(async ({ database, databasePath, directory }) => {
+    const first = await importCatalogMarkdown({ database, databasePath, targetKind: 'fixture', markdown: FIXTURE_MARKDOWN, imageMappingMarkdown: FIXTURE_IMAGES, dryRun: false, backupPath: join(directory, 'image-first.sqlite3'), now: () => FIXED_NOW });
+    assert.equal(first.errors.length, 0);
+    const before = database.prepare(`
+      SELECT serving_option_id, name, is_active, sort_order, version, created_at_ms, updated_at_ms
+      FROM menu_item_serving_options
+      WHERE menu_item_id = ?
+      ORDER BY serving_option_id
+    `).all('fixture-shochu');
+    const imageOnlyMapping = FIXTURE_IMAGES.replace('/fixture/menu/fixture-shochu.webp', '/fixture/menu/fixture-shochu-v2.webp');
+    const second = await importCatalogMarkdown({ database, databasePath, targetKind: 'fixture', markdown: FIXTURE_MARKDOWN, imageMappingMarkdown: imageOnlyMapping, dryRun: false, backupPath: join(directory, 'image-second.sqlite3'), now: () => FIXED_NOW + 1 });
+    assert.equal(second.errors.length, 0);
+    assert.equal(second.changes.filter((change) => change.status === 'update').length, 1);
+    const after = database.prepare(`
+      SELECT serving_option_id, name, is_active, sort_order, version, created_at_ms, updated_at_ms
+      FROM menu_item_serving_options
+      WHERE menu_item_id = ?
+      ORDER BY serving_option_id
+    `).all('fixture-shochu');
+    assert.deepEqual(after, before);
+  });
+});
+
 test('missing image mappings are warnings and preserve an existing image', async () => {
   await withFixture(async ({ database, databasePath }) => {
     const result = await importCatalogMarkdown({

@@ -175,14 +175,15 @@ h1, h2, h3, p { margin: 0; }
 .subcategory-nav button { min-width: 0; min-height: 52px; padding: 0 10px; border: 1px solid var(--red); background: #fffaf3; color: var(--red); white-space: nowrap; font-size: 15px; font-weight: 900; }
 .subcategory-nav button.is-active { background: var(--red); color: #fff; }
 .menu-list { min-height: 0; overflow-y: auto; }
-.menu-row { min-height: 123px; display: grid; grid-template-columns: 76px 72px minmax(0, 1fr) 142px auto; align-items: center; border-bottom: 1px solid #c46e69; }
+.menu-row { min-height: 123px; display: grid; grid-template-columns: 68px 88px minmax(0, 1fr) 112px 176px; column-gap: 16px; align-items: center; border-bottom: 1px solid #c46e69; }
+.menu-row--no-image { grid-template-columns: 68px minmax(0, 1fr) 112px 176px; }
 .menu-row__index { height: 72px; border-right: 1px solid var(--red); display: flex; align-items: center; font: 900 40px/1 var(--font-display); }
 .product-image-placeholder { width: 60px; height: 78px; border: 1px solid #b8afa2; background: #fffaf3; display: grid; place-items: center; color: var(--muted); text-align: center; }
 .product-image-placeholder span { font-size: 10px; font-weight: 800; writing-mode: vertical-rl; }
 .menu-row__copy { min-width: 0; padding: 0 22px; }
 .menu-row__copy h2 { font-size: clamp(25px, 2.1vw, 38px); letter-spacing: .03em; }
 .menu-row__copy p { margin-top: 7px; color: #403c36; font-size: 13px; font-weight: 700; }
-.add-button { width: 82px; height: 82px; border: 0; background: var(--red); color: #fff; display: flex; flex-direction: column; align-items: center; justify-content: center; font-weight: 800; }
+.add-button { justify-self: center; width: 88px; height: 72px; border: 0; background: var(--red); color: #fff; display: flex; flex-direction: column; align-items: center; justify-content: center; font-weight: 800; }
 .add-button span { font-size: 13px; }
 .add-button--disabled { background: #d8d4cd; color: #777; }
 .menu-row__price { display: flex; flex-direction: column; align-items: flex-end; color: var(--red); }
@@ -199,23 +200,30 @@ h1, h2, h3, p { margin: 0; }
 .menu-price b { font: 900 30px/1 var(--font-display); }
 .menu-price small { margin-top: 5px; color: var(--ink); font-size: 11px; font-weight: 800; }
 .menu-row__copy--button { border: 0; background: transparent; text-align: left; align-self: stretch; display: flex; flex-direction: column; justify-content: center; }
+.menu-row__detail-hint { margin-top: 7px; color: var(--muted); font-size: 14px; font-weight: 800; }
 .drink-jump-nav { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--red); }
 .drink-jump-nav button { min-height: 50px; border: 1px solid var(--red); background: #fffaf3; color: var(--red); font-weight: 900; }
 .menu-section-divider { min-height: 80px; margin: 12px 0; padding: 14px 22px; border: 1px solid var(--red); border-left: 8px solid var(--red); background: #efe5d5; display: flex; flex-direction: column; justify-content: center; }
 .menu-section-divider b { color: var(--red); font-size: 24px; }
 .menu-section-divider span { margin-top: 4px; font-size: 13px; font-weight: 700; }
-.shochu-menu-row { grid-template-rows: minmax(123px, auto) auto; }
-.shochu-serving-button { min-width: 0; min-height: 58px; padding: 10px 12px; border: 2px solid var(--red); background: #fffaf3; color: var(--red); display: flex; align-items: center; justify-content: center; font-size: 15px; font-weight: 900; touch-action: manipulation; user-select: none; -webkit-user-select: none; -webkit-tap-highlight-color: transparent; }
-.sake-menu-row { min-height: 154px; grid-template-columns: 60px 72px minmax(0, 1fr) minmax(196px, 28%); gap: 12px; padding: 10px 0; }
+.shochu-menu-row { min-height: 132px; grid-template-columns: 68px 88px minmax(0, 1fr) 112px 176px; column-gap: 16px; grid-template-rows: minmax(108px, auto); }
+.shochu-menu-row.menu-row--no-image { grid-template-columns: 68px minmax(0, 1fr) 112px 176px; }
+.shochu-menu-row .product-image-button { width: 88px; height: 108px; }
+.shochu-menu-row .menu-row__copy { padding: 0 8px; }
+.shochu-menu-row .menu-row__copy h2 { font-size: clamp(24px, 2vw, 32px); }
+.shochu-menu-row .menu-price { width: 112px; }
+.shochu-serving-button { justify-self: center; width: 176px; min-width: 176px; min-height: 58px; padding: 10px; border: 2px solid var(--red); background: #fffaf3; color: var(--red); display: flex; align-items: center; justify-content: center; white-space: nowrap; font-size: 15px; font-weight: 900; touch-action: manipulation; user-select: none; -webkit-user-select: none; -webkit-tap-highlight-color: transparent; }
+.sake-menu-row { min-height: 154px; grid-template-columns: 68px 88px minmax(0, 1fr) 176px; column-gap: 16px; padding: 10px 0; }
 .product-image-button { width: 96px; height: 132px; padding: 0; border: 1px solid #b8afa2; background: #fff; overflow: hidden; }
-.sake-menu-row .product-image-button { width: 64px; height: 108px; }
+.menu-row .product-image-button { width: 88px; height: 108px; }
+.shochu-menu-row .product-image-button img { object-fit: cover; object-position: center; }
 .product-image-button img { width: 100%; height: 100%; object-fit: contain; }
 .product-image-button span { font-size: 12px; color: var(--muted); }
 .sake-menu-row .menu-row__copy { padding: 0 8px; }
 .sake-menu-row .menu-row__copy h2 { font-size: clamp(22px, 1.8vw, 30px); }
 .sake-menu-row .menu-row__copy > small { display: block; margin-top: 2px; color: var(--muted); }
 .sake-type { display: inline-block; margin-top: 7px; padding: 2px 7px; background: #9b7745; color: #fff; font-size: 11px; }
-.sake-serve-button { min-width: 0; min-height: 58px; align-self: center; padding: 10px 14px; border: 2px solid var(--red); background: #fffaf3; color: var(--red); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; font-weight: 900; }
+.sake-serve-button { justify-self: center; width: 176px; min-width: 176px; min-height: 58px; align-self: center; padding: 10px 14px; border: 2px solid var(--red); background: #fffaf3; color: var(--red); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; font-weight: 900; }
 .sake-serve-button span { font-size: 16px; white-space: nowrap; }
 .sake-serve-button small { font-size: 11px; font-weight: 800; }
 .sake-serve-button:disabled { border-color: #c8c1b7; background: #e7e2da; color: #777; }
@@ -239,15 +247,15 @@ h1, h2, h3, p { margin: 0; }
 .sake-selection-error { margin: 0; color: var(--red); font-size: 14px; font-weight: 900; text-align: right; }
 .modal--sake .modal-actions { margin-top: 6px; }
 .modal--sake .modal-actions .button--large { min-height: 52px; }
-.product-detail { display: grid; grid-template-columns: minmax(220px, 36%) 1fr; gap: 28px; }
-.product-detail > img { width: 100%; max-height: 460px; object-fit: contain; background: #fff; }
-.product-detail__reading { color: var(--muted); font-size: 14px; }
-.product-detail > div > p:not(.product-detail__reading) { margin-top: 18px; line-height: 1.7; }
-.product-detail dl { margin: 20px 0 0; display: grid; gap: 8px; }
+.product-detail { display: grid; grid-template-columns: minmax(180px, 34%) minmax(0, 1fr); gap: 18px; align-items: start; }
+.product-detail > img { width: 100%; max-height: 320px; object-fit: contain; background: #fff; }
+.product-detail__reading { min-height: 1.4em; color: var(--muted); font-size: 16px; font-weight: 800; }
+.product-detail__description { margin-top: 12px; font-size: 17px; line-height: 1.55; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 4; overflow: hidden; }
+.product-detail dl { margin: 14px 0 0; display: grid; gap: 6px; font-size: 15px; }
 .product-detail dl > div { display: grid; grid-template-columns: 90px 1fr; border-bottom: 1px solid #d4cdc2; padding-bottom: 7px; }
 .product-detail dt { color: var(--red); font-weight: 900; }
 .product-detail dd { margin: 0; }
-.product-detail blockquote { margin: 20px 0 0; padding: 14px 18px; border-left: 5px solid var(--red); background: #eee3d5; font-weight: 800; }
+.product-detail blockquote { margin: 14px 0 0; padding: 10px 14px; border-left: 5px solid var(--red); background: #eee3d5; font-weight: 800; line-height: 1.45; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
 .cart-panel { min-width: 0; min-height: 0; border: 1px solid var(--ink); background: rgb(255 252 245 / 70%); display: flex; flex-direction: column; }
 .cart-panel > header { min-height: 92px; padding: 18px 26px; background: var(--red); color: #fff; display: flex; align-items: center; gap: 14px; }
 .cart-panel > header h2 { font-size: 25px; letter-spacing: .06em; }
@@ -268,6 +276,10 @@ h1, h2, h3, p { margin: 0; }
 .modal-backdrop { position: fixed; inset: 0; z-index: 100; background: rgb(20 16 12 / 56%); display: grid; place-items: center; padding: 30px; }
 .modal { width: min(620px, 92vw); max-height: 88vh; overflow: auto; background: var(--paper); border: 2px solid var(--ink); box-shadow: var(--shadow); }
 .modal--wide { width: min(900px, 92vw); }
+.modal--product-detail { width: min(760px, 92vw); max-height: calc(100dvh - 24px); overflow: hidden; display: flex; flex-direction: column; }
+.modal--product-detail .modal__header { position: sticky; top: 0; z-index: 2; min-height: 64px; padding: 10px 16px; background: var(--paper); }
+.modal--product-detail .modal__body { min-height: 0; overflow-y: auto; padding: 14px 18px 10px; }
+.product-detail__actions { margin-top: 12px; }
 .modal--sake { align-self: start; margin-top: 20px; max-height: calc(100vh - 40px); overflow: hidden; }
 .modal--sake .modal__header { min-height: 66px; padding: 10px 18px; }
 .modal--sake .modal__header h2 { font-size: 24px; }
@@ -552,7 +564,8 @@ h1, h2, h3, p { margin: 0; }
   .menu-heading p { font-size: 11px; line-height: 1.35; }
   .subcategory-nav { padding-block: 5px 7px; }
   .subcategory-nav button { min-height: 48px; padding-inline: 6px; font-size: 12px; }
-  .menu-row { min-height: 98px; grid-template-columns: 52px 48px minmax(0, 1fr) 92px 54px; }
+  .menu-row { min-height: 98px; grid-template-columns: 48px 64px minmax(0, 1fr) 86px 156px; column-gap: 16px; }
+  .menu-row--no-image { grid-template-columns: 48px minmax(0, 1fr) 86px 156px; }
   .menu-row__index { height: 56px; font-size: 30px; }
   .menu-row__copy { padding: 0 12px; }
   .menu-row__copy h2 { font-size: clamp(21px, 2.1vw, 29px); }
@@ -561,7 +574,8 @@ h1, h2, h3, p { margin: 0; }
   .menu-row__price small { font-size: 9px; }
   .product-image-placeholder { width: 42px; height: 56px; }
   .product-image-placeholder span { font-size: 8px; }
-  .add-button { width: 54px; height: 54px; }
+  .menu-row .product-image-button { width: 64px; height: 84px; }
+  .add-button { width: 64px; height: 64px; }
   .add-button svg { width: 26px; height: 26px; }
   .sold-out-label { min-width: 66px; }
   .sold-out-label b { font-size: 13px; }
@@ -578,12 +592,17 @@ h1, h2, h3, p { margin: 0; }
   .confirm-button { min-height: 58px; margin: 0 14px 14px; font-size: 15px; gap: 8px; }
   .customer-footer { min-height: 40px; padding: 0 20px; gap: 18px; font-size: 10px; }
   .customer-header .connection { min-width: 135px; }
-  .sake-menu-row { grid-template-columns: 52px 58px minmax(0, 1fr) minmax(176px, 28%); gap: 8px; }
-  .sake-menu-row .product-image-button { width: 52px; height: 82px; }
+  .sake-menu-row { grid-template-columns: 48px 64px minmax(0, 1fr) 156px; column-gap: 16px; }
+  .sake-menu-row .product-image-button { width: 64px; height: 84px; }
+  .shochu-menu-row { grid-template-columns: 48px 64px minmax(0, 1fr) 86px 156px; column-gap: 16px; min-height: 110px; grid-template-rows: minmax(84px, auto); }
+  .shochu-menu-row.menu-row--no-image { grid-template-columns: 48px minmax(0, 1fr) 86px 156px; }
+  .shochu-menu-row .product-image-button { width: 64px; height: 84px; }
+  .shochu-menu-row .menu-price { width: 86px; }
   .sake-serve-button { min-height: 56px; padding-inline: 8px; }
   .sake-serve-button span { font-size: 13px; }
   .sake-serve-button small { font-size: 9px; }
-  .shochu-serving-button { min-height: 56px; padding-inline: 8px; font-size: 13px; }
+  .shochu-serving-button { width: 156px; min-width: 156px; min-height: 56px; padding-inline: 8px; font-size: 13px; }
+  .sake-serve-button { width: 156px; min-width: 156px; }
   .modal--sake { width: min(650px, 94vw); margin-top: 12px; max-height: calc(100vh - 24px); }
   .modal--sake .modal__body { padding: 12px 14px 14px; }
   .modal--shochu { width: min(650px, 94vw); margin-top: 12px; max-height: calc(100vh - 24px); }

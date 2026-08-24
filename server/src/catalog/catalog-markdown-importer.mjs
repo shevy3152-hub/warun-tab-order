@@ -13,7 +13,7 @@ const ITEM_FIELDS = new Set([
   'id', 'category_id', 'formal_name', 'kitchen_alias', 'description',
   'price_yen', 'is_sold_out', 'is_active', 'sort_order', 'section_key',
 ]);
-const DETAIL_INPUT_FIELDS = new Set(['enabled', 'image_uri', ...DETAIL_FIELDS]);
+const DETAIL_INPUT_FIELDS = new Set(['enabled', 'image_uri', 'show_image_in_list', ...DETAIL_FIELDS]);
 
 export class CatalogImportError extends Error {
   constructor(code, message, options = undefined) {
@@ -118,7 +118,8 @@ function normalizeDetail(raw, itemId) {
   }
   const enabled = source.enabled ?? false;
   if (typeof enabled !== 'boolean') throw importError('INVALID_DETAIL', `item:${itemId}.detail.enabled is invalid.`);
-  const detail = { enabled, imageUri: source.image_uri ?? null };
+  if (source.show_image_in_list !== undefined && typeof source.show_image_in_list !== 'boolean') throw importError('INVALID_DETAIL', `item:${itemId}.detail.show_image_in_list is invalid.`);
+  const detail = { enabled, imageUri: source.image_uri ?? null, showImageInList: source.show_image_in_list };
   for (const field of DETAIL_FIELDS) detail[field] = source[field] ?? '';
   return detail;
 }
@@ -290,11 +291,13 @@ function parseCatalogMarkdown(markdown) {
       detail: {
         enabled: detail.enabled,
         imageUri: detail.image_uri,
+        showImageInList: detail.showImageInList ?? false,
         ...Object.fromEntries(DETAIL_FIELDS.map((field) => [field, detail[field]])),
       },
       variants: normalizeVariantRows(item.variants, itemId),
       servingOptions: normalizeServingOptionRows(item.servingOptions, itemId),
     });
+    normalized.detail.showImageInListSpecified = detail.show_image_in_list !== undefined;
     return normalized;
   });
 
@@ -359,7 +362,7 @@ function readDatabaseState(database) {
   const details = database.prepare(`
     SELECT menu_item_id, detail_enabled, detail_image_uri, reading, item_type,
            origin, producer, taste, aroma, sweetness, finish, recommendation,
-           detail_description, version
+           detail_description, show_image_in_list, version
     FROM menu_item_details
   `).all();
   const variants = database.prepare(`
@@ -397,7 +400,7 @@ function rowsFor(map, key) {
 }
 
 function detailMeaningful(detail) {
-  return detail.enabled || detail.imageUri !== null || DETAIL_FIELDS.some((field) => detail[field] !== '');
+  return detail.enabled || detail.imageUri !== null || detail.showImageInList || DETAIL_FIELDS.some((field) => detail[field] !== '');
 }
 
 function resolveImages(item, state, imageMap, warnings) {
@@ -415,6 +418,9 @@ function resolveImages(item, state, imageMap, warnings) {
     detail: {
       ...item.detail,
       imageUri: hasDetailImage ? imageMap.get(detailTarget) : currentDetail?.detail_image_uri ?? item.detail.imageUri ?? null,
+      showImageInList: item.detail.showImageInListSpecified
+        ? item.detail.showImageInList
+        : currentDetail?.show_image_in_list === 1 || item.detail.showImageInList,
     },
   };
   return normalizeCatalogWriteRequest(next);
@@ -423,6 +429,7 @@ function resolveImages(item, state, imageMap, warnings) {
 function sameDetail(desired, current) {
   if (!current) return !detailMeaningful(desired);
   return (current.detail_enabled === 1) === desired.enabled
+    && (current.show_image_in_list === 1) === desired.showImageInList
     && (current.detail_image_uri ?? null) === desired.imageUri
     && DETAIL_FIELDS.every((field) => {
       const databaseField = field === 'itemType'
@@ -554,11 +561,11 @@ function applyItem(database, change, timestamp) {
   }
 
   const currentDetail = database.prepare('SELECT version FROM menu_item_details WHERE menu_item_id = ?').get(item.menuItemId);
-  const detailValues = [item.detail.enabled ? 1 : 0, item.detail.imageUri, ...DETAIL_FIELDS.map((field) => item.detail[field])];
+  const detailValues = [item.detail.enabled ? 1 : 0, item.detail.showImageInList ? 1 : 0, item.detail.imageUri, ...DETAIL_FIELDS.map((field) => item.detail[field])];
   if (currentDetail) {
     database.prepare(`
       UPDATE menu_item_details
-      SET detail_enabled = ?, detail_image_uri = ?, reading = ?, item_type = ?, origin = ?, producer = ?,
+      SET detail_enabled = ?, show_image_in_list = ?, detail_image_uri = ?, reading = ?, item_type = ?, origin = ?, producer = ?,
           taste = ?, aroma = ?, sweetness = ?, finish = ?, recommendation = ?, detail_description = ?,
           version = version + 1, updated_at_ms = ?
       WHERE menu_item_id = ?
@@ -566,9 +573,9 @@ function applyItem(database, change, timestamp) {
   } else {
     database.prepare(`
       INSERT INTO menu_item_details (
-        menu_item_id, detail_enabled, detail_image_uri, reading, item_type, origin, producer, taste,
+        menu_item_id, detail_enabled, show_image_in_list, detail_image_uri, reading, item_type, origin, producer, taste,
         aroma, sweetness, finish, recommendation, detail_description, version, created_at_ms, updated_at_ms
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
     `).run(item.menuItemId, ...detailValues, timestamp, timestamp);
   }
 
@@ -596,15 +603,18 @@ function applyItem(database, change, timestamp) {
     }
   }
 
-  const currentOptions = database.prepare('SELECT serving_option_id, is_active FROM menu_item_serving_options WHERE menu_item_id = ?').all(item.menuItemId);
+  const currentOptions = database.prepare('SELECT serving_option_id, name, is_active, sort_order FROM menu_item_serving_options WHERE menu_item_id = ?').all(item.menuItemId);
   const currentOptionIds = new Set(currentOptions.map((row) => row.serving_option_id));
   for (const option of item.servingOptions) {
     if (currentOptionIds.has(option.servingOptionId)) {
-      database.prepare(`
-        UPDATE menu_item_serving_options
-        SET name = ?, is_active = ?, sort_order = ?, version = version + 1, updated_at_ms = ?
-        WHERE serving_option_id = ? AND menu_item_id = ?
-      `).run(option.name, option.isActive ? 1 : 0, option.sortOrder, timestamp, option.servingOptionId, item.menuItemId);
+      const current = currentOptions.find((row) => row.serving_option_id === option.servingOptionId);
+      if (current.name !== option.name || current.is_active !== (option.isActive ? 1 : 0) || current.sort_order !== option.sortOrder) {
+        database.prepare(`
+          UPDATE menu_item_serving_options
+          SET name = ?, is_active = ?, sort_order = ?, version = version + 1, updated_at_ms = ?
+          WHERE serving_option_id = ? AND menu_item_id = ?
+        `).run(option.name, option.isActive ? 1 : 0, option.sortOrder, timestamp, option.servingOptionId, item.menuItemId);
+      }
     } else {
       database.prepare(`
         INSERT INTO menu_item_serving_options (

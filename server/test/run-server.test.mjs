@@ -34,6 +34,26 @@ test("LAN access URLs are derived without changing the API contract", () => {
   });
 });
 
+test("serves local WebP assets with an image content type", async () => {
+  const root = await mkdtemp(join(tmpdir(), "warun-webp-runtime-"));
+  const apiServer = createServer((_request, response) => response.end());
+  let webServer;
+  try {
+    await writeFile(join(root, "index.html"), "<!doctype html><html><body></body></html>");
+    await writeFile(join(root, "sample.webp"), Buffer.from("RIFF0000WEBP"));
+    webServer = createSameOriginWebServer({ apiServer, webRoot: root });
+    await new Promise((resolve, reject) => { webServer.once("error", reject); webServer.listen(0, "127.0.0.1", resolve); });
+    const { port } = webServer.address();
+    const response = await fetch(`http://127.0.0.1:${port}/sample.webp`);
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get("content-type"), "image/webp");
+  } finally {
+    await new Promise((resolve) => webServer?.close(resolve));
+    apiServer.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("admin runtime is injected only into the admin shell", async () => {
   const root = await mkdtemp(join(tmpdir(), "warun-web-runtime-"));
   const apiServer = createServer((_request, response) => response.end());

@@ -15,6 +15,8 @@ Build app UI in `src/`. Keep `.openai/hosting.json`, `worker/index.js`, `scripts
 - Customer menu cards show a derived tax-exclusive price with the tax-included master price. Customer carts and customer order history never show subtotals or totals.
 - Kitchen order cards keep unserved items above served items and move an order to history immediately after its final item is checked.
 - Payment, taxi booking, QR mirroring, menu imagery, sound, and completion animation remain outside this prototype.
+- 客席の商品行は番号／画像／商品情報／価格／操作の固定列を基本とし、商品情報だけを可変幅にする。商品名の下は「タップで明細」を優先し、長い売り文句やフリガナは詳細画面へ置く。画像を表示しない商品は画像列・枠を描画せず、価格と操作の間隔と操作列の固定タップ領域を守る。
+- 客席一覧画像は日本酒の既存表示と、明示設定または既存互換がある焼酎表示を維持し、その他カテゴリは一覧画像表示設定がONのときだけ表示する。商品画像URIと詳細画像URIは既存の分離構造を使い、文章を画像へ焼き込まない。
 - Preserve the vermilion, warm-paper, black-rule, bold-Japanese visual language of the supplied izakaya reference.
 - Keep the current kitchen layout and information structure; improve legibility by using heavy weights and high-contrast text instead of introducing a new visual concept.
 - Use a heavy square-gothic Japanese typeface for all Japanese UI going forward; prefer BIZ UDPGothic and use weight 800-900 for operational text.

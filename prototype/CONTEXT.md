@@ -432,3 +432,75 @@
 - A90客席画面の緑色「送信済みです。ご注文を承りました。」通知を表示4秒後に自動消去するようにした。送信中、送信待ち、認証・注文内容・サーバーエラー通知、およびスタッフ呼出通知は自動消去対象にしていない。
 - 注文保存、outbox、snapshot、DB、API、厨房・履歴処理は変更していない。関連UI 21/21、prototype全体77/77、Sites worker 4/4、Direct Vite build 4580 modules、配信bundle反映、`git diff --check`を確認した。
 - safe-copy再起動、注文送信、DB変更、pairing、QR、token変更、commitは行っていない。A90実機で4秒後に消える目視確認は未確認。
+
+## 焼酎12商品カタログ対応 2026-08-24
+
+- 焼酎12商品へ、既存catalog Markdown形式の`description`、`detail.description`、蔵元・産地・味・香り・キレ・おすすめフィールドを追加した。stable_id、商品名、税込価格、区分、4種類のserving_optionsは保持している。
+- 全体原稿の差分をsafe-copyへ広げないため、`docs/shochu-catalog-import.md`を既存importerの部分原稿として追加した。画像対応表は`docs/shochu-catalog-image-map.md`の空表で、公式画像の再利用許諾未確認により12件すべて権利確認待ち・画像なしである。候補と利用条件は`docs/shochu-catalog-review.md`に記録した。
+- safe-copyへ売り文句と詳細フィールドだけを適用した。適用前後の注文13件、注文項目22件、既存event_log 96件を確認し、適用後event_logはmenu.updated 12件分だけ増加した。12商品は各4 serving_optionsを維持し、画像URIはnullで外部hotlinkはない。
+- 管理API GETで12商品の保存内容を再取得し、既存の管理フォーム・認証付きPUT・importerが画像URIと売り文句を個別に編集可能な構造であることを専用テストとコードで確認した。共有safe-copyへの同値PUTは行っていない。
+- 検証: importer関連9/9、server全365/365、prototype全77/77、Direct Vite / `pnpm run build`、Sites worker 4/4、production browser smoke、DB integrity_check。in-app browserは未登録端末のpairing画面になったため、QR本文・pairing codeを扱わず、A90客席画面の独立目視は未確認。
+
+次: 権利確認済みのローカルWebP素材が得られた場合だけ、既存画像配置と対応表へ追加して再importする。許諾未確認の間は画像なし表示を維持する。
+
+## 焼酎添付画像候補確認 2026-08-24
+
+- `C:\Users\user\Pictures\shochu-menu-assets-14-bottles.zip` は14商品のthumb/detail候補を含むが、README/provenanceがユーザー撮影写真を基にしたAI再構成で、ラベル細部が実物と完全一致しない可能性を明記している。先行要件により対象12商品への採用は0件、伊佐美・薩摩茶屋の2件は現行対象外として無視した。
+- 画像対応表は既存importer形式の空表を維持し、画像ファイルのリポジトリ・safe-copy取り込みと外部hotlinkは行っていない。画像候補についてDB変更・safe-copy backup/applyは未実施。
+- 焼酎客席一覧の画像領域を、imageUriがある場合は既存`product-image-button`でthumb表示、詳細は既存詳細モーダルのdetail.imageUriを表示するよう最小接続した。管理画面の画像URI編集構造、商品データ、価格、売り文句、4種serving optionsは変更していない。
+- safe-copyの現在実測は注文13件、注文項目22件、event_log 110件、integrity_check ok。過去の焼酎適用後記録108件との差分2件は今回の画像dry-run/applyによるものではない。A90実機目視は未確認。候補画像の採用条件が満たされるまで画像なし表示を維持し、commitは未実施。
+
+次: 条件を満たすローカル画像受領後にのみ対応表へ追加し、safe-copy限定で再import・整合性確認・A90実機確認を行う。
+
+## 焼酎12商品の実物元写真 仮画像v1 2026-08-24（最新）
+
+- `C:\Users\user\Downloads\shochu-original-photos-12.zip` のREADME/manifestを確認し、対象stable_id12件へ実物ボトル元写真を対応付けた。伊佐美・薩摩茶屋は対象外のため取り込んでいない。
+- `prototype/public/menu-images/shochu/` に、一覧ラベル中心thumb 12枚（560×560）と詳細ボトル全体detail 12枚（760×1320）をWebPで配置した。画像はstable_id＋`-v1`の版番号付きで、商品名・価格・売り文句は画像へ焼き込んでいない。加工は向き／傾き、トリミング、明るさ・色調、リサイズ、WebP変換のみで、AI生成・ラベル描き直し・generative fillは行っていない。背景は安全な切り抜きで商品を損なわないよう元写真を保持した。
+- `docs/shochu-catalog-image-map.md` の既存 `target | image_uri` 形式へthumb/detailの24行を追加した。画像URIは商品本文・売り文句・詳細情報から分離され、`prototype/src/App.jsx`の客席一覧／詳細表示、管理画面画像URI入力、認証付き管理API、Markdown importerの各経路で後から画像だけ差し替えられる。
+- safe-copyのみを対象に、`server/var/safe-copies/backups/initial-menu-20260818-before-shochu-images-v1-20260824.sqlite3`へ事前バックアップ後、dry-run（update 12、warning 0、error 0）とapplyを実施した。apply後は画像URIとdetail画像URI各12件、active serving_options 48件、`PRAGMA integrity_check=ok`を確認した。orders 13件、order_items 22件、既存event_log 113行、全variantは事前バックアップと一致し、追加は対象12件のmenu.updated 12件だけ。production DBは対象外。
+- importerは画像だけの更新でも同一内容のserving_optionsのversionを進めていたため、同一内容の場合は更新しない最小修正を追加し、関連回帰テスト8/8で確認した。safe-copyの飲み方48件は事前状態へ戻して内容・version・更新時刻を保持した。
+- 未確認: A90実機でのthumb/detail表示、文字量、ボタン崩れ、スクロール、表示速度の独立目視。safe-copy Webポートのthumb/detail URLがHTTP 200でローカル配信されること、WebP形式・寸法・SHAは確認済みだが、稼働中プロセスは再起動していないため配信時Content-Typeは既存値`application/octet-stream`だった。in-app browserを1280×800で開くと未登録pairing画面となり、直URL画像はブラウザ側ポリシーでブロックされたためQR本文・pairing codeは取得していない。commitは未実施。
+
+次: safe-copyを再起動せず、A90または同等viewportで一覧・詳細の目視確認を行う。実機PASS確認まではcommitしない。
+
+## 焼酎thumb白帯の表示調整 2026-08-24
+
+- 焼酎一覧thumbのみ`object-fit: cover`と中央配置を適用し、縦長表示枠の上下白帯を除去した。元画像、detail画像、商品URI、DB、管理画面編集構造は変更していない。
+- 関連UI 21/21、prototype全77/77、Sites worker 4/4、Direct Vite build 4580 modules、inline、Sites準備、`git diff --check`を確認済み。A90実機のラベル欠け目視とcommitは未実施。
+
+次: A90または同等viewportで一覧thumbのラベル周辺を目視確認する。
+
+## 次回修正候補：焼酎一覧の視認性・レイアウト
+
+- サムネイルを大きくできる余地を確認し、ラベルを欠けさせない範囲で画像枠を再調整する。
+- 既存detailの`reading`を焼酎一覧にも表示してフリガナを追加する。
+- A90で小さく見える売り文句／説明文の文字サイズと行間を拡大する。
+- 金額と「飲み方を選ぶ」ボタンが近すぎるため、焼酎行のgrid列・gap・価格列幅・ボタン最小幅を見直し、潰れとタップしにくさを解消する。
+- 今回は候補の記録だけで、上記UI変更は未実施。
+
+## 焼酎A90一覧調整 2026-08-24（最新）
+
+- `C:\Users\user\Downloads\shochu-original-photos-12.zip` の同じ実物元写真12枚だけを使い、`scripts/process-shochu-thumb-assets.py`でthumb v2を作成した。許可範囲の向き／傾き、明るさ・コントラスト、620×760のラベル中心トリミング、560×700 WebP化だけで、AI生成・ラベル描き直し・detail再処理は行っていない。12商品の主ラベル主要文字が欠けていないことを画像で確認し、detail v1は変更していない。
+- `public/menu-images/shochu/`へ`*-thumb-v2.webp`を12枚追加し、SHA-256は`docs/shochu-catalog-review.md`へ記録した。既存importer形式の画像対応表もthumb v2へ更新した。safe-copy DBは変更せず、客席一覧の表示時だけv1 URIをv2へ解決する。detail URI、管理画面の画像URI編集経路、stable_idは維持した。
+- 焼酎行を番号／thumb／商品情報／価格／操作の固定列へ変更し、商品情報だけを可変幅にした。通常幅は`68px 88px minmax(0, 1fr) 112px 172px`・列間12px、max-width側は`48px 64px minmax(0, 1fr) 86px 148px`・列間12px。説明文字は焼酎行だけ15px・行間1.45へ調整し、操作文言は「飲み方選択」・`white-space: nowrap`・固定幅とした。既存のポップアップ選択、選択色、数量追加、右注文欄、左折りたたみ帯、日本酒・他カテゴリは変更していない。
+- 関連UI 22/22、prototype全78/78、Sites worker 4/4、Direct Vite build 4580 modules（`--configLoader runner`）、Sites準備／inline、`git diff --check`を確認した。safe-copy／production DBへの書込み、importer apply、注文送信、pairing、QR操作、commitは行っていない。
+- ブラウザはsafe-copy客席URLで未登録pairing画面となり、ブラウザ提供viewportも2560×1441固定で1280×800へ変更できなかったため、A90実機PASSは推測で補完していない。
+
+次: ユーザーのA90実機で12商品のラベル判別、白帯なし、説明文、価格と「飲み方選択」の非接触、横スクロールなしを確認し、PASS後にcommit可否を判断する。
+
+## 客席商品行共通UI・一覧画像表示設定 2026-08-24（最新）
+
+- 客席商品行は商品名＋「タップで明細」を共通表示とし、焼酎の長い売り文句、一覧のフリガナ、酒種は表示しない。既存detailのreading、売り文句、詳細フィールドは保持し、詳細モーダルで商品画像・商品名・フリガナ・説明・詳細情報を表示する。詳細モーダルはヘッダーの閉じる操作を固定し、説明・おすすめを表示行数内に抑え、「一覧へ戻る」を置いた。
+- 商品行は番号／画像／商品情報／価格／操作の固定列で、商品情報だけ可変。画像OFF時は画像列そのものを描画せず、価格と操作の間隔は16px以上、＋・焼酎選択・日本酒提供方法ボタンは固定幅でnowrap。焼酎の客席一覧は既存実物写真由来thumb v2、詳細はdetail v1を継続使用する。
+- schema v4には一覧画像ON/OFFの永続項目がなかったため、`menu_item_details.show_image_in_list`を追加するschema v5 migrationと、repository／HTTP DTO／認証付きadmin PUT／既存Markdown importer／管理フォームを最小接続した。Markdownで指定しない場合は既存値を保持し、新規はfalse。日本酒は既存画像表示、焼酎は既存画像互換、その他カテゴリは明示ONだけ一覧表示する。
+- schema v5 migrationはテスト用一時DBでのみ確認。稼働中safe-copyのhealthはschema v4で、safe-copy／production DBのデータ変更、migration適用、再起動、importer applyは行っていない。stable_id、価格、variant、飲み方、注文snapshot、履歴、event_log、右注文欄、左折りたたみ帯、大分類・細分類は変更していない。
+- 検証済み: server 367/367、prototype 78/78、Direct Vite 4580 modules、Sites worker 4/4、Sites準備／inline、`git diff --check`。A90実機は未確認。in-app browserは未登録pairing画面で、viewportも2560×1441固定のため1280×800実機PASSへ推測で置き換えていない。
+
+次: safe-copyを変更せず、A90または1280×800相当viewportで焼酎一覧・詳細・ビール・日本酒を目視し、PASS後にcommit可否を判断する。
+
+## 終了時点レビュー 2026-08-24
+
+- コード、Git差分、HEAD、`DEV_STATE.md`と本ファイルを再照合した。HEADは`db87eb32971c5b333b32b9ecb6c6a3a5d383ebb6`、A90は「大幅に改善したが微調整が必要」で完全PASSではない。
+- schema v5の`show_image_in_list`対応はコードとテスト用DBで実装済み。稼働中safe-copyはschema v4のままで、DB書き込み・再読込・migration・再起動は未検証。
+- 次回はA90の一覧／詳細微調整、safe-copyバックアップ後のv4→v5 migration、管理画面の一覧画像設定保存・再読込、管理編集一覧のカテゴリ・位置復帰・閉じる／キャンセル、焼酎区分・並び順、フリガナ経路を確認する。
+- 機密情報、DB、バックアップ、ログ、dist、runtime-state、`.codex-worktrees/`はcommit対象外。commitは未実施。

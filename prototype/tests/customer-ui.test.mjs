@@ -32,9 +32,25 @@ test("customer menu uses major category navigation with a collapsible rail", () 
   assert.match(customerScreen, /currentMajorCategory\.name/);
   assert.match(customerScreen, /currentCategoryLabel/);
   assert.match(customerScreen, /subcategory-nav--drink/);
-  assert.match(customerScreen, /product-image-placeholder/);
+  assert.match(customerScreen, /shochu-menu-row[\s\S]*product-image-button/);
+  assert.match(styles, /\.shochu-menu-row \.product-image-button img \{[\s\S]*object-fit: cover[\s\S]*object-position: center/);
   assert.match(appSource, /おすすめ/);
   assert.match(appSource, /ノンアル/);
+});
+
+test("shochu rows keep fixed image, price, and action columns without changing the detail image", () => {
+  assert.match(customerScreen, /shochuThumbUri\(item\.imageUri\)/);
+  assert.match(customerScreen, />飲み方選択<\/button>/);
+  assert.match(customerScreen, /menu-row__detail-hint[\s\S]*タップで明細/);
+  assert.match(styles, /\.shochu-menu-row \{[\s\S]*grid-template-columns: 68px 88px minmax\(0, 1fr\) 112px 176px;[\s\S]*column-gap: 16px/);
+  assert.match(styles, /\.shochu-menu-row \.product-image-button \{ width: 88px; height: 108px; \}/);
+  assert.match(styles, /\.shochu-serving-button \{[\s\S]*width: 176px[\s\S]*white-space: nowrap/);
+  assert.match(styles, /\.menu-row--no-image \{ grid-template-columns: 68px minmax\(0, 1fr\) 112px 176px; \}/);
+  assert.match(styles, /\.shochu-menu-row \{ grid-template-columns: 48px 64px minmax\(0, 1fr\) 86px 156px; column-gap: 16px/);
+  assert.match(styles, /\.shochu-serving-button \{ width: 156px; min-width: 156px/);
+  assert.match(appSource, /showImageInList/);
+  assert.match(appSource, /listImageVisible\(item\)/);
+  assert.match(appSource, /detailItem\.detail\?\.imageUri \|\| detailItem\.imageUri/);
 });
 
 test("major category selection collapses to a 78px rail and the rail reopens it", () => {

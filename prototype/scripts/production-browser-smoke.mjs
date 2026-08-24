@@ -18,6 +18,7 @@ const contentTypes = new Map([
   [".html", "text/html; charset=utf-8"],
   [".js", "text/javascript; charset=utf-8"],
   [".ttf", "font/ttf"],
+  [".webp", "image/webp"],
 ]);
 
 async function findChrome() {

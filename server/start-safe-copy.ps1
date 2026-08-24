@@ -235,7 +235,7 @@ if ($existingPids.Count -eq 0) {
 
 $health = Get-Health "http://127.0.0.1:$ApiPort/v1/health"
 $healthBody = $health.Content | ConvertFrom-Json
-if ($health.StatusCode -ne 200 -or $healthBody.status -ne 'ready' -or $healthBody.db -ne 'ready' -or $healthBody.schemaVersion -ne 4) {
+if ($health.StatusCode -ne 200 -or $healthBody.status -ne 'ready' -or $healthBody.db -ne 'ready' -or $healthBody.schemaVersion -ne 5) {
   throw 'safe-copy health/schema check failed.'
 }
 if ($health.Headers['X-Warun-Environment'] -ne 'safe-copy' -or $health.Headers['X-Warun-Database-Target'] -ne 'safe-copy' -or $health.Headers['X-Warun-Database-Identity'] -ne (Get-DatabaseIdentity $DatabasePath)) {

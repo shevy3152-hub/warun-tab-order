@@ -11,7 +11,7 @@ test('safe-copy launcher refuses production and derives LAN URL at runtime', () 
   assert.match(script, /Refusing the production DB path/);
   assert.match(script, /Get-LanIPv4/);
   assert.match(script, /X-Warun-Database-Target/);
-  assert.match(script, /schemaVersion -ne 4/);
+  assert.match(script, /schemaVersion -ne 5/);
   assert.match(script, /AdminTokenPath/);
   assert.match(script, /Read-SafeCopyAdminToken/);
   assert.match(script, /KitchenTokenPath/);
