@@ -161,12 +161,23 @@ test("admin detail editing covers every displayed tasting field", () => {
 test("admin devices screen includes safe communication diagnostics without exposing request bodies", () => {
   assert.match(appSource, /fetchAdminDiagnostics/);
   assert.match(appSource, /communication-diagnostics/);
+  assert.match(appSource, /diagnosticExpanded/);
+  assert.match(appSource, /通信状態：正常/);
+  assert.match(appSource, /詳細を見る/);
+  assert.match(appSource, /Number\(entry\.status\) >= 400/);
+  assert.match(appSource, /setDiagnosticExpanded\(true\)/);
   assert.match(appSource, /LAN IPv4/);
   assert.match(appSource, /schemaVersion/);
   assert.match(appSource, /直近の注文送信/);
   assert.match(appSource, /直近の注文取得/);
-  assert.match(appSource, /実リクエスト未確認/);
+  assert.match(appSource, /再起動後の注文送信記録なし/);
+  assert.match(appSource, /再起動後の注文取得記録なし/);
+  assert.doesNotMatch(appSource, /実リクエスト未確認/);
+  assert.ok(appSource.indexOf("pairing-admin-panel") < appSource.indexOf("communication-diagnostics"));
   assert.match(styles, /\.communication-diagnostics \{/);
+  assert.match(styles, /\.communication-diagnostics__summary/);
+  assert.match(styles, /\.communication-diagnostics__status-dot\.is-ok/);
+  assert.match(styles, /\.communication-diagnostics\.has-issue/);
   assert.match(styles, /\.communication-diagnostics__results/);
 });
 

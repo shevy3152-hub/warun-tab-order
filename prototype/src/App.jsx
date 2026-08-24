@@ -1054,6 +1054,7 @@ function AdminScreen({ state, updateState, section = "menu" }) {
   const [pairingPreflight, setPairingPreflight] = useState({ loading: false, data: null, error: null });
   const [diagnosticState, setDiagnosticState] = useState({ loading: false, data: null, error: null });
   const [diagnosticRefreshKey, setDiagnosticRefreshKey] = useState(0);
+  const [diagnosticExpanded, setDiagnosticExpanded] = useState(false);
   const [catalogState, setCatalogState] = useState({ loading: Boolean(configuredAdminToken(window)) && section === "menu", error: false, saving: false, message: "" });
   const adminApiMode = Boolean(configuredAdminToken(window));
   useEffect(() => {
@@ -1318,41 +1319,29 @@ function AdminScreen({ state, updateState, section = "menu" }) {
   const diagnosticData = diagnosticState.data;
   const latestOrderSend = diagnosticData?.latestOrderSend;
   const latestOrderRetrieval = diagnosticData?.latestOrderRetrieval;
-  const diagnosticResultLabel = (entry) => entry
+  const diagnosticHasIssue = Boolean(diagnosticState.error || (diagnosticData && (
+    diagnosticData.runtime?.databaseTarget !== "safe-copy" ||
+    diagnosticData.runtime?.isProduction ||
+    diagnosticData.health?.status !== "ready" ||
+    diagnosticData.health?.db !== "ready" ||
+    diagnosticData.authentication?.status !== "valid" ||
+    [latestOrderSend, latestOrderRetrieval].some((entry) => entry && Number(entry.status) >= 400)
+  )));
+  const diagnosticSummaryLabel = diagnosticState.loading ? "通信状態：確認中" : diagnosticHasIssue ? "通信状態：要確認" : "通信状態：正常";
+  const diagnosticUpdatedLabel = diagnosticData?.generatedAt
+    ? new Date(diagnosticData.generatedAt).toLocaleString("ja-JP")
+    : "未取得";
+  const diagnosticResultLabel = (entry, emptyLabel) => entry
     ? `${entry.status ?? "?"}${entry.errorCode ? `・${entry.errorCode}` : ""}`
-    : "実リクエスト未確認";
+    : emptyLabel;
+  useEffect(() => {
+    if (diagnosticHasIssue) setDiagnosticExpanded(true);
+  }, [diagnosticHasIssue]);
 
   return (
     <StaffShell route={`/admin/${section}`} title="メニュー管理" subtitle="メニューの追加・編集・並び順の変更ができます。" state={state} right={<button className="save-indicator" type="button"><Check size={24} weight="bold" /> {catalogState.saving ? "保存中" : catalogState.message || "保存する"}</button>}>
       <section className="admin-content">
         <nav className="admin-tabs">{adminTabs.map((tab) => <button key={tab.id} className={section === tab.id ? "is-active" : ""} onClick={() => { setShowAdd(false); setEditingMenuId(null); navigate(`/admin/${tab.id}`); }}><tab.icon size={24} weight="bold" /> {tab.label}</button>)}</nav>
-
-        {section === "devices" ? <section className="communication-diagnostics" aria-label="通信診断">
-          <div className="communication-diagnostics__heading">
-            <div><span className="section-kicker">CONNECTION DIAGNOSTICS</span><h2>通信診断</h2><p>safe-copyの実ランタイム、認証、注文送受信の観測結果です。未取得の通信は未確認として表示します。</p></div>
-            <button className="button button--quiet" type="button" onClick={() => setDiagnosticRefreshKey((key) => key + 1)}>再取得</button>
-          </div>
-          {diagnosticState.loading ? <p role="status">通信診断を取得中です。</p> : null}
-          {diagnosticState.error ? <p role="alert">通信診断を取得できませんでした。</p> : null}
-          {diagnosticData ? <div className="communication-diagnostics__grid">
-            <div className="communication-diagnostics__facts">
-              <p><b>LAN IPv4</b><span>{diagnosticData.runtime.lanIPv4?.join("・") || "未取得"}</span></p>
-              <p><b>Web / API</b><span>{diagnosticData.runtime.webPort} / {diagnosticData.runtime.apiPort}</span></p>
-              <p><b>稼働PID</b><span>{diagnosticData.runtime.processId ?? "未確認"}</span></p>
-              <p><b>health</b><span>{diagnosticData.health?.status === "ready" && diagnosticData.health?.db === "ready" ? "HTTP 200 / ready" : "未確認"}</span></p>
-              <p><b>DB</b><span>{diagnosticData.runtime.databaseTarget}{diagnosticData.runtime.isProduction ? "（production）" : "（production未使用）"}</span></p>
-              <p><b>schemaVersion</b><span>{diagnosticData.schemaVersion ?? "未確認"}</span></p>
-              <p><b>管理認証</b><span>{diagnosticData.authentication.status === "valid" ? "有効" : "未確認"}</span></p>
-              <p><b>端末 / 空きテーブル</b><span>{diagnosticData.tables.assigned?.length ?? 0}台 / {diagnosticData.tables.available?.length ?? 0}卓</span></p>
-              <p><b>最終更新</b><span>{diagnosticData.generatedAt ? new Date(diagnosticData.generatedAt).toLocaleString("ja-JP") : "未確認"}</span></p>
-            </div>
-            <div className="communication-diagnostics__results">
-              <article><b>直近の注文送信</b><strong>{diagnosticResultLabel(latestOrderSend)}</strong><small>{latestOrderSend ? `${latestOrderSend.requestId ?? "request ID未確認"}・${latestOrderSend.classification ?? "分類未確認"}` : "A90実通信は未確認"}</small></article>
-              <article><b>直近の注文取得</b><strong>{diagnosticResultLabel(latestOrderRetrieval)}</strong><small>{latestOrderRetrieval ? `${latestOrderRetrieval.requestId ?? "request ID未確認"}・${latestOrderRetrieval.classification ?? "分類未確認"}` : "管理／厨房の取得は未確認"}</small></article>
-              <article><b>保存件数</b><strong>orders {diagnosticData.storage.orders} / items {diagnosticData.storage.orderItems}</strong><small>event_log {diagnosticData.storage.eventLog}・保存本文は表示しません</small></article>
-            </div>
-          </div> : null}
-        </section> : null}
 
         {adminApiMode && catalogState.loading ? <p className="empty-state">管理カタログを読み込み中です。</p> : null}
         {adminApiMode && catalogState.error ? <p className="empty-state" role="alert">{catalogState.message}</p> : null}
@@ -1430,6 +1419,42 @@ function AdminScreen({ state, updateState, section = "menu" }) {
           </section>
           <div className="admin-toolbar"><div><span className="section-kicker">FIXED ASSIGNMENT</span><h2>客席端末とテーブル</h2><p>客席からは変更できません。端末を置き替えたときだけここで設定します。</p></div></div>
           <div className="device-admin-grid">{adminDeviceRows.map((device, index) => <article key={device.deviceId}><div className="device-admin-icon"><Monitor size={38} weight="duotone" /></div><div><small>端末 {String(index + 1).padStart(2, "0")}</small><h3>{device.label}</h3><code>{device.deviceId}</code></div>{adminApiMode && pairingPreflight.data ? <span className="device-admin-assignment">テーブル {device.tableId}</span> : <label>固定テーブル<select value={device.tableId} onChange={(event) => updateState((current) => ({ ...current, devices: current.devices.map((item) => item.deviceId === device.deviceId ? { ...item, tableId: event.target.value } : item) }))}>{pairingTableOptions.map((table) => <option value={String(table.tableId)} key={table.tableId}>テーブル {table.tableId}</option>)}</select></label>}<ConnectionBadge online={adminApiMode && pairingPreflight.data ? device.deviceStatus === "active" : !state.offlineDevices.includes(device.deviceId)} compact /></article>)}</div>
+          <section className={`communication-diagnostics ${diagnosticExpanded ? "is-expanded" : ""} ${diagnosticHasIssue ? "has-issue" : ""}`} aria-label="通信診断">
+            <div className="communication-diagnostics__summary">
+              <div className="communication-diagnostics__summary-status">
+                <span className={`communication-diagnostics__status-dot ${diagnosticHasIssue ? "is-error" : diagnosticState.loading ? "is-loading" : "is-ok"}`} aria-hidden="true"></span>
+                <strong>{diagnosticSummaryLabel}</strong>
+                <span>最終更新：{diagnosticUpdatedLabel}</span>
+              </div>
+              <button className="button button--quiet" type="button" aria-expanded={diagnosticExpanded} aria-controls="communication-diagnostics-detail" onClick={() => setDiagnosticExpanded((expanded) => !expanded)}>{diagnosticExpanded ? "詳細を閉じる" : "詳細を見る"}</button>
+            </div>
+            {diagnosticExpanded ? <div className="communication-diagnostics__detail" id="communication-diagnostics-detail">
+              <div className="communication-diagnostics__heading">
+                <div><span className="section-kicker">CONNECTION DIAGNOSTICS</span><h2>通信診断</h2><p>safe-copyの実ランタイム、認証、注文送受信の観測結果です。</p></div>
+                <button className="button button--quiet" type="button" onClick={() => setDiagnosticRefreshKey((key) => key + 1)}>再取得</button>
+              </div>
+              {diagnosticState.loading ? <p role="status">通信診断を取得中です。</p> : null}
+              {diagnosticState.error ? <p role="alert">通信診断を取得できませんでした。</p> : null}
+              {diagnosticData ? <div className="communication-diagnostics__grid">
+                <div className="communication-diagnostics__facts">
+                  <p><b>LAN IPv4</b><span>{diagnosticData.runtime.lanIPv4?.join("・") || "未取得"}</span></p>
+                  <p><b>Web / API</b><span>{diagnosticData.runtime.webPort} / {diagnosticData.runtime.apiPort}</span></p>
+                  <p><b>稼働PID</b><span>{diagnosticData.runtime.processId ?? "未確認"}</span></p>
+                  <p><b>health</b><span>{diagnosticData.health?.status === "ready" && diagnosticData.health?.db === "ready" ? "HTTP 200 / ready" : "未確認"}</span></p>
+                  <p><b>DB</b><span>{diagnosticData.runtime.databaseTarget}{diagnosticData.runtime.isProduction ? "（production）" : "（production未使用）"}</span></p>
+                  <p><b>schemaVersion</b><span>{diagnosticData.schemaVersion ?? "未確認"}</span></p>
+                  <p><b>管理認証</b><span>{diagnosticData.authentication.status === "valid" ? "有効" : "未確認"}</span></p>
+                  <p><b>端末 / 空きテーブル</b><span>{diagnosticData.tables.assigned?.length ?? 0}台 / {diagnosticData.tables.available?.length ?? 0}卓</span></p>
+                  <p><b>最終更新</b><span>{diagnosticUpdatedLabel}</span></p>
+                </div>
+                <div className="communication-diagnostics__results">
+                  <article><b>直近の注文送信</b><strong>{diagnosticResultLabel(latestOrderSend, "再起動後の注文送信記録なし")}</strong><small>{latestOrderSend ? `${latestOrderSend.requestId ?? "request ID未確認"}・${latestOrderSend.classification ?? "分類未確認"}` : "記録がない状態です"}</small></article>
+                  <article><b>直近の注文取得</b><strong>{diagnosticResultLabel(latestOrderRetrieval, "再起動後の注文取得記録なし")}</strong><small>{latestOrderRetrieval ? `${latestOrderRetrieval.requestId ?? "request ID未確認"}・${latestOrderRetrieval.classification ?? "分類未確認"}` : "記録がない状態です"}</small></article>
+                  <article><b>保存件数</b><strong>orders {diagnosticData.storage.orders} / items {diagnosticData.storage.orderItems}</strong><small>event_log {diagnosticData.storage.eventLog}・保存本文は表示しません</small></article>
+                </div>
+              </div> : null}
+            </div> : null}
+          </section>
         </> : null}
       </section>
       {pairingQr ? <Modal title="客席端末をQRで登録" onClose={() => setPairingQr(null)} wide><div className="pairing-qr-modal"><p>A90のカメラでこのQRを読み取ってください。登録画面にコードが自動入力されます。</p><div className="pairing-qr-modal__image" dangerouslySetInnerHTML={{ __html: pairingQr.svg }} /><p>QR接続先: {pairingQr.origin}</p><p>QRには現在のLAN URLと一回限りのペアリング情報が含まれています。手入力コードは表示しません。</p><button className="button button--quiet" type="button" onClick={() => setPairingQr(null)}>閉じる</button></div></Modal> : null}

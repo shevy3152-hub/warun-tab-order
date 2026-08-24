@@ -635,10 +635,54 @@ h1, h2, h3, p { margin: 0; }
 
 /* Pairing QR: keep the complete code and quiet zone inside the admin viewport. */
 .communication-diagnostics {
-  margin: 0 0 18px;
-  padding: 18px 20px;
-  border: 2px solid var(--ink);
-  background: #fff;
+  margin: 18px 0 0;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  background: #fffaf3;
+}
+.communication-diagnostics.has-issue {
+  border-color: var(--red);
+}
+.communication-diagnostics__summary {
+  min-height: 42px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+.communication-diagnostics__summary-status {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 800;
+}
+.communication-diagnostics__summary-status strong {
+  color: var(--ink);
+  white-space: nowrap;
+}
+.communication-diagnostics__status-dot {
+  flex: 0 0 auto;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+.communication-diagnostics__status-dot.is-ok { background: #2f8f4e; }
+.communication-diagnostics__status-dot.is-error { background: var(--red); }
+.communication-diagnostics__status-dot.is-loading { background: #c48a2c; }
+.communication-diagnostics__summary .button {
+  flex: 0 0 auto;
+  min-height: 38px;
+  padding-inline: 14px;
+  font-size: 13px;
+}
+.communication-diagnostics__detail {
+  margin-top: 10px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
 }
 .communication-diagnostics__heading {
   display: flex;
