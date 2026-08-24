@@ -120,14 +120,42 @@ test("sake rows use one serving-method button and a direct serving-temperature p
   assert.match(customerScreen, /variant\.name === "グラス"/);
   assert.match(customerScreen, /variantId: null, temperature: null/);
   assert.match(customerScreen, /sakeSelectionError/);
-  assert.match(customerScreen, /提供温度を選択してください/);
+  assert.match(customerScreen, /提供形態と温度を選択してください/);
   assert.match(customerScreen, /onClick=\{addSakeSelection\}/);
   assert.doesNotMatch(customerScreen, /disabled=\{!selectedSakeVariant/);
-  assert.match(customerScreen, /この内容で追加/);
+  assert.match(customerScreen, /<Plus size=\{24\} weight="bold" \/>追加/);
   assert.match(customerScreen, /temperature/);
+  assert.match(appSource, /const SAKE_COLD = "冷酒"/);
+  assert.match(appSource, /const SAKE_WARM = "燗酒"/);
+  assert.match(appSource, /sakeTemperatureOptions\(variant\)/);
+  assert.match(appSource, /sakeAutoTemperature\(variant\)/);
+  assert.match(appSource, /sakeTemperatureLabel\(temperature\)/);
+  assert.match(customerScreen, /allowedTemperatures\.includes\(sakeSelection\.temperature\)/);
   assert.doesNotMatch(customerScreen, /sake-selection-confirm/);
   assert.doesNotMatch(customerScreen, /selectedSakeTemperatures/);
   assert.match(customerScreen, /className="add-button"/);
+});
+
+test("sake variant temperature restrictions and kitchen labels are applied per variant", () => {
+  assert.match(appSource, /if \(variant\?\.name === "グラス"\) return \[SAKE_COLD\]/);
+  assert.match(appSource, /return options\.length === 1 \? options\[0\] : null/);
+  assert.match(customerScreen, /sakeTemperatureOptions\(variant\)\.length === 1/);
+  assert.match(customerScreen, /sakeTemperatureOptions\(variant\)\.map\(\(temperature\)/);
+  assert.match(customerScreen, /sakeTemperatureLabel\(sakeTemperatureOptions\(variant\)\[0\], true\)/);
+  assert.match(customerScreen, /if \(!sakeTemperatureOptions\(variant\)\.includes\(temperature\)\) return/);
+  assert.match(customerScreen, /addSelection\(selectedSakeItem, \{ variant: selectedSakeVariant, temperature: sakeSelection\.temperature \}\)/);
+  const kitchenBlock = appSource.slice(appSource.indexOf("function kitchenSakeVariantName"), appSource.indexOf("function PriceDisplay"));
+  assert.match(kitchenBlock, /徳利/);
+  assert.match(kitchenBlock, /\[12\]合/);
+  assert.match(kitchenBlock, /rawName\.replace\(\/\\s\+\/g, ""\)/);
+  assert.match(kitchenBlock, /return "グラス"/);
+  assert.match(kitchenBlock, /match\(\/\^\(\?:徳利\)\?\(\[12\]合\)\(\?:\\d\+ml\)\?\$\//);
+  assert.match(kitchenBlock, /const shortVariantName = kitchenSakeVariantName\(value\)/);
+  assert.match(kitchenBlock, /temperature === "冷酒" \? "冷"/);
+  assert.match(kitchenBlock, /temperature === "燗酒" \? "燗"/);
+  assert.match(kitchenBlock, /join\("・"\)/);
+  assert.doesNotMatch(kitchenBlock, /variantVolumeSnapshot|volumeLabel/);
+  assert.match(appSource, /const suffix = kitchenSelectionSuffix\(item\)/);
 });
 
 test("sake serving popup keeps shared price formatting and A90 tap sizing", () => {
@@ -197,6 +225,14 @@ test("production customer history loads authenticated SQLite data and fails clos
   assert.match(customerScreen, /apiMode && apiHistoryState\.error/);
   assert.match(customerScreen, /注文履歴を取得できません。/);
   assert.match(appSource, /order\.status === "completed" \? "提供済み"/);
+});
+
+test("customer success notice clears itself without clearing other notices", () => {
+  assert.match(customerScreen, /if \(notice\?\.kind !== "success"\) return undefined/);
+  assert.match(customerScreen, /window\.setTimeout/);
+  assert.match(customerScreen, /current\?\.kind === "success" \? null : current/);
+  assert.match(customerScreen, /\}, 4000\);/);
+  assert.match(customerScreen, /window\.clearTimeout\(timeoutId\)/);
 });
 
 test("API customer display uses the server-assigned table", () => {

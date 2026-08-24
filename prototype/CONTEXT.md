@@ -417,3 +417,18 @@
 - diagnostics API、server、DB、safe-copy、認証、ログ処理、既存管理操作は変更していない。1280x800 CSS viewportでQRボタンと接続中端末の導入部を確認し、診断サマリーは高さ約42px、詳細展開時も既存情報を表示した。
 - 検証: prototype全テスト75/75、Sites worker 4/4、Direct Vite build 4580 modules、`git diff --check`。safe-copy再起動、DB変更、注文送信、pairing操作、commit、pushは行っていない。
 - 未確認: A90実機での管理画面操作は未実施。次はsafe-copyを再起動せず、A90相当viewportで管理画面の通常操作を確認する。
+
+## 日本酒variant別温度選択と厨房短縮表示 2026-08-24
+
+- 客席の既存「提供方法を選ぶ」ポップアップで、variantの`temperatureOptions`を判定するようにした。冷酒のみ／燗酒のみは温度を自動選択して不要な温度ボタンを表示せず、両対応だけ「冷」「燗」を表示する。グラスは既存仕様どおり冷酒固定とした。
+- サイズ・温度選択ではカートへ追加せず、ポップアップ下部の「追加」操作だけでvariant、容量、温度を既存の注文snapshotへ渡す。許可温度以外は選択・追加できないようにした。server、DB、schema、API、既存注文データは変更していない。
+- 厨房表示だけ、既存snapshotのvariant名・容量・温度を`商品名（グラス・冷）`、`商品名（1合・燗）`、`商品名（2合・冷）`の形式へ短縮する。`徳利`、`110ml/180ml/360ml`、`冷酒/燗酒`の「酒」は厨房表示へ出さず、空白やvariant名側へ混在した容量も正規化する。容量の完全値と正式な温度値はDB/API/snapshotに保持し、日本酒以外の厨房表示と客席履歴表示は変更していない。
+- `prototype/tests/customer-ui.test.mjs`へvariant別自動選択、不要ボタン非表示、許可温度検証、厨房短縮表示の回帰確認を追加した。
+- 確認: server 365/365、prototype 76/76（関連UI 20/20）、Direct Vite build 4580 modules、Sites worker 4/4、`git diff --check`。safe-copyを再起動せず、HTTP配信bundleと`prototype/dist/client`のmain/CSS SHA-256一致、および温度選択・追加処理・`touch-action:manipulation`のbundle内反映を確認した。
+- 未確認: A90実機での今回変更後の目視確認。safe-copy再起動、DB変更、既存注文送信、pairing、QR、token変更は行っていない。次はA90相当viewportで日本酒ポップアップと厨房短縮表示を目視確認する。
+
+## 客席の注文送信済み通知自動消去 2026-08-24
+
+- A90客席画面の緑色「送信済みです。ご注文を承りました。」通知を表示4秒後に自動消去するようにした。送信中、送信待ち、認証・注文内容・サーバーエラー通知、およびスタッフ呼出通知は自動消去対象にしていない。
+- 注文保存、outbox、snapshot、DB、API、厨房・履歴処理は変更していない。関連UI 21/21、prototype全体77/77、Sites worker 4/4、Direct Vite build 4580 modules、配信bundle反映、`git diff --check`を確認した。
+- safe-copy再起動、注文送信、DB変更、pairing、QR、token変更、commitは行っていない。A90実機で4秒後に消える目視確認は未確認。

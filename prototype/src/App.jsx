@@ -76,7 +76,7 @@ const DEFAULT_KITCHEN_MENU_ALIASES = {
 
 function kitchenMenuName(item, registeredAliases) {
   const base = item.kitchenAlias || registeredAliases[item.menuItemId] || DEFAULT_KITCHEN_MENU_ALIASES[item.menuItemId] || item.nameSnapshot;
-  const suffix = selectionSuffix(item);
+  const suffix = kitchenSelectionSuffix(item);
   return suffix ? `${base}（${suffix}）` : base;
 }
 
@@ -274,6 +274,23 @@ function selectionSuffix(value) {
   return [name, volume, temperature].filter(Boolean).join(" ");
 }
 
+function kitchenSakeVariantName(value) {
+  const rawName = value.variantNameSnapshot ?? value.variant?.name;
+  if (typeof rawName !== "string") return null;
+  const normalizedName = rawName.replace(/\s+/g, "");
+  if (normalizedName === "グラス" || /^グラス\d+ml$/.test(normalizedName)) return "グラス";
+  const tokuriMatch = normalizedName.match(/^(?:徳利)?([12]合)(?:\d+ml)?$/);
+  return tokuriMatch?.[1] ?? null;
+}
+
+function kitchenSelectionSuffix(value) {
+  const shortVariantName = kitchenSakeVariantName(value);
+  if (!shortVariantName) return selectionSuffix(value);
+  const temperature = value.temperatureSnapshot ?? value.temperature;
+  const shortTemperature = temperature === "冷酒" ? "冷" : temperature === "燗酒" ? "燗" : temperature;
+  return [shortVariantName, shortTemperature].filter(Boolean).join("・");
+}
+
 function selectionDisplayName(item, selection = {}) {
   const suffix = selectionSuffix(selection);
   return suffix ? `${item.name}（${suffix}）` : item.name;
@@ -283,9 +300,25 @@ function PriceDisplay({ priceYen }) {
   return <span className="menu-price"><b>{yen(taxExcludedYen(priceYen))}</b><small>税込 {yen(priceYen)}</small></span>;
 }
 
+const SAKE_COLD = "冷酒";
+const SAKE_WARM = "燗酒";
+
 function sakeTemperatureOptions(variant) {
-  if (Array.isArray(variant?.temperatureOptions) && variant.temperatureOptions.length > 0) return variant.temperatureOptions;
-  return variant?.name === "グラス" ? ["冷酒"] : ["冷酒", "燗酒"];
+  if (variant?.name === "グラス") return [SAKE_COLD];
+  if (Array.isArray(variant?.temperatureOptions) && variant.temperatureOptions.length > 0) {
+    return [...new Set(variant.temperatureOptions.filter((temperature) => temperature === SAKE_COLD || temperature === SAKE_WARM))];
+  }
+  return [SAKE_COLD, SAKE_WARM];
+}
+
+function sakeAutoTemperature(variant) {
+  const options = sakeTemperatureOptions(variant);
+  return options.length === 1 ? options[0] : null;
+}
+
+function sakeTemperatureLabel(temperature, exclusive = false) {
+  const shortLabel = temperature === SAKE_COLD ? "冷" : temperature === SAKE_WARM ? "燗" : temperature;
+  return exclusive ? `${shortLabel}専用` : shortLabel;
 }
 
 const SHOCHU_SERVING_ORDER = ["ロック", "水割り", "ソーダ割り", "お湯割り"];
@@ -558,6 +591,14 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
   }, [apiMode, orderClient]);
 
   useEffect(() => {
+    if (notice?.kind !== "success") return undefined;
+    const timeoutId = window.setTimeout(() => {
+      setNotice((current) => current?.kind === "success" ? null : current);
+    }, 4000);
+    return () => window.clearTimeout(timeoutId);
+  }, [notice]);
+
+  useEffect(() => {
     if (!apiMode) return;
     const pendingOrder = customerHistory.find((order) => ["sending", "retrying", "pending", "queued_offline", "rejected"].includes(order.transportState) || order.status === "queued_offline");
     if (!pendingOrder) return;
@@ -711,11 +752,12 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
     setSakeSelection((current) => current ? ({
       ...current,
       variantId: variant.variantId,
-      temperature: variant.name === "グラス" && sakeTemperatureOptions(variant).includes("冷酒") ? "冷酒" : null,
+      temperature: sakeAutoTemperature(variant),
     }) : current);
     setSakeSelectionError("");
   };
   const selectSakeTemperature = (variant, temperature) => {
+    if (!sakeTemperatureOptions(variant).includes(temperature)) return;
     setSakeSelection((current) => current ? ({ ...current, variantId: variant.variantId, temperature }) : current);
     setSakeSelectionError("");
   };
@@ -742,8 +784,9 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
     setShochuSelection(null);
   };
   const addSakeSelection = () => {
-    if (!selectedSakeVariant || !sakeSelection?.temperature) {
-      setSakeSelectionError("提供温度を選択してください");
+    const allowedTemperatures = selectedSakeVariant ? sakeTemperatureOptions(selectedSakeVariant) : [];
+    if (!selectedSakeVariant || !sakeSelection?.temperature || !allowedTemperatures.includes(sakeSelection.temperature)) {
+      setSakeSelectionError("提供形態と温度を選択してください");
       return;
     }
     addSelection(selectedSakeItem, { variant: selectedSakeVariant, temperature: sakeSelection.temperature });
@@ -851,13 +894,13 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
                 <span className="sake-serving-option__heading"><b>{variant.name === "グラス" ? "グラス" : "徳利"}</b><small>{variant.name === "徳利1合" ? "1合" : variant.name === "徳利2合" ? "2合" : variant.volumeLabel}</small></span>
                 <PriceDisplay priceYen={variant.priceYen} />
               </button>
-              {variant.name === "グラス" ? <span className="sake-temperature-fixed" aria-label="グラスは冷酒固定">冷酒</span> : <div className="sake-temperature-options" aria-label={`${sakeVariantLabel(variant)}の温度`}>
-                {sakeTemperatureOptions(variant).map((temperature) => <button type="button" key={temperature} className={variant.variantId === selectedSakeVariant?.variantId && temperature === sakeSelection.temperature ? "is-selected" : ""} onClick={() => selectSakeTemperature(variant, temperature)} aria-pressed={variant.variantId === selectedSakeVariant?.variantId && temperature === sakeSelection.temperature}>{temperature}</button>)}
+              {sakeTemperatureOptions(variant).length === 1 ? <span className="sake-temperature-fixed" aria-label={`${sakeVariantLabel(variant)}は${sakeTemperatureOptions(variant)[0]}固定`}>{sakeTemperatureLabel(sakeTemperatureOptions(variant)[0], true)}</span> : <div className="sake-temperature-options" aria-label={`${sakeVariantLabel(variant)}の温度`}>
+                {sakeTemperatureOptions(variant).map((temperature) => <button type="button" key={temperature} className={variant.variantId === selectedSakeVariant?.variantId && temperature === sakeSelection.temperature ? "is-selected" : ""} onClick={() => selectSakeTemperature(variant, temperature)} aria-label={`${sakeVariantLabel(variant)}を${temperature}にする`} aria-pressed={variant.variantId === selectedSakeVariant?.variantId && temperature === sakeSelection.temperature}>{sakeTemperatureLabel(temperature)}</button>)}
               </div>}
             </div>)}
           </div>
           {sakeSelectionError ? <p className="sake-selection-error" role="alert">{sakeSelectionError}</p> : null}
-          <div className="modal-actions"><button className="button button--quiet" onClick={() => { setSakeSelection(null); setSakeSelectionError(""); }}>キャンセル</button><button className="button button--primary button--large" onClick={addSakeSelection}>この内容で追加</button></div>
+          <div className="modal-actions"><button className="button button--quiet" onClick={() => { setSakeSelection(null); setSakeSelectionError(""); }}>キャンセル</button><button className="button button--primary button--large" onClick={addSakeSelection}><Plus size={24} weight="bold" />追加</button></div>
         </div>
       </Modal> : null}
       {modal === "staff" ? <Modal title="スタッフを呼びますか？" onClose={() => setModal(null)}><p className="modal-lead">テーブル {device.tableId} からスタッフへお知らせします。</p><div className="modal-actions"><button className="button button--quiet" onClick={() => setModal(null)}>やめる</button><button className="button button--primary button--large" onClick={callStaff}><Bell size={22} weight="bold" /> 呼び出す</button></div></Modal> : null}

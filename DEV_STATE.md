@@ -1,9 +1,9 @@
 # 開発状態
 
-最終確認日: 2026-08-23
+最終確認日: 2026-08-24
 対象: `C:\Users\user\Documents\ChatGPT\タブレットオーダーシステム`
 ブランチ: `feature/sqlite-foundation`
-HEAD: `9ab676068083ef7bbdfc70f64ed510a2327ee35a`
+HEAD: `ae06aa25c18bf26f940fb37f167703c38a2b2eb2`
 
 ## 現在の目標
 
@@ -203,3 +203,12 @@ production DB、safe-copy以外のDB、既存注文、注文履歴、order_items
 - ユーザー実機受入で、safe-copy再起動後health、管理token、厨房token、diagnostics API、厨房注文取得、日本酒表示をPASS確認した。日本酒表示は`W ダブリュー 甘口（徳利2合 360ml 冷酒）`で、activeOrdersの件数変化は`order.completed`イベントで説明済み、自動消失・明細欠落なし。
 - 温度表示の文字サイズ・視認性は機能不具合ではなく、後回しの既知UI課題として記録する。今回のcheckpointではUI微調整を追加しない。
 - 個人Skill `C:\Users\user\.codex\skills\warun-connection-diagnostics`はリポジトリ外のため、Gitへ追加しない。server/var、バックアップ、runtime-state、ログ、prototype/dist、build成果物、`.codex-worktrees`もcommit対象外とする。
+
+## 日本酒温度選択・厨房短縮表示・送信済み通知 2026-08-24
+
+- 日本酒variantの温度制限に応じ、グラスは冷を自動選択、冷専用／燗専用は不要な温度ボタンを非表示、両対応は冷／燗を選択する仕様を実装した。温度・サイズ選択だけでは追加せず、最後の「追加」で注文へ投入する。
+- 厨房表示は`商品名（グラス・冷）`、`商品名（1合・燗）`、`商品名（2合・冷／燗）`の短縮形式とし、「徳利」「ml」「冷酒／燗酒」の長い表記を表示しない。DB、API、注文snapshot、客席履歴の完全情報は維持する。
+- A90実機で、グラス冷自動選択、冷専用／燗専用の不要ボタン非表示、両対応の冷／燗選択、追加前カート不変、厨房の2合冷／燗短縮表示、徳利・ml・冷酒／燗酒表記省略をALL PASS確認した。
+- 客席の緑色「送信済みです。ご注文を承りました。」通知は4秒後に自動消去する。送信中・送信待ち・エラー通知は対象外とした。
+- 検証済み: 関連UI 21/21、prototype全テスト77/77、Sites worker 4/4、Direct Vite build 4580 modules、safe-copy配信bundle反映、`git diff --check`。safe-copy再起動、注文送信、DB変更、pairing、QR、token変更は行っていない。
+- 変更対象は`DEV_STATE.md`、`prototype/CONTEXT.md`、`prototype/src/App.jsx`、`prototype/tests/customer-ui.test.mjs`。既存未追跡`.codex-worktrees`は保持し、server、DB、server/var、dist、ログ、tokenはstage対象外とする。
