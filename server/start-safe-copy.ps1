@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
   [string]$DatabasePath = '',
   [ValidateRange(1, 65535)]
@@ -7,6 +7,7 @@ param(
   [int]$ApiPort = 28787,
   [ValidateRange(5, 300)]
   [int]$TimeoutSeconds = 45,
+  [switch]$MutexAlreadyHeld,
   [switch]$NoBrowser
 )
 
@@ -28,6 +29,9 @@ $KitchenTokenPath = Join-Path $RuntimeRoot 'kitchen-token'
 $KitchenTokenProvisionScript = Join-Path $ServerRoot 'scripts\provision-safe-copy-kitchen-token.mjs'
 $PairingDiagnosticLogPath = Join-Path $LogRoot 'pairing-claims.ndjson'
 $CommunicationDiagnosticLogPath = Join-Path $LogRoot 'communication.ndjson'
+$MutexName = 'WarunTabOrder.SafeCopy.AdminLauncher'
+$mutex = $null
+$hasMutex = $false
 
 function Test-PathUnder {
   param([Parameter(Mandatory)][string]$Child, [Parameter(Mandatory)][string]$Parent)
@@ -159,16 +163,27 @@ function Write-RuntimeInfo {
   Write-Output "Admin token configured in launcher environment: $([bool](-not [string]::IsNullOrWhiteSpace($env:WARUN_ADMIN_API_TOKEN)))"
 }
 
-Assert-SafeCopyFile
-$node = Get-Command node.exe -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
-if ($null -eq $node) { throw 'node.exe was not found on PATH.' }
-$SafeCopyAdminToken = Read-SafeCopyAdminToken
-$lanAddresses = @(Get-LanIPv4)
-$webPids = @(Get-ListeningProcessIds $WebPort)
-$apiPids = @(Get-ListeningProcessIds $ApiPort)
-$existingPids = @($webPids + $apiPids | Sort-Object -Unique)
-$processId = $null
-$stdoutLog = $null
+try {
+  if (-not $MutexAlreadyHeld) {
+    $mutex = [Threading.Mutex]::new($false, $MutexName)
+    try {
+      $hasMutex = $mutex.WaitOne(0)
+    } catch [Threading.AbandonedMutexException] {
+      $hasMutex = $true
+    }
+    if (-not $hasMutex) { throw '別のsafe-copy起動処理が実行中です。起動完了を待ってください。' }
+  }
+
+  Assert-SafeCopyFile
+  $node = Get-Command node.exe -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+  if ($null -eq $node) { throw 'node.exe was not found on PATH.' }
+  $SafeCopyAdminToken = Read-SafeCopyAdminToken
+  $lanAddresses = @(Get-LanIPv4)
+  $webPids = @(Get-ListeningProcessIds $WebPort)
+  $apiPids = @(Get-ListeningProcessIds $ApiPort)
+  $existingPids = @($webPids + $apiPids | Sort-Object -Unique)
+  $processId = $null
+  $stdoutLog = $null
 
 if ($existingPids.Count -gt 0) {
   if ($existingPids.Count -ne 1 -or $webPids.Count -ne 1 -or $apiPids.Count -ne 1 -or $webPids[0] -ne $apiPids[0]) {
@@ -276,7 +291,14 @@ Write-Output "Process: PID $processId, safe-copy DB identity confirmed"
 
 Remove-Variable SafeCopyAdminToken, SafeCopyKitchenToken -ErrorAction SilentlyContinue
 
-if (-not $NoBrowser) {
-  $adminUrl = "http://127.0.0.1:$WebPort/admin.html#/admin/devices"
-  Start-Process $adminUrl
+  if (-not $NoBrowser) {
+    $adminUrl = "http://127.0.0.1:$WebPort/admin.html#/admin/devices"
+    Start-Process $adminUrl
+  }
+} finally {
+  try {
+    if ($hasMutex -and $null -ne $mutex) { [void]$mutex.ReleaseMutex() }
+  } finally {
+    if ($null -ne $mutex) { $mutex.Dispose() }
+  }
 }

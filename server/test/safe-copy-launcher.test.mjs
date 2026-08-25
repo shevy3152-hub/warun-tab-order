@@ -4,6 +4,8 @@ import test from 'node:test';
 
 const script = await readFile(new URL('../start-safe-copy.ps1', import.meta.url), 'utf8');
 const command = await readFile(new URL('../start-safe-copy.cmd', import.meta.url), 'utf8');
+const adminLauncher = await readFile(new URL('../open-admin.ps1', import.meta.url), 'utf8');
+const shortcutInstaller = await readFile(new URL('../scripts/install-safe-copy-shortcut.ps1', import.meta.url), 'utf8');
 
 test('safe-copy launcher refuses production and derives LAN URL at runtime', () => {
   assert.match(script, /WARUN_ENV = 'safe-copy'/);
@@ -29,7 +31,21 @@ test('safe-copy launcher refuses production and derives LAN URL at runtime', () 
   assert.match(script, /CommunicationDiagnosticLogPath/);
   assert.match(script, /WARUN_COMMUNICATION_DIAGNOSTIC_LOG_PATH = \$CommunicationDiagnosticLogPath/);
   assert.match(script, /safe-copy admin preflight did not return HTTP 200/);
+  assert.match(script, /\$MutexAlreadyHeld/);
+  assert.match(script, /WarunTabOrder\.SafeCopy\.AdminLauncher/);
+  assert.match(script, /AbandonedMutexException/);
+  assert.match(script, /ReleaseMutex/);
+  assert.match(script, /finally/);
   assert.doesNotMatch(script, /192\\.168\\.1\\./);
+
+  assert.match(adminLauncher, /\[string\]\$ProjectRoot/);
+  assert.match(adminLauncher, /Start-Process -FilePath 'powershell\.exe'/);
+  assert.match(adminLauncher, /schemaVersion -eq 5/);
+  assert.match(adminLauncher, /ReleaseMutex/);
+  assert.match(shortcutInstaller, /open-admin\.ps1/);
+  assert.match(shortcutInstaller, /WriteAllText/);
+  assert.match(shortcutInstaller, /CreateShortcut/);
+  assert.match(shortcutInstaller, /-ProjectRoot/);
 });
 
 test('safe-copy command delegates to the dedicated script', () => {

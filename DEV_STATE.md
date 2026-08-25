@@ -179,3 +179,41 @@ safe-copyを対象に、客席注文、厨房表示、管理画面、pairing、�
 - 管理編集一覧のカテゴリ分け、編集後に元のカテゴリ・位置へ復帰する処理、編集画面の閉じる／キャンセルを確認・修正する。
 - 焼酎区分と並び順の不具合を修正する。
 - フリガナの保存・表示経路を確認する。
+
+## 再開レビュー・管理カタログ経路修正 2026-08-25
+
+- Git照合: HEADは前回checkpoint `bd7e0dcdbcd723c2f768ae35aaeb9a2f1cf6d872`、ブランチは`feature/sqlite-foundation`。再開時のtracked差分はなく、未追跡は既存`.codex-worktrees/`だけだった。前回commit済みの焼酎画像・UI・schema v5実装はやり直していない。
+- 実状態との差異: 稼働中safe-copyのhealthは実際にはschema v5、DBの`PRAGMA user_version=5`、`show_image_in_list`列あり、`integrity_check=ok`、orders 13、order_items 22、event_log 125だった。前回記録のschema v4から変化しているが、今回migration・再起動・DB書き込みは行っていないため、実施者・バックアップとの対応関係は未確認とする。safe-copy画像はHTTP 200・`image/webp`で配信された。
+- A90確認: `http://192.168.1.5:25173/customer/customer-01`は未登録の「端末登録」画面だった。pairing code・QR・認証情報は扱っていないため、商品一覧・詳細モーダルのA90実機PASSは未確認のまま。完全PASSとはしない。
+- 管理経路: `prototype/src/admin-pairing.js`のPUT payloadへ`detail.showImageInList`を追加した。管理画面の「一覧に画像を表示」とふりがなの保存→API再読込をfixtureで確認するserver回帰テストを追加した。
+- 管理UI: 編集一覧をカテゴリ見出しで分け、編集フォームに「キャンセル」と「編集を閉じる」を追加した。編集時の既存`categoryId`・`sortOrder`保持を維持し、焼酎表示は「芋→麦・その他→並び順」に安定化した。未知カテゴリは「未分類」に残す。
+- 検証: prototype全79/79、server全367/367、Direct Vite build 4580 modules、Sites worker 4/4。safe-copyは読み取り確認のみ。
+
+### 次回
+
+- A90で商品一覧・詳細モーダルを実画面確認し、必要な微調整を行う。
+- 管理画面の実safe-copyで「一覧に画像を表示」とふりがなの保存・再読込を認証付きで確認する。
+- 管理編集一覧のカテゴリ分け・元のカテゴリ／位置復帰・閉じる／キャンセル、焼酎区分・並び順をA90相当画面で確認する。
+
+## safe-copy起動ラッパー冪等化 2026-08-25
+
+- `warun-connection-diagnostics` Skillの読み取り専用診断で、25173/28787は同一safe-copy Node PID、`/v1/health`はHTTP 200・schema v5、runtime-stateとsafe-copy DBのPID・パスが一致していることを確認した。以前のtoken／Firewall調査は繰り返していない。
+- 原因は旧`open-admin.ps1`が既存health確認より先にMutexを即時取得し、schema v4判定失敗時の非表示MessageBoxでfinally前に停止していたこと。旧open-admin PID 2884、11420がMutexを保持し、正常稼働中safe-copyの再利用を妨げていた。確認後、この2つの旧launcherだけを停止した。
+- `open-admin.ps1`はhealth先行、最大60秒のMutex待機、待機中health再利用、25173未待受時の一度だけの起動、AbandonedMutex対応、finally後のエラー表示へ修正した。子launcherは同期`& powershell.exe`をやめ、`Start-Process -PassThru`とhealth pollingで監視する。schema v5を判定し、token値・DB内容・QR本文は出力しない。
+- `server/start-safe-copy.ps1`は共有Mutexを直接起動時に取得し、`-MutexAlreadyHeld`経路を追加してopen-adminとの二重取得を避け、成功・失敗・例外をfinallyで解放する。デスクトップショートカットは既に対象open-admin.ps1を正しく指していたため変更していない。
+- 検証: 稼働中再利用、停止状態から1回起動、停止状態から連続2回起動（両方exit 0）、safe-copy DBパス欠落による起動失敗後の再実行、launcher構文、launcher関連2テスト、server全367件（366 pass／1件はUUIDに禁止語`680`が偶然含まれた既存イベント再生テスト）、該当テスト単独23/23、health/runtime-state/listener PID一致、`integrity_check=ok`を確認した。
+- 現在のsafe-copyはPID 2268、Web/API 25173/28787、schema v5、DB `server/var/safe-copies/initial-menu-20260818.sqlite3`。production DB、注文送信、pairing、QR、migrationは操作していない。commit、push、pull、merge、rebase、resetは行っていない。
+
+次: A90で管理画面HTTP 200と実画面を確認し、launcherの失敗表示を含むWindowsショートカット実機確認を行う。
+
+## 配布経路確認・serverテスト安定化 2026-08-25
+
+- 実操作PASS: ユーザー確認により、デスクトップの「わるん注文・管理画面」ショートカットから管理画面が正常に開くことを確認した。
+- 配布経路の差異: 旧状態ではLocalAppDataの`open-admin.ps1`だけが存在し、リポジトリ内に正本またはショートカット再作成経路がなかった。修正版を失わない最小経路として、`server/open-admin.ps1`を正本、`server/scripts/install-safe-copy-shortcut.ps1`をLocalAppData配置とデスクトップショートカット再作成の正式経路として追加した。ショートカットは正本を`-ProjectRoot`付きで参照し、再セットアップ時に同じ修正版を再配置できる。
+- 配置確認: installerを実行し、LocalAppData配置先と正本のSHA-256が一致（`F21AF435F261F8051198AFF56673BA05A1D1E3DCE63926726A1128B042EA0C5A`）。PowerShell構文も両ファイルで正常。token、DB内容、QR本文は出力していない。
+- 原因: server全体テストの注文イベント再生テストが、UUIDを含むレスポンス全体に`380|680`を適用しており、可変UUID内の`680`に偶然一致して不安定化していた。
+- 恒久修正: `server/test/http-order-events.test.mjs`の検査対象を価格値としてJSON境界にある`380`／`680`と禁止フィールド名へ限定した。テストの漏えい検知意図は維持し、UUIDの可変性には依存しない決定的な入力にした。
+- 検証: LocalAppData wrapperのsafe-copy再利用はexit 0、関連テストは25/25、server全体は367/367 PASS。safe-copy／production DB、注文、pairing、QR、token、schema migrationは操作していない。
+- Git: HEADは`bd7e0dcdbcd723c2f768ae35aaeb9a2f1cf6d872`のまま。commit、push、pull、merge、rebase、resetは未実施。既存`.codex-worktrees/`は保持し、DB・バックアップ・ログ・dist・runtime-state・機密情報はcommit対象に含めない。
+
+次: commit前レビュー結果を確認し、ユーザー承認後に意図したソース・テスト・文書だけを限定stageする。

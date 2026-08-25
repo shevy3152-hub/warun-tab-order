@@ -911,7 +911,9 @@ test('event replay is ordered, bounded by scan limit, and advances through invis
     assert.deepEqual(first.json.events.map((event) => event.eventId), [1]);
     assert.equal(first.json.lastEventId, 2);
     assert.equal(first.json.hasMore, true);
-    assert.doesNotMatch(first.rawBody, /380|680|price|token|hash/i);
+    // Ignore event identifiers when checking that customer replay does not leak
+    // price values. UUIDs are intentionally variable and may contain 380/680.
+    assert.doesNotMatch(first.rawBody, /price|token|hash|(?:^|[:,[])\s*(?:380|680)(?=\s*[,}\]])/i);
 
     const second = await request({
       port,

@@ -504,3 +504,31 @@
 - schema v5の`show_image_in_list`対応はコードとテスト用DBで実装済み。稼働中safe-copyはschema v4のままで、DB書き込み・再読込・migration・再起動は未検証。
 - 次回はA90の一覧／詳細微調整、safe-copyバックアップ後のv4→v5 migration、管理画面の一覧画像設定保存・再読込、管理編集一覧のカテゴリ・位置復帰・閉じる／キャンセル、焼酎区分・並び順、フリガナ経路を確認する。
 - 機密情報、DB、バックアップ、ログ、dist、runtime-state、`.codex-worktrees/`はcommit対象外。commitは未実施。
+
+## 再開レビュー・管理カタログ経路修正 2026-08-25
+
+- 再開時のHEADは`bd7e0dcdbcd723c2f768ae35aaeb9a2f1cf6d872`でtracked差分なし、既存`.codex-worktrees/`のみ未追跡だった。前回済みの焼酎画像・客席UI・schema v5実装は再実施していない。
+- safe-copyは読み取りでschema v5／`user_version=5`／`integrity_check=ok`を確認した。前回のschema v4記録と差異があるが、このturnでmigration、再起動、DB書き込みは行っていない。migrationの実施者・バックアップ対応は未確認。
+- A90 URLは未登録の端末登録画面となり、pairing code・QRは扱っていない。A90商品一覧・詳細モーダルの実画面PASSは未確認。
+- 管理PUTへ`detail.showImageInList`を接続し、ふりがなと一覧画像設定のfixture保存→API再読込テストを追加。管理編集一覧をカテゴリ分けし、キャンセル／閉じる、焼酎区分順、sortOrder保持を実装した。
+- 検証: prototype 79/79、server 367/367、Direct Vite 4580 modules、Sites worker 4/4。safe-copyは読み取り確認のみ。
+
+次: A90実画面確認、実safe-copy管理画面で一覧画像設定・ふりがなの保存再読込確認、カテゴリ／位置復帰と焼酎並び順のA90相当確認。
+
+## safe-copy起動ラッパー診断・修正 2026-08-25
+
+- 25173/28787の待受、`/v1/health`、runtime-state、PowerShell／Nodeプロセスを読み取り専用で照合した。現在のsafe-copyはschema v5、safe-copy DB、PID 2268で稼働し、health・両listener・runtime-stateのPIDが一致する。過去のtoken／Firewall調査は再実施していない。
+- 旧open-adminはhealthより先にMutexを取得し、schema v4不一致時の非表示MessageBoxでfinally前に残留する経路があった。旧PID 2884/11420が実際にMutexを保持していたため、safe-copyが正常でも「別のsafe-copy起動処理」と表示されていた。
+- `open-admin.ps1`をhealth先行・60秒待機・health再利用・一度だけの起動・finally後エラー表示へ修正し、同期子PowerShell呼出しを`Start-Process -PassThru`＋health pollingへ変更した。`server/start-safe-copy.ps1`には共有Mutexと`-MutexAlreadyHeld`を追加し、全経路finally解放を保証した。ショートカットの既存TargetPath／Argumentsは正しいため変更していない。
+- 稼働中再利用、停止状態の1回起動、停止状態の連続2回起動、safe-copy内の不存在DBによる失敗後再実行を確認した。safe-copy DBはread-only integrity check `ok`、orders 13、order_items 22、event_log 125を維持している。production DB、注文、pairing、QR、migrationは操作していない。
+- launcher関連2テスト、PowerShell構文、該当イベント再生テスト23/23は成功。server全367件はUUIDの値が既存禁止語パターンに偶然一致した1件を除き366件成功で、launcher起因ではない。commit等のGit履歴操作は行っていない。
+
+次: A90実機でショートカットから管理画面を開き、稼働中再利用と停止状態の一回起動を目視確認する。
+
+## 配布経路確認・serverテスト安定化 2026-08-25
+
+- ユーザーの実操作で、デスクトップショートカットから管理画面が正常に開くことを確認した。
+- リポジトリ内に旧LocalAppData`open-admin.ps1`の正本・再配置経路がなかったため、`server/open-admin.ps1`を正本、`server/scripts/install-safe-copy-shortcut.ps1`をLocalAppData配置とショートカット再作成の経路として追加した。installer実行後、正本と配置先のSHA-256一致を確認し、ショートカットへ`-ProjectRoot`を付与した。
+- serverの注文イベント再生テストは、UUIDを含むレスポンス全体へ`380|680`を適用していたため、UUID内の偶然の一致で不安定だった。価格値のJSON境界だけを検査する決定的な正規表現へ修正した。
+- 検証: launcher関連25/25、server全367/367、LocalAppData wrapper再利用exit 0、PowerShell構文正常。safe-copy／production DB、注文、pairing、QR、token、schema migrationは操作していない。
+- Git commit等は未実施。次はcommit前レビュー後、ユーザー承認を得た限定stageとする。
