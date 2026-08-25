@@ -532,3 +532,102 @@
 - serverの注文イベント再生テストは、UUIDを含むレスポンス全体へ`380|680`を適用していたため、UUID内の偶然の一致で不安定だった。価格値のJSON境界だけを検査する決定的な正規表現へ修正した。
 - 検証: launcher関連25/25、server全367/367、LocalAppData wrapper再利用exit 0、PowerShell構文正常。safe-copy／production DB、注文、pairing、QR、token、schema migrationは操作していない。
 - Git commit等は未実施。次はcommit前レビュー後、ユーザー承認を得た限定stageとする。
+
+## schema v5・管理カタログ実safe-copy検証 2026-08-25
+
+- 実HEADは`0c6916e117cdd10bacdd3702df51c5bd1ac21d9b`。launcher commitのamend、stage、commit、push、pull、merge、rebase、resetは行っていない。対象のtracked差分はApp、admin-pairing、styles、関連prototypeテスト、server管理カタログテストの6ファイルで、`.codex-worktrees/`は保持している。
+- safe-copyを正式な起動経路で再起動し、health 200／ready／db ready／schema v5／PID一致を確認した。開始時点でDBは既にuser_version 5だったためv4→v5 SQLは再適用せず、正式経路のv5再利用のみ確認した。safe-copyバックアップ作成後、現DBとバックアップのintegrity、orders 13、order_items 22、event_log 125、variant、飲み方の一致を確認した。production DB、注文、pairing、QR、schema操作は行っていない。
+- 実管理画面ではカテゴリ分け、焼酎の芋→麦・その他→並び順、芋区分商品の位置維持、キャンセル／編集を閉じる時の未保存破棄を確認した。ただし一覧画像設定とふりがなの保存操作は「保存できませんでした」となり、DB再読込でも変更なしだった。fixtureテストの保存確認を実管理画面のPASSとは扱わない。
+- A90 URLは未登録の端末登録画面で、商品一覧・詳細モーダル・画像ON/OFF・ふりがな・一覧レイアウトの実機確認は未到達。A90完全PASS、checkpoint候補確定は保留。
+- 検証済み: server 367/367、prototype 79/79、Sites worker 4/4、Direct Vite 4580 modules、`git diff --check`。DB、バックアップ、dist、runtime-state、ログ、機密情報はcommit対象外。
+
+次: 実safe-copy管理画面の認証付き保存失敗を特定し、A90端末登録後に一覧・詳細を確認してから6ファイルと状態文書だけを別checkpoint候補として再レビューする。
+
+## 実safe-copy catalog保存失敗の修正 2026-08-25
+
+- 実HEADは`0c6916e117cdd10bacdd3702df51c5bd1ac21d9b`のまま。safe-copy PID 5996、Web/API 25173/28787、health 200、schema v5、DBは`server/var/safe-copies/initial-menu-20260818.sqlite3`。production DB、A90、QR、pairing、注文送信は操作していない。
+- 黒霧島の旧管理PUT失敗はHTTP 500／公開`INTERNAL_ERROR`／段階`mutation`、`expectedVersion=6`・`actualVersion=6`、内部診断`CATALOG:DATABASE_FAILURE`／`ERR_SQLITE_ERROR`だった。ブラウザpayloadの焼酎serving option IDが`..._rock`等、既存DB・importerのcanonical IDが`...-rock`等で、SQLite一意制約に当たっていた。version競合ではない。
+- `App.jsx`は編集時に既存serving option IDを名前で再利用し、新規時もハイフン形式を生成するよう修正した。`admin-pairing.js`はstatus・公開error code・request IDを安全に保持し、管理画面表示へ反映する。実ブラウザpayload同型のHTTP E2Eと診断メタデータ安全性テストを追加した。
+- Direct Vite build後にsafe-copyを正式再起動し、配信bundleとlocal buildのSHA-256一致を確認した。実管理画面で黒霧島の画像表示ON／OFF保存と各再読込、ふりがな`くろきりしま`の保存・再読込を確認し、最終状態はON。GET`/v1/menu`にも反映し、`shochu`／`芋`／sortOrder 1を維持した。
+- safe-copyは`integrity_check=ok`、orders 13、order_items 22、event_log 132、active variants 12、active serving options 56。catalog更新によるevent_log追記以外の注文・注文明細・variant・飲み方は保持した。v4 fixtureを正式migration経路でv5へ上げ、同じ保持条件を自動確認した。live DBのdowngrade・migrationは行っていない。
+- 最終検証はserver全369/369、prototype全81/81、Sites worker 4/4、Direct Vite build 4580 modules、`git diff --check`、working-tree差分のruntime token形式チェック0件。
+- 今回はA90・QR・pairing・注文送信を操作していないため、A90完全PASSは未確認。checkpointは保留とし、今回修正は別checkpoint候補として扱う。DB、バックアップ、ログ、dist、runtime-state、token、`.codex-worktrees/`はstage対象外。
+
+次: A90で商品一覧・詳細モーダルを確認してから、今回の修正と状態文書だけを別checkpoint候補としてレビューする。
+
+## 飲み方読み取り確認・通常商品カードふりがな表示 2026-08-25
+
+- 実HEADは`0c6916e117cdd10bacdd3702df51c5bd1ac21d9b`のまま。checkpoint、stage、commit、push、pull、merge、rebase、resetは未実施。既存`.codex-worktrees/`は保持している。
+- safe-copyはhealth HTTP 200、schema v5、runtime-state processId 5996、Web/API 25173/28787、DB target safe-copy。production DBは使用していない。
+- 焼酎はactive14商品・active飲み方56件。対象12商品の48件（各商品4件、canonicalな`-rock`／`-water`／`-soda`／`-hot`）は期待どおりだが、伊佐美の追加2商品が各4件のアンダースコア形式でactive。GET `/v1/menu`も56件を返すため、重複商品名と対象外active商品を含む状態としてBLOCKED。option同一名重複、正規化ID重複、orphan、inactive／旧inactiveは0。既存バックアップとの全件／active件数差は0。
+- safe-copy active商品42件のふりがな登録済みは黒霧島「くろきりしま」と伊佐美2件「いさみ」の3件。未登録39件（ビール3、ハイボール8、サワー・酎ハイ8、焼酎11、日本酒・地酒4、ソフトドリンク5）は保存していない。
+- 客席の通常商品行・日本酒行へ既存`detail.reading`を条件付きで`menu-row__reading`として表示する変更を実施した。空欄は描画せず、kitchen_alias／商品名から生成せず、`タップで明細`と詳細モーダルのふりがなを維持する。CSSは商品名とふりがなのnowrap・ellipsisを追加した。
+- 関連UI 25/25、prototype全82/82、Sites worker 4/4、Direct Vite build 4580 modules、`git diff --check`はPASS。A90は未登録の端末登録画面で、pairing・QR操作をしなかったため実機表示PASSは未確認。
+
+次: BLOCKEDの追加2商品／8 optionの由来を確認し、A90端末登録後に黒霧島のふりがなと既存画像・飲み方・カート追加を実画面で確認する。未登録ふりがなはユーザー確認後に保存する。
+
+## safe-copy伊佐美重複整理・実物画像v1 2026-08-25
+
+- safe-copy DBのみを対象に、実スキーマの存在カラムを確認してcatalog Markdown importerの既存copy経路でdry-run（error 0／warning 2）後、単一トランザクションapplyを実施した。canonical `menu-24eeac7c-2388-4ef5-87b0-21f5013f5673`を伊佐美・税込780円・焼酎／芋・`いさみ`・kitchen_alias`伊佐美`・active true・sort 13へ統一し、既存active飲み方4件を維持した。duplicate `menu-9b92c746-d057-47a6-af93-73ce7b71346b`は物理削除せずactive falseへ変更し、価格・sort・飲み方4件・履歴参照を保持した。duplicateに画像URIは登録していない。
+- apply前→後の主な件数はmenu_items 43→43、details 43→43、variants 12→12、serving_options 56→56、orders 14→14、order_items 23→23、event_log 134→136、active商品42→41。integrity_check=ok、既存event、注文・注文明細・snapshot保持を確認した。`/v1/menu` HTTP 200でactive伊佐美は1件、税込780円、飲み方4件、画像表示true。
+- 元写真`C:\Users\user\Downloads\isami.jpg`だけを基に、非生成のPillow処理でdetail 760×1320 RGBA PNGとthumbnail 560×560 RGBA PNGを作成した。画像のSHA-256、透過数、対応URIは`docs/isami-image-review.md`と機械処理用`docs/isami-image-map.md`に記録した。thumb/detailともcanonical stable_idのv1ファイル名で、管理画面／importerから画像URIだけ差し替えられる構造を維持する。
+- 稼働中safe-copyはhealth 200／schema v5／PID 5996／Web/API 25173/28787。画像URLはHTTP 200だが、現行serverのPNG MIME未登録のためContent-Typeは`application/octet-stream`。再起動・サーバーコード変更は禁止条件のため、`image/png`配信とA90実機表示は未検証。Direct Vite build、importer／repository関連54テストはPASS。commit・stage・production DB・注文送信・pairing・QR操作は未実施。
+
+次: サーバーコード変更・再起動を許可できる段階でPNG MIMEを`image/png`として確認し、A90で伊佐美の一覧／詳細画像、ラベル欠け、透過背景を確認する。
+
+## 伊佐美PNG MIME修正・safe-copy再起動確認 2026-08-25
+
+- 伊佐美のimport・重複整理・画像加工は再実施していない。`server/src/run-server.mjs`の静的配信MIME表へ`.png: image/png`を追加し、run-serverテストでWebP／PNGのContent-Typeを確認する最小修正を行った。
+- safe-copyを正式な`server/start-safe-copy.ps1 -NoBrowser`経路で再起動し、PID 14308、health 200、safe-copy、schema v5、runtime-state PID・Web/API listener PID一致を確認した。再起動前後のDB件数、注文、注文明細、event_log、注文／event digestは不変で、integrity_check=ok。
+- 伊佐美canonicalのthumb/detail URLはHTTP 200かつ`image/png`。active伊佐美1件、税込780円、ふりがな`いさみ`、飲み方4件、duplicate inactive、既存画像URIは維持されている。
+- A90実機は未到達。in-app browserの客席URLは端末登録画面で、pairing／QRを使わない条件のため商品表示を確認できなかった。A90表示PASSとcommitは未実施。
+
+次: 登録済みA90の既存客席画面で伊佐美の一覧thumb、詳細画像、価格、ふりがな、飲み方4件を確認する。
+
+## safe-copy伊佐美A90再登録・表示確認 2026-08-25
+
+- safe-copy preflightで空きT2・T3・T4を確認し、空きT2へcustomer用QRを1回だけ発行してA90客席URLを再登録した。既存T1は接続解除していない。登録後はT1／T2がactive、T3／T4が空き。
+- 客席画面でactiveな伊佐美は1件だけ。商品行の税込価格は780円、ふりがなは`いさみ`、thumb URIはcanonical v1、画像は560×560で読込済み。詳細モーダルではdetail URI、760×1320画像、ふりがな、説明を確認した。
+- 飲み方選択にはロック、水割り、ソーダ割り、お湯割りの4件が表示された。数量操作、カート追加、注文確定は行っていない。
+- safe-copy healthは200／ready／schema v5、DB integrity ok、orders 14、order_items 23、event_log 136。pairing後も注文関連件数は不変。production DB、import、画像加工、commitは未実施。
+- 実物A90端末のカメラ操作ではなく、safe-copyのA90客席URLを既存ブラウザで再登録して確認した。QR本文・pairing code・tokenは記録していない。
+
+次: A90確認結果をcommit前レビューへ反映する。ユーザー明示までcommitしない。
+
+## 伊佐美画像再加工・A90再確認 2026-08-25
+
+- 前回の画像視覚PASSは撤回し、DB・stable_id・商品情報・画像URI・importは変更せず、canonical伊佐美の同じthumb/detailファイルだけを元写真から非生成で置換した。切り抜きや背景除去は行わず、向き・明るさ・コントラスト補正、トリミング、リサイズ、PNG化を行い、detail 760×1320、thumb 560×700のRGB PNGに統一した。SHA-256・寸法は`docs/isami-image-review.md`、背景保持版の比較画像は`docs/isami-image-contact-sheet.png`に記録した。
+- Direct Vite buildは4580 modulesで成功。safe-copyの2画像はHTTP 200／`image/png`、healthはHTTP 200／ready／db ready／schema v5。読み取りDB件数はcategories 7、menu_items 43、details 43、variants 12、serving_options 56、orders 14、order_items 23、event_log 136で、画像置換によるDB変更はない。
+- 登録済みLAN客席URL（テーブル2）を再利用して、背景保持版のactive伊佐美1件、税込780円、ふりがな`いさみ`、thumb/detail表示、飲み方4件を確認した。数量変更、カート追加、注文送信、QR再発行は行っていない。PNGはRGBの通常写真として表示され、他の焼酎画像と同じく元写真の背景を含んでいる。
+- checkpoint・stage・commitは保留。物理端末のカメラ操作ではなく、登録済みA90客席URLを既存ブラウザで表示した確認である。production DB、注文、pairing、QR、token、reset等のGit操作は行っていない。
+
+次: ユーザー指示までcommitせず、必要なら同じ画像パスの最終表示だけを再レビューする。
+
+## 焼酎商品行レイアウト・ふりがな位置調整 2026-08-25
+
+- 伊佐美画像対応は完了済みとして扱い、画像・画像URI・import・DB・stable_id・価格データは変更していない。
+- 焼酎行の固定列を調整し、商品情報列を拡大、価格欄84px、操作欄148px、列間10pxとした。飲み方選択の左右余白を縮小し、価格と操作ボタンを別列で維持した。税抜価格27px／line-height 1.05／weight 900、税込価格10px／line-height 1.1／weight 800へ統一し、5文字程度の商品名はnowrap、長い名称はellipsisとした。
+- 登録済みふりがなは通常カードの商品名の上へ表示し、未登録時は要素を描画しない。「タップで明細」は商品名の下、詳細画面のふりがなと飲み方・注文処理は維持した。
+- A90登録済みsafe-copy客席URLで芋焼酎6商品（黒霧島、明るい農村、赤兎馬、熟柿、三岳、富乃宝山）を目視確認した。商品名の改行なし、価格サイズ、価格と操作欄の間隔、操作性、横スクロールなしを確認した。確認viewportは1280×721、注文操作とQR操作は行っていない。
+- 検証: 関連UI 27/27、prototype 82/82、Direct Vite build 4580 modules、Sites worker 4/4、`git diff --check`。今回の作業時間概算は約30〜35分。stage・commitは保留。
+
+次: 今回の焼酎行レイアウトとふりがな位置調整は完了。ユーザー指示までcommitしない。
+
+## 焼酎価格表示の共通化・飲み方選択枠調整 2026-08-25
+
+- 実DOM診断で、6商品の数字はASCII（U+0030〜U+0039）だが、U+FFE5円記号と`Warun Display`数字のフォールバック差により、価格本体の描画幅が65.873〜71.429pxに揺れていることを確認した。商品別class、桁数補正、transform、zoomの差はなかった。
+- `yen()`を固定の`￥`＋ASCII数字へ正規化し、価格本体・税込表示のfont-familyを`var(--font-ui)`へ統一、tabular-numsと`font-feature-settings: "tnum" 1`を共通指定した。商品別CSSは追加していない。修正後の6商品の価格本体実測幅は全て76.984px。
+- A90相当safe-copy客席URLを1280×721で確認し、黒霧島、明るい農村、赤兎馬、熟柿、三岳、富乃宝山を同一一覧DOMで比較した。価格と操作欄は非接触、横スクロールなし。飲み方選択枠は操作列148px内で138pxへ変更し、左右約5pxずつ縮小した。画像、DB、import、商品情報、価格データ、飲み方・注文処理は変更していない。
+- 関連UI 27/27、prototype 82/82、Direct Vite build（4580 modules）、Sites worker 4/4、`git diff --check`をPASS。safe-copy／production DB、注文送信、QR／pairing、画像再加工は行っていない。stage・commitは保留。物理端末ではなく登録済みsafe-copy客席URLを既存ブラウザで確認した。
+- 作業時間概算: 約20〜30分。
+
+次: A90実機で価格表示を最終目視確認し、PASS判定後にcheckpoint候補を再レビューする。
+
+## 物理A90焼酎商品行調整ALL PASS・commit前差分レビュー 2026-08-25
+
+- ユーザーによる物理A90実機確認で、今回の焼酎商品行調整をALL PASSと確認した。明るい農村を含む商品名1行表示、価格と飲み方選択の間隔、ふりがな位置、全商品の価格文字サイズ統一、飲み方選択枠の左右5px縮小を実機表示でPASSとした。前項のA90相当表示・未確認記録は、この実機確認で更新された。
+- 実HEADは`0c6916e117cdd10bacdd3702df51c5bd1ac21d9b`、branchは`feature/sqlite-foundation`。stage済み差分はなく、tracked変更14ファイル、未追跡は伊佐美画像・対応資料・処理スクリプト・既存`.codex-worktrees/`。HEAD記録と実Git状態は一致した。
+- commit候補は、今回までの意図したソース、対応テスト、serverの管理保存・診断・PNG MIME関連テスト、状態文書、伊佐美の加工済みPNGと画像対応表・レビュー資料。DB、バックアップ、ログ、dist、runtime-state、token、元写真、`.codex-worktrees/`は除外する。stage・commitは行っていない。
+- `git diff --check`はPASS。差分と未追跡テキストを機密情報パターンで確認し、token値、Authorization値、QR本文、pairing code、個人情報の混入は検出していない。既存PASS結果を再利用し、今回のレビューのための重いテスト再実行は行っていない。
+
+次: commit候補ファイルを最小範囲でstage対象化し、cached diffと機密情報を再確認してからcheckpoint commitを判断する。

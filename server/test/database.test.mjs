@@ -395,6 +395,77 @@ test('legacy schema v1 migrates through schema v5 and assigns existing orders to
   });
 });
 
+test('schema v4 fixture migrates through the formal v5 path while preserving catalog selections and operational history', async () => {
+  await withTemporaryDatabase(({ directory }) => {
+    const v4Path = join(directory, 'schema-v4-fixture.sqlite3');
+    const v4 = new DatabaseSync(v4Path);
+    v4.exec(readFileSync(new URL('../../docs/schema-v2.sql', import.meta.url), 'utf8'));
+    v4.exec(readFileSync(new URL('../../docs/schema-v3-migration.sql', import.meta.url), 'utf8'));
+    v4.exec(readFileSync(new URL('../../docs/schema-v4-migration.sql', import.meta.url), 'utf8'));
+    seedOrderParents(v4);
+    v4.exec(`
+      INSERT INTO menu_items (
+        menu_item_id, category_id, formal_name, kitchen_alias, description,
+        price_yen, sort_order, created_at_ms, updated_at_ms, section_key
+      ) VALUES ('migration-shochu', 'recommended', '移行焼酎', '移行焼酎', '移行確認', 550, 2, 1000, 1000, '芋');
+      INSERT INTO menu_item_details (
+        menu_item_id, detail_enabled, reading, item_type, producer,
+        taste, detail_description, created_at_ms, updated_at_ms
+      ) VALUES ('migration-shochu', 1, 'いこうしょうちゅう', '芋焼酎', '移行酒造', '確認用', '移行確認', 1000, 1000);
+      INSERT INTO menu_item_variants (
+        variant_id, menu_item_id, name, volume_label, price_yen,
+        is_active, sort_order, version, temperature_options_json, created_at_ms, updated_at_ms
+      ) VALUES ('migration-shochu-glass', 'migration-shochu', 'グラス', '110ml', 550,
+        1, 1, 1, '["冷酒"]', 1000, 1000);
+      INSERT INTO menu_item_serving_options (
+        serving_option_id, menu_item_id, name, is_active, sort_order, version, created_at_ms, updated_at_ms
+      ) VALUES ('migration-shochu-rock', 'migration-shochu', 'ロック', 1, 1, 1, 1000, 1000);
+    `);
+    insertOrder(v4);
+    const eventEpoch = v4.prepare('SELECT event_epoch FROM system_state WHERE singleton_id = 1').get().event_epoch;
+    v4.prepare(`
+      INSERT INTO order_items (
+        order_id, line_index, menu_item_id, formal_name_snapshot,
+        kitchen_alias_snapshot, unit_price_yen_snapshot, quantity,
+        line_total_yen, variant_id, variant_name_snapshot, variant_volume_snapshot,
+        serving_option_id, serving_option_name_snapshot, temperature_snapshot,
+        created_at_ms, updated_at_ms
+      ) VALUES (?, 0, 'migration-shochu', '移行焼酎', '移行焼酎', 550, 1, 550,
+        'migration-shochu-glass', 'グラス', '110ml', 'migration-shochu-rock', 'ロック', NULL, 2000, 2000)
+    `).run(ORDER_ID);
+    v4.prepare(`
+      INSERT INTO event_log (
+        event_epoch, event_type, aggregate_type, aggregate_id,
+        actor_device_id, payload_json, created_at_ms
+      ) VALUES (?, 'order.created', 'order', ?, ?, ?, 2000)
+    `).run(eventEpoch, ORDER_ID, CUSTOMER_DEVICE_ID, `{"orderId":"${ORDER_ID}"}`);
+    const protectedCountsBefore = {
+      orders: v4.prepare('SELECT COUNT(*) AS count FROM orders').get().count,
+      orderItems: v4.prepare('SELECT COUNT(*) AS count FROM order_items').get().count,
+      events: v4.prepare('SELECT COUNT(*) AS count FROM event_log').get().count,
+    };
+    const variantBefore = v4.prepare('SELECT variant_id, temperature_options_json FROM menu_item_variants WHERE variant_id = ?').get('migration-shochu-glass');
+    const servingBefore = v4.prepare('SELECT serving_option_id, name FROM menu_item_serving_options WHERE serving_option_id = ?').get('migration-shochu-rock');
+    v4.close();
+
+    const connection = initializeDatabase({ databasePath: v4Path });
+    const database = connection.database;
+    assert.equal(connection.schemaVersion, 5);
+    assert.equal(pragmaValue(database, 'user_version'), 5);
+    assert.equal(database.prepare('PRAGMA integrity_check').get().integrity_check, 'ok');
+    assert.deepEqual({
+      orders: database.prepare('SELECT COUNT(*) AS count FROM orders').get().count,
+      orderItems: database.prepare('SELECT COUNT(*) AS count FROM order_items').get().count,
+      events: database.prepare('SELECT COUNT(*) AS count FROM event_log').get().count,
+    }, protectedCountsBefore);
+    assert.deepEqual({ ...database.prepare('SELECT variant_id, temperature_options_json FROM menu_item_variants WHERE variant_id = ?').get('migration-shochu-glass') }, { ...variantBefore });
+    assert.deepEqual({ ...database.prepare('SELECT serving_option_id, name FROM menu_item_serving_options WHERE serving_option_id = ?').get('migration-shochu-rock') }, { ...servingBefore });
+    assert.equal(database.prepare('SELECT reading FROM menu_item_details WHERE menu_item_id = ?').get('migration-shochu').reading, 'いこうしょうちゅう');
+    assert.equal(database.prepare('SELECT show_image_in_list FROM menu_item_details WHERE menu_item_id = ?').get('migration-shochu').show_image_in_list, 0);
+    connection.close();
+  });
+});
+
 test('duplicate client_order_id violates the idempotency UNIQUE constraint', async () => {
   await withTemporaryDatabase(({ databasePath }) => {
     const connection = initializeDatabase({ databasePath });

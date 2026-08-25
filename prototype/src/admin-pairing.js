@@ -7,11 +7,12 @@ export function configuredAdminToken(env) {
 }
 
 export class AdminPairingError extends Error {
-  constructor(message, { status = 0, code = "PAIRING_REQUEST_FAILED" } = {}) {
+  constructor(message, { status = 0, code = "PAIRING_REQUEST_FAILED", requestId = "" } = {}) {
     super(message);
     this.name = "AdminPairingError";
     this.status = status;
     this.code = code;
+    this.requestId = typeof requestId === "string" ? requestId : "";
   }
 }
 
@@ -52,7 +53,8 @@ async function responseError(response, fallbackMessage = "管理APIの応答を�
   try { body = await response.json(); } catch { /* Keep the status-based error. */ }
   const serverCode = body?.error?.code;
   const code = errorCodeForStatus(response.status, serverCode || undefined);
-  throw new AdminPairingError(fallbackMessage, { status: response.status, code });
+  const requestId = response.headers?.get?.("x-request-id") || body?.error?.requestId || "";
+  throw new AdminPairingError(fallbackMessage, { status: response.status, code, requestId });
 }
 
 function assertAdminTransport({ env, fetchImpl }) {
@@ -196,6 +198,7 @@ export async function saveAdminMenuItem({ env = globalThis, item, expectedVersio
       sectionKey: item.sectionKey ?? null,
       detail: {
         enabled: Boolean(item.detail?.enabled),
+        showImageInList: Boolean(item.detail?.showImageInList),
         imageUri: item.detail?.imageUri ?? null,
         reading: item.detail?.reading ?? "",
         itemType: item.detail?.itemType ?? "",
@@ -225,11 +228,7 @@ export async function saveAdminMenuItem({ env = globalThis, item, expectedVersio
       })),
     }),
   });
-  if (!response.ok) {
-    const error = new Error("Admin catalog item could not be saved.");
-    try { error.code = (await response.json())?.error?.code; } catch { /* Keep the stable client error. */ }
-    throw error;
-  }
+  if (!response.ok) await responseError(response, "管理カタログを保存できません。");
   const body = await response.json();
   if (body?.menuItemId !== item.id || !Number.isSafeInteger(body.version) || body.version < 1) {
     throw new Error("Admin catalog write response was invalid.");

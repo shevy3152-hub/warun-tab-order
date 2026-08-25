@@ -34,6 +34,7 @@ const CONTENT_TYPES = Object.freeze({
   ".html": "text/html; charset=utf-8",
   ".js": "text/javascript; charset=utf-8",
   ".json": "application/json; charset=utf-8",
+  ".png": "image/png",
   ".svg": "image/svg+xml",
   ".ttf": "font/ttf",
   ".webp": "image/webp",

@@ -53,6 +53,42 @@ function seed(database) {
   `).run();
 }
 
+function seedShochu(database) {
+  database.prepare(`
+    INSERT INTO categories (
+      category_id, name, sort_order, is_visible, version, created_at_ms, updated_at_ms
+    ) VALUES ('shochu', '焼酎', 2, 1, 1, 1000, 1000)
+  `).run();
+  database.prepare(`
+    INSERT INTO menu_items (
+      menu_item_id, category_id, formal_name, kitchen_alias, description,
+      price_yen, is_sold_out, is_active, sort_order, image_uri, version,
+      created_at_ms, updated_at_ms, section_key
+    ) VALUES ('shochu-imo-kuro-kirishima', 'shochu', '黒霧島', '黒霧島', '黒麹仕込み', 550, 0, 1, 1,
+      '/menu-images/shochu/shochu-imo-kuro-kirishima-thumb-v1.webp', 1, 1000, 1000, '芋')
+  `).run();
+  database.prepare(`
+    INSERT INTO menu_item_details (
+      menu_item_id, detail_enabled, detail_image_uri, reading, item_type, producer,
+      taste, detail_description, created_at_ms, updated_at_ms
+    ) VALUES ('shochu-imo-kuro-kirishima', 1,
+      '/menu-images/shochu/shochu-imo-kuro-kirishima-detail-v1.webp', 'くろきりしま', '芋焼酎', '霧島酒造',
+      'とろりとした甘み、キリッとした後切れ', '黒麹仕込み。とろりとした甘み、キリッとした後切れ。', 1000, 1000)
+  `).run();
+  const options = [
+    ['rock', 'ロック', 1],
+    ['water', '水割り', 2],
+    ['soda', 'ソーダ割り', 3],
+    ['hot', 'お湯割り', 4],
+  ];
+  const insert = database.prepare(`
+    INSERT INTO menu_item_serving_options (
+      serving_option_id, menu_item_id, name, is_active, sort_order, version, created_at_ms, updated_at_ms
+    ) VALUES (?, 'shochu-imo-kuro-kirishima', ?, 1, ?, 1, 1000, 1000)
+  `);
+  for (const [suffix, name, sortOrder] of options) insert.run(`shochu-imo-kuro-kirishima-${suffix}`, name, sortOrder);
+}
+
 async function listen(server) {
   await new Promise((resolve, reject) => {
     server.once('error', reject);
@@ -66,12 +102,12 @@ async function closeServer(server) {
   await new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
 }
 
-function request({ port, token, body, method = 'PUT' }) {
+function request({ port, token, body, method = 'PUT', path = '/v1/admin/catalog/menu-item' }) {
   return new Promise((resolve, reject) => {
     const client = http.request({
       host: '127.0.0.1',
       port,
-      path: '/v1/admin/catalog/menu-item',
+      path,
       method,
       headers: {
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
@@ -158,6 +194,7 @@ function writeBody(expectedVersion = 1) {
     sectionKey: null,
     detail: {
       enabled: true,
+      showImageInList: true,
       reading: 'じゅんまいぎんじょう',
       itemType: '日本酒',
       origin: '新潟',
@@ -174,6 +211,45 @@ function writeBody(expectedVersion = 1) {
       { variantId: 'sake_tokuri', name: '徳利1合', volumeLabel: '180ml', priceYen: 980, isActive: true, sortOrder: 2, temperatureOptions: ['冷酒', '燗酒'] },
     ],
     servingOptions: [],
+  };
+}
+
+function shochuBrowserBody(expectedVersion = 1, showImageInList = true) {
+  return {
+    expectedVersion,
+    menuItemId: 'shochu-imo-kuro-kirishima',
+    categoryId: 'shochu',
+    formalName: '黒霧島',
+    kitchenAlias: '黒霧島',
+    description: '黒麹仕込み。とろりとした甘み、キリッとした後切れ。',
+    priceYen: 550,
+    isSoldOut: false,
+    isActive: true,
+    sortOrder: 1,
+    imageUri: '/menu-images/shochu/shochu-imo-kuro-kirishima-thumb-v1.webp',
+    sectionKey: '芋',
+    detail: {
+      enabled: true,
+      showImageInList,
+      imageUri: '/menu-images/shochu/shochu-imo-kuro-kirishima-detail-v1.webp',
+      reading: 'くろきりしま',
+      itemType: '芋焼酎',
+      origin: '',
+      producer: '霧島酒造',
+      taste: 'とろりとした甘み、キリッとした後切れ',
+      aroma: '',
+      sweetness: '',
+      finish: '',
+      recommendation: '',
+      description: '黒麹仕込み。とろりとした甘み、キリッとした後切れ。',
+    },
+    variants: [],
+    servingOptions: [
+      { servingOptionId: 'shochu-imo-kuro-kirishima-rock', name: 'ロック', isActive: true, sortOrder: 1 },
+      { servingOptionId: 'shochu-imo-kuro-kirishima-water', name: '水割り', isActive: true, sortOrder: 2 },
+      { servingOptionId: 'shochu-imo-kuro-kirishima-soda', name: 'ソーダ割り', isActive: true, sortOrder: 3 },
+      { servingOptionId: 'shochu-imo-kuro-kirishima-hot', name: 'お湯割り', isActive: true, sortOrder: 4 },
+    ],
   };
 }
 
@@ -202,6 +278,13 @@ test('admin catalog write requires admin authentication and persists one atomic 
     assert.equal(detail.aroma, '穏やか');
     assert.equal(detail.sweetness, 'やや辛口');
     assert.equal(detail.finish, 'きれい');
+    assert.equal(detail.show_image_in_list, 1);
+    assert.equal(detail.reading, 'じゅんまいぎんじょう');
+    const reloaded = await request({ port, token: ADMIN_TOKEN, method: 'GET', path: '/v1/menu' });
+    assert.equal(reloaded.statusCode, 200);
+    const reloadedItem = reloaded.json.items.find((entry) => entry.menuItemId === 'sake');
+    assert.equal(reloadedItem.detail.showImageInList, true);
+    assert.equal(reloadedItem.detail.reading, 'じゅんまいぎんじょう');
     assert.equal(database.prepare('SELECT COUNT(*) AS count FROM menu_item_variants WHERE menu_item_id = ?').get('sake').count, 2);
     assert.equal(database.prepare('SELECT temperature_options_json FROM menu_item_variants WHERE variant_id = ?').get('sake_glass').temperature_options_json, '["冷酒"]');
     assert.equal(database.prepare('SELECT COUNT(*) AS count FROM event_log WHERE event_type = ?').get('menu.updated').count, 1);
@@ -219,5 +302,31 @@ test('admin catalog write rejects stale versions without changing the catalog or
     assert.equal(stale.json.error.code, 'CATALOG_CONFLICT');
     assert.deepEqual(database.prepare('SELECT version, price_yen FROM menu_items WHERE menu_item_id = ?').get('sake'), before);
     assert.equal(database.prepare('SELECT COUNT(*) AS count FROM event_log').get().count, eventCount);
+  });
+});
+
+test('browser-shaped shochu catalog payload preserves canonical serving IDs and image/readings', async () => {
+  await withFixture(async ({ port, database }) => {
+    seedShochu(database);
+    const response = await request({ port, token: ADMIN_TOKEN, body: shochuBrowserBody() });
+    assert.equal(response.statusCode, 200);
+    assert.equal(response.json.menuItemId, 'shochu-imo-kuro-kirishima');
+    assert.equal(response.json.version, 2);
+
+    const detail = database.prepare('SELECT show_image_in_list, reading FROM menu_item_details WHERE menu_item_id = ?').get('shochu-imo-kuro-kirishima');
+    assert.deepEqual({ ...detail }, { show_image_in_list: 1, reading: 'くろきりしま' });
+    assert.deepEqual(
+      database.prepare('SELECT serving_option_id FROM menu_item_serving_options WHERE menu_item_id = ? AND is_active = 1 ORDER BY sort_order').all('shochu-imo-kuro-kirishima').map((row) => row.serving_option_id),
+      [
+        'shochu-imo-kuro-kirishima-rock',
+        'shochu-imo-kuro-kirishima-water',
+        'shochu-imo-kuro-kirishima-soda',
+        'shochu-imo-kuro-kirishima-hot',
+      ],
+    );
+    const reloaded = await request({ port, token: ADMIN_TOKEN, method: 'GET', path: '/v1/menu' });
+    const item = reloaded.json.items.find((entry) => entry.menuItemId === 'shochu-imo-kuro-kirishima');
+    assert.equal(item.detail.showImageInList, true);
+    assert.equal(item.detail.reading, 'くろきりしま');
   });
 });

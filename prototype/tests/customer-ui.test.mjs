@@ -42,15 +42,46 @@ test("shochu rows keep fixed image, price, and action columns without changing t
   assert.match(customerScreen, /shochuThumbUri\(item\.imageUri\)/);
   assert.match(customerScreen, />飲み方選択<\/button>/);
   assert.match(customerScreen, /menu-row__detail-hint[\s\S]*タップで明細/);
-  assert.match(styles, /\.shochu-menu-row \{[\s\S]*grid-template-columns: 68px 88px minmax\(0, 1fr\) 112px 176px;[\s\S]*column-gap: 16px/);
-  assert.match(styles, /\.shochu-menu-row \.product-image-button \{ width: 88px; height: 108px; \}/);
-  assert.match(styles, /\.shochu-serving-button \{[\s\S]*width: 176px[\s\S]*white-space: nowrap/);
-  assert.match(styles, /\.menu-row--no-image \{ grid-template-columns: 68px minmax\(0, 1fr\) 112px 176px; \}/);
-  assert.match(styles, /\.shochu-menu-row \{ grid-template-columns: 48px 64px minmax\(0, 1fr\) 86px 156px; column-gap: 16px/);
-  assert.match(styles, /\.shochu-serving-button \{ width: 156px; min-width: 156px/);
+  assert.match(styles, /\.shochu-menu-row \{[\s\S]*grid-template-columns: 60px 84px minmax\(0, 1fr\) 104px 160px;[\s\S]*column-gap: 10px/);
+  assert.match(styles, /\.shochu-menu-row \.product-image-button \{ width: 84px; height: 108px; \}/);
+  assert.match(styles, /\.shochu-serving-button \{[\s\S]*width: 160px[\s\S]*white-space: nowrap/);
+  assert.match(styles, /\.shochu-menu-row\.menu-row--no-image \{ grid-template-columns: 60px minmax\(0, 1fr\) 104px 160px; \}/);
+  assert.match(styles, /\.shochu-menu-row \{ grid-template-columns: 48px 64px minmax\(0, 1fr\) 84px 148px; column-gap: 10px/);
+  assert.match(styles, /\.shochu-serving-button \{ width: 138px; min-width: 138px/);
+  assert.match(styles, /\.shochu-menu-row \.menu-price b \{ font-size: 28px; line-height: 1\.05; font-weight: 900/);
+  assert.match(styles, /\.menu-price b \{ font: 900 30px\/1\.05 var\(--font-ui\); font-variant-numeric: tabular-nums; font-feature-settings: "tnum" 1/);
+  assert.match(styles, /\.menu-price small \{[\s\S]*font-family: var\(--font-ui\)[\s\S]*font-variant-numeric: tabular-nums; font-feature-settings: "tnum" 1/);
+  assert.match(appSource, /return `￥\$\{normalizedAmount\}`/);
   assert.match(appSource, /showImageInList/);
   assert.match(appSource, /listImageVisible\(item\)/);
   assert.match(appSource, /detailItem\.detail\?\.imageUri \|\| detailItem\.imageUri/);
+  assert.match(appSource, /function compareMenuItems/);
+  assert.match(appSource, /SHOCHU_SECTION_ORDER/);
+});
+
+test("customer cards show only stored readings and keep the detail hint separate", () => {
+  assert.match(appSource, /item\.detail\?\.reading \? <small className="menu-row__reading">\{item\.detail\.reading\}<\/small> : null/);
+  assert.match(appSource, /className="menu-row__detail-hint"/);
+  assert.match(appSource, /className="product-detail__reading"/);
+  assert.match(customerScreen, /menu-row__reading[\s\S]*<h2>\{item\.name\}<\/h2>/);
+  assert.doesNotMatch(appSource, /kitchenAlias[^\n]*menu-row__reading/);
+  assert.match(styles, /\.menu-row__copy h2 \{[\s\S]*white-space: nowrap/);
+  assert.match(styles, /\.menu-row__reading \{[\s\S]*white-space: nowrap[\s\S]*overflow: hidden/);
+});
+
+test("admin menu editing is grouped, cancellable, and keeps edit ordering data", () => {
+  assert.match(appSource, /const menuGroups = \[/);
+  assert.match(appSource, /menu-admin-group__heading/);
+  assert.match(appSource, /const resetMenuEditor = \(\)/);
+  assert.match(appSource, /type="button" onClick=\{resetMenuEditor\}>キャンセル/);
+  assert.match(appSource, /sortOrder: editingMenu\?\.sortOrder/);
+  assert.match(styles, /\.menu-admin-group__heading \{/);
+  assert.match(styles, /\.menu-editor__actions \{/);
+});
+
+test("admin shochu edits reuse canonical serving option IDs", () => {
+  assert.match(appSource, /editingMenu\?\.servingOptions\?\.find\(\(option\) => option\.name === optionName\)\?\.servingOptionId/);
+  assert.match(appSource, /`\$\{targetId\}-\$\{\["rock", "water", "soda", "hot"\]\[index\]\}`/);
 });
 
 test("major category selection collapses to a 78px rail and the rail reopens it", () => {

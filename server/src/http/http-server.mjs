@@ -285,7 +285,7 @@ function runtimeHealthHeaders(runtimeInfo) {
   };
 }
 
-function recordRequestDiagnostic(diagnosticRecorder, context, { requestId, status, errorCode = null, stage = undefined, resultCount = undefined, activeOrderCount = undefined, openSessionCount = undefined, now = Date.now } = {}) {
+function recordRequestDiagnostic(diagnosticRecorder, context, { requestId, status, errorCode = null, stage = undefined, resultCount = undefined, activeOrderCount = undefined, openSessionCount = undefined, internalCode = undefined, causeCode = undefined, now = Date.now } = {}) {
   if (!diagnosticRecorder || typeof diagnosticRecorder.record !== 'function' || !context?.endpoint) return;
   diagnosticRecorder.record({
     endpoint: context.endpoint,
@@ -297,7 +297,40 @@ function recordRequestDiagnostic(diagnosticRecorder, context, { requestId, statu
     ...(Number.isSafeInteger(resultCount) ? { resultCount } : {}),
     ...(Number.isSafeInteger(activeOrderCount) ? { activeOrderCount } : {}),
     ...(Number.isSafeInteger(openSessionCount) ? { openSessionCount } : {}),
+    ...(typeof context.menuItemId === 'string' ? { menuItemId: context.menuItemId } : {}),
+    ...(Number.isSafeInteger(context.expectedVersion) ? { expectedVersion: context.expectedVersion } : {}),
+    ...(Number.isSafeInteger(context.actualVersion) ? { actualVersion: context.actualVersion } : {}),
+    ...(typeof context.payloadHash === 'string' ? { payloadHash: context.payloadHash } : {}),
+    ...(typeof (internalCode ?? context.internalCode) === 'string' ? { internalCode: internalCode ?? context.internalCode } : {}),
+    ...(typeof (causeCode ?? context.causeCode) === 'string' ? { causeCode: causeCode ?? context.causeCode } : {}),
   });
+}
+
+function diagnosticErrorCode(error) {
+  let current = error;
+  for (let depth = 0; depth < 4 && current && typeof current === 'object'; depth += 1) {
+    if (isCatalogRepositoryError(current) && typeof current.code === 'string') {
+      return {
+        internalCode: `CATALOG:${current.code}`,
+        ...(typeof current.cause?.code === 'string' ? { causeCode: current.cause.code } : {}),
+      };
+    }
+    if (typeof current.code === 'string' && /^(?:SQLITE_|ERR_)[A-Za-z0-9_:-]+$/.test(current.code)) {
+      return { internalCode: current.code };
+    }
+    current = current.cause;
+  }
+  return {};
+}
+
+function readCatalogVersion(database, menuItemId) {
+  if (typeof menuItemId !== 'string' || !database || typeof database.prepare !== 'function') return undefined;
+  try {
+    const row = database.prepare('SELECT version FROM menu_items WHERE menu_item_id = ?').get(menuItemId);
+    return Number.isSafeInteger(row?.version) && row.version >= 0 ? row.version : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function defaultServiceStateReader(database) {
@@ -655,6 +688,7 @@ function sendError({
     requestId,
     status: httpError.statusCode,
     errorCode: httpError.code,
+    ...diagnosticErrorCode(error),
     now,
   });
 
@@ -979,10 +1013,21 @@ function createConfiguredHttpServer({
       if (target.path === '/v1/admin/catalog/menu-item') {
         authorizeDeviceRole(principal, ['admin']);
         const catalogWriter = requireService(catalog, 'writeMenuItem');
+        if (diagnosticContext) diagnosticContext.stage = 'body-read';
         const body = await readJsonBody(request);
+        if (diagnosticContext) {
+          diagnosticContext.menuItemId = typeof body?.menuItemId === 'string' ? body.menuItemId : undefined;
+          diagnosticContext.expectedVersion = Number.isSafeInteger(body?.expectedVersion) ? body.expectedVersion : undefined;
+          diagnosticContext.actualVersion = readCatalogVersion(database, body?.menuItemId);
+          diagnosticContext.payloadHash = createHash('sha256').update(JSON.stringify(body), 'utf8').digest('hex');
+        }
+        if (diagnosticContext) diagnosticContext.stage = 'mutation';
         const result = catalogWriter.writeMenuItem(principal, body);
+        if (diagnosticContext) diagnosticContext.stage = 'saved';
         await notifyCommittedSafely(sseHub, result);
         if (response.destroyed) return;
+        if (diagnosticContext) diagnosticContext.stage = 'response';
+        recordRequestDiagnostic(diagnosticRecorder, diagnosticContext, { requestId, status: 200, now });
         writeJsonResponse(response, {
           statusCode: 200,
           body: mapCatalogWriteResponse(result),

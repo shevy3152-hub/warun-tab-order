@@ -23,7 +23,7 @@ test('saveAdminMenuItem sends the authenticated optimistic catalog write contrac
       price: 880,
       isSoldOut: false,
       sortOrder: 2,
-      detail: { enabled: true, aroma: '穏やか', sweetness: 'やや辛口', finish: 'きれい' },
+      detail: { enabled: true, showImageInList: true, reading: 'じゅんまいぎんじょう', aroma: '穏やか', sweetness: 'やや辛口', finish: 'きれい' },
       variants: [],
       servingOptions: [],
     },
@@ -38,6 +38,8 @@ test('saveAdminMenuItem sends the authenticated optimistic catalog write contrac
   assert.equal(captured.options.headers.Authorization, 'Bearer admin-token-for-test');
   assert.equal(JSON.parse(captured.options.body).expectedVersion, 4);
   assert.equal(JSON.parse(captured.options.body).detail.aroma, '穏やか');
+  assert.equal(JSON.parse(captured.options.body).detail.showImageInList, true);
+  assert.equal(JSON.parse(captured.options.body).detail.reading, 'じゅんまいぎんじょう');
   assert.equal(result.version, 5);
 });
 
@@ -49,5 +51,23 @@ test('saveAdminMenuItem preserves the server conflict code for the admin screen'
       fetchImpl: async () => ({ ok: false, json: async () => ({ error: { code: 'CATALOG_CONFLICT' } }) }),
     }),
     (error) => error.code === 'CATALOG_CONFLICT',
+  );
+});
+
+test('saveAdminMenuItem exposes the safe HTTP status, code, and request ID on failure', async () => {
+  await assert.rejects(
+    () => saveAdminMenuItem({
+      env,
+      item: { id: 'sake', categoryId: 'drink', name: '日本酒', price: 700 },
+      fetchImpl: async () => ({
+        ok: false,
+        status: 500,
+        headers: { get: (name) => name === 'x-request-id' ? '00000000-0000-4000-8000-000000000003' : null },
+        json: async () => ({ error: { code: 'INTERNAL_ERROR' } }),
+      }),
+    }),
+    (error) => error.status === 500
+      && error.code === 'INTERNAL_ERROR'
+      && error.requestId === '00000000-0000-4000-8000-000000000003',
   );
 });
