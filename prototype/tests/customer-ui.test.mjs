@@ -62,7 +62,7 @@ test("shochu rows keep fixed image, price, and action columns without changing t
 test("customer cards show only stored readings and keep the detail hint separate", () => {
   assert.match(appSource, /item\.detail\?\.reading \? <small className="menu-row__reading">\{item\.detail\.reading\}<\/small> : null/);
   assert.match(appSource, /className="menu-row__detail-hint"/);
-  assert.match(appSource, /className="product-detail__reading"/);
+  assert.match(appSource, /className="modal__title-reading"/);
   assert.match(customerScreen, /menu-row__reading[\s\S]*<h2>\{item\.name\}<\/h2>/);
   assert.doesNotMatch(appSource, /kitchenAlias[^\n]*menu-row__reading/);
   assert.match(styles, /\.menu-row__copy h2 \{[\s\S]*white-space: nowrap/);
@@ -70,16 +70,20 @@ test("customer cards show only stored readings and keep the detail hint separate
 });
 
 test("product details keep stored readings conditional and let shochu continue to serving selection", () => {
-  assert.match(appSource, /function Modal\(\{ title, children, footer = null, onClose/);
+  assert.match(appSource, /function Modal\(\{ title, titleExtra = null, children, footer = null, onClose/);
+  assert.match(appSource, /className="modal__title-group"><h2>\{title\}<\/h2>\{titleExtra\}/);
   assert.match(appSource, /\{footer \? <div className="modal__footer">\{footer\}<\/div> : null\}/);
   assert.match(appSource, /className="modal--product-detail" footer=\{<div className="modal-actions product-detail__actions">/);
-  assert.match(appSource, /detailItem\.detail\?\.reading \? <p className="product-detail__reading">\{detailItem\.detail\.reading\}<\/p> : null/);
+  assert.match(appSource, /titleExtra=\{detailItem\.detail\?\.reading \? <span className="modal__title-reading">\{detailItem\.detail\.reading\}<\/span> : null\}/);
+  assert.doesNotMatch(appSource, /className="product-detail__reading"/);
   assert.match(appSource, /const chooseShochuFromDetail = \(item\) => \{[\s\S]*setDetailItem\(null\)[\s\S]*openShochuSelection\(item\)/);
   assert.match(appSource, /detailItem\.categoryId === "shochu" && detailItem\.servingOptions\?\.length/);
   assert.match(appSource, />これにする<\/button>/);
   assert.match(appSource, /className="button button--quiet" onClick=\{\(\) => setDetailItem\(null\)\}>一覧へ戻る<\/button>/);
   assert.match(styles, /\.modal--product-detail \.modal__body \{[\s\S]*overflow: hidden/);
   assert.match(styles, /\.product-detail__actions \.button \{ min-height: 48px; \}/);
+  assert.match(styles, /\.modal__title-group \{[\s\S]*display: flex[\s\S]*align-items: baseline/);
+  assert.match(styles, /\.modal__title-reading \{[\s\S]*white-space: nowrap/);
   assert.match(styles, /\.modal--product-detail \.modal__footer \{[\s\S]*flex: 0 0 auto/);
   assert.match(appSource, /className="product-detail__image"><img src=\{detailItem\.detail\?\.imageUri \|\| detailItem\.imageUri\}/);
   assert.match(styles, /\.product-detail \{[\s\S]*grid-template-columns: minmax\(220px, 45%\) minmax\(0, 1fr\)[\s\S]*align-items: center/);
