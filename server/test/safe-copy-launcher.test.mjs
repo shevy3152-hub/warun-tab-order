@@ -30,6 +30,10 @@ test('safe-copy launcher refuses production and derives LAN URL at runtime', () 
   assert.match(script, /WARUN_PAIRING_DIAGNOSTIC_LOG_PATH = \$PairingDiagnosticLogPath/);
   assert.match(script, /CommunicationDiagnosticLogPath/);
   assert.match(script, /WARUN_COMMUNICATION_DIAGNOSTIC_LOG_PATH = \$CommunicationDiagnosticLogPath/);
+  assert.match(script, /EnableMenuDiagnostics/);
+  assert.match(script, /WARUN_MENU_DIAGNOSTIC_ENABLED/);
+  assert.match(script, /WARUN_MENU_DIAGNOSTIC_LOG_PATH/);
+  assert.match(script, /menuDiagnosticEnabled/);
   assert.match(script, /safe-copy admin preflight did not return HTTP 200/);
   assert.match(script, /\$MutexAlreadyHeld/);
   assert.match(script, /WarunTabOrder\.SafeCopy\.AdminLauncher/);

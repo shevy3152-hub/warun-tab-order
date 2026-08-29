@@ -8,7 +8,8 @@ param(
   [ValidateRange(5, 300)]
   [int]$TimeoutSeconds = 45,
   [switch]$MutexAlreadyHeld,
-  [switch]$NoBrowser
+  [switch]$NoBrowser,
+  [switch]$EnableMenuDiagnostics
 )
 
 Set-StrictMode -Version Latest
@@ -29,6 +30,7 @@ $KitchenTokenPath = Join-Path $RuntimeRoot 'kitchen-token'
 $KitchenTokenProvisionScript = Join-Path $ServerRoot 'scripts\provision-safe-copy-kitchen-token.mjs'
 $PairingDiagnosticLogPath = Join-Path $LogRoot 'pairing-claims.ndjson'
 $CommunicationDiagnosticLogPath = Join-Path $LogRoot 'communication.ndjson'
+$MenuDiagnosticLogPath = Join-Path $LogRoot 'menu-requests.ndjson'
 $MutexName = 'WarunTabOrder.SafeCopy.AdminLauncher'
 $mutex = $null
 $hasMutex = $false
@@ -143,6 +145,17 @@ function Get-DatabaseIdentity {
   }
 }
 
+function Get-ChildProcessEnvironment {
+  $environment = @{}
+  foreach ($entry in [Environment]::GetEnvironmentVariables('Process').GetEnumerator()) {
+    $name = [string]$entry.Key
+    if (-not $environment.ContainsKey($name)) {
+      $environment[$name] = [string]$entry.Value
+    }
+  }
+  return $environment
+}
+
 function Assert-SafeCopyFile {
   if (-not (Test-Path -LiteralPath $DatabasePath -PathType Leaf)) { throw "Safe-copy DB was not found: $DatabasePath" }
   if ($DatabasePath.Equals($ProductionPath, [StringComparison]::OrdinalIgnoreCase)) { throw 'Refusing the production DB path.' }
@@ -161,6 +174,7 @@ function Write-RuntimeInfo {
   Write-Output "A90 customer URL: $($RuntimeInfo.a90CustomerUrl)"
   Write-Output "Pairing URL generation origin: $($RuntimeInfo.pairingUrlOrigin)"
   Write-Output "Admin token configured in launcher environment: $([bool](-not [string]::IsNullOrWhiteSpace($env:WARUN_ADMIN_API_TOKEN)))"
+  Write-Output "GET /v1/menu diagnostics enabled: $([bool]$RuntimeInfo.menuDiagnosticEnabled)"
 }
 
 try {
@@ -208,6 +222,31 @@ if ($existingPids.Count -gt 0) {
   }
 }
 
+$existingMenuDiagnosticEnabled = $false
+if ($existingPids.Count -gt 0 -and (Test-Path -LiteralPath $StatePath -PathType Leaf)) {
+  try {
+    $existingState = Get-Content -LiteralPath $StatePath -Raw | ConvertFrom-Json
+    $existingMenuDiagnosticEnabled = [bool]$existingState.menuDiagnosticEnabled
+  } catch {
+    $existingMenuDiagnosticEnabled = $false
+  }
+}
+if ($existingPids.Count -gt 0 -and $existingMenuDiagnosticEnabled -ne [bool]$EnableMenuDiagnostics) {
+  $healthBodyBeforeRestart = $health.Content | ConvertFrom-Json
+  if ($health.StatusCode -ne 200 -or $healthBodyBeforeRestart.status -ne 'ready' -or $healthBodyBeforeRestart.db -ne 'ready' -or $healthBodyBeforeRestart.schemaVersion -ne 5) {
+    throw 'safe-copy health/schema check failed before diagnostic-mode restart.'
+  }
+  Stop-Process -Id $processId -Force
+  $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+  do {
+    Start-Sleep -Milliseconds 250
+    $webPids = @(Get-ListeningProcessIds $WebPort)
+    $apiPids = @(Get-ListeningProcessIds $ApiPort)
+  } while (($webPids.Count -gt 0 -or $apiPids.Count -gt 0) -and (Get-Date) -lt $deadline)
+  if ($webPids.Count -gt 0 -or $apiPids.Count -gt 0) { throw 'The previous safe-copy process did not release both ports.' }
+  $existingPids = @()
+}
+
 $SafeCopyKitchenToken = if ($existingPids.Count -gt 0) {
   Invoke-SafeCopyKitchenTokenOperation -Mode 'check'
 } else {
@@ -233,7 +272,21 @@ if ($existingPids.Count -eq 0) {
   $env:WARUN_KITCHEN_API_TOKEN = $SafeCopyKitchenToken
   $env:WARUN_PAIRING_DIAGNOSTIC_LOG_PATH = $PairingDiagnosticLogPath
   $env:WARUN_COMMUNICATION_DIAGNOSTIC_LOG_PATH = $CommunicationDiagnosticLogPath
-  $process = Start-Process -FilePath $node.Source -ArgumentList @('src/run-server.mjs') -WorkingDirectory $ServerRoot -WindowStyle Hidden -RedirectStandardOutput $stdoutLog -RedirectStandardError $stderrLog -PassThru
+  $env:WARUN_MENU_DIAGNOSTIC_ENABLED = if ($EnableMenuDiagnostics) { '1' } else { '0' }
+  $env:WARUN_MENU_DIAGNOSTIC_LOG_PATH = if ($EnableMenuDiagnostics) { $MenuDiagnosticLogPath } else { '' }
+  $startInfo = [Diagnostics.ProcessStartInfo]::new()
+  $startInfo.FileName = $node.Source
+  $startInfo.Arguments = 'src/run-server.mjs'
+  $startInfo.WorkingDirectory = $ServerRoot
+  $startInfo.UseShellExecute = $false
+  $startInfo.CreateNoWindow = $true
+  $startInfo.EnvironmentVariables.Clear()
+  foreach ($entry in (Get-ChildProcessEnvironment).GetEnumerator()) {
+    $startInfo.EnvironmentVariables[$entry.Key] = $entry.Value
+  }
+  $process = [Diagnostics.Process]::new()
+  $process.StartInfo = $startInfo
+  $process.Start()
   $processId = $process.Id
   $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
   do {
@@ -279,6 +332,7 @@ $runtimeInfo = [pscustomobject]@{
   a90CustomerUrl = "$lanOrigin/customer/customer-01"
   pairingUrlOrigin = $lanOrigin
   pairingUrlTemplate = "$lanOrigin/pairing.html#p={code}"
+  menuDiagnosticEnabled = [bool]$EnableMenuDiagnostics
   startedAt = (Get-Date).ToString('o')
 }
 $runtimeInfo | ConvertTo-Json | Set-Content -LiteralPath $StatePath -Encoding UTF8

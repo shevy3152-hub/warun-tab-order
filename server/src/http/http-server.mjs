@@ -626,6 +626,47 @@ function authenticateRequest(request, authenticator) {
   return authenticator.authenticateDeviceToken(token);
 }
 
+function attachMenuDiagnosticLifecycle({ recorder, request, response, requestId, now }) {
+  if (!recorder || typeof recorder.record !== 'function') return undefined;
+  const context = {
+    requestId,
+    sourceIp: request.socket?.remoteAddress ?? null,
+    host: request.headers?.host ?? null,
+    authorizationPresent: request.headers?.authorization !== undefined,
+    authClassification: request.headers?.authorization === undefined
+      ? 'missing'
+      : 'authentication_pending',
+    startedAtMs: now(),
+  };
+  let settled = false;
+
+  const record = (completion) => {
+    if (settled) return;
+    settled = true;
+    try {
+      recorder.record({
+        timestamp: new Date(now()).toISOString(),
+        requestId: context.requestId,
+        sourceIp: context.sourceIp,
+        host: context.host,
+        method: 'GET',
+        pathname: '/v1/menu',
+        authorizationPresent: context.authorizationPresent,
+        authClassification: context.authClassification,
+        status: completion === 'interrupted' && !response.headersSent ? null : response.statusCode,
+        durationMs: Math.max(0, now() - context.startedAtMs),
+        completion,
+      });
+    } catch {
+      // A diagnostic failure must never alter the API response or process lifetime.
+    }
+  };
+
+  response.once('finish', () => record('completed'));
+  response.once('close', () => record('interrupted'));
+  return context;
+}
+
 async function notifyCommittedSafely(sseHub, result) {
   if (
     result?.idempotencyResult !== 'created'
@@ -716,6 +757,7 @@ function createConfiguredHttpServer({
   now = Date.now,
   pairingDiagnosticLogger = undefined,
   diagnosticRecorder = undefined,
+  menuDiagnosticRecorder = undefined,
 } = {}, { integrated }) {
   if (
     !authenticator
@@ -764,6 +806,7 @@ function createConfiguredHttpServer({
     let principal;
     let allowedMethod;
     let diagnosticContext;
+    let menuDiagnosticContext;
 
     const handle = async () => {
       const target = requestTarget(request.url);
@@ -780,6 +823,15 @@ function createConfiguredHttpServer({
       diagnosticContext = endpoint
         ? { endpoint, startedAtMs: now(), stage: 'received' }
         : undefined;
+      if (target.path === '/v1/menu') {
+        menuDiagnosticContext = attachMenuDiagnosticLifecycle({
+          recorder: menuDiagnosticRecorder,
+          request,
+          response,
+          requestId,
+          now,
+        });
+      }
 
       if (target.path === '/v1/health') {
         drainRequest(request);
@@ -836,7 +888,17 @@ function createConfiguredHttpServer({
         }
       }
 
-      principal = authenticateRequest(request, authenticator);
+      try {
+        principal = authenticateRequest(request, authenticator);
+        if (menuDiagnosticContext) menuDiagnosticContext.authClassification = 'authenticated';
+      } catch (error) {
+        if (menuDiagnosticContext) {
+          menuDiagnosticContext.authClassification = menuDiagnosticContext.authorizationPresent
+            ? 'authentication_rejected'
+            : 'missing';
+        }
+        throw error;
+      }
       if (diagnosticContext) diagnosticContext.stage = 'authenticated';
 
       if (target.path === '/v1/admin/pairing-preflight') {
@@ -1102,6 +1164,10 @@ function createConfiguredHttpServer({
     };
 
     handle().catch((error) => {
+      if (menuDiagnosticContext && menuDiagnosticContext.authClassification === 'authenticated') {
+        const mappedError = mapApplicationError(error);
+        if (mappedError.statusCode === 403) menuDiagnosticContext.authClassification = 'authorization_rejected';
+      }
       if (!response.headersSent && !response.destroyed) {
         drainRequest(request);
         try {

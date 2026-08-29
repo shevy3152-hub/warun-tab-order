@@ -631,3 +631,95 @@
 - `git diff --check`はPASS。差分と未追跡テキストを機密情報パターンで確認し、token値、Authorization値、QR本文、pairing code、個人情報の混入は検出していない。既存PASS結果を再利用し、今回のレビューのための重いテスト再実行は行っていない。
 
 次: commit候補ファイルを最小範囲でstage対象化し、cached diffと機密情報を再確認してからcheckpoint commitを判断する。
+
+## A90商品詳細モーダル改善 2026-08-26
+
+- `DEV_STATE.md`と実Git状態を照合し、実HEADは`f4238a91538489f9f652684a140859cdd0fcea13`、branchは`feature/sqlite-foundation`で一致。開始時は前回からのtracked差分5ファイル（`DEV_STATE.md`、`prototype/CONTEXT.md`、`prototype/src/App.jsx`、`prototype/src/styles.css`、`prototype/tests/customer-ui.test.mjs`）があり、既存未追跡`.codex-worktrees/`と`docs/isami-dedup-import.md`は変更していない。
+- 商品詳細では保存済み`detail.reading`だけを商品名上へ条件表示し、未登録時に空行を作らない。焼酎の`これにする`は詳細を閉じて同一商品の既存飲み方選択を開くだけで、通常の`一覧へ戻る`は選択・カート追加を開始しない。モーダル表示中の背景スクロールを停止する。
+- A90横画面向けに詳細本文の不要なoverflowを抑え、短いlandscapeでは本文内スクロールを許可した。画像、既存の商品行・価格・飲み方・注文snapshot、DB、カテゴリ構造は変更していない。
+- 実操作で`これにする`遷移、`一覧へ戻る`単独、既存の飲み方選択からのカート追加を確認し、確認後にカートを空へ戻した。1280×721相当では詳細モーダルがスクロールなし、1280×640では内部スクロール許可かつ操作ボタン表示を確認した。注文確定・注文送信は行っていない。
+- 関連UI 26/26、prototype全83/83、Direct Vite build（4580 modules）、Sites worker 4/4をPASS。今回の詳細モーダルは物理A90未確認であり、前回までの焼酎商品行レイアウト・価格・ふりがな位置の物理A90 PASSは維持する。commit・stageは保留。
+
+次: 物理A90で詳細モーダルの収まりと焼酎`これにする`／通常閉じるの実機挙動を確認する。
+
+## A90詳細モーダル3段構成・下部操作欄修正 2026-08-26
+
+- 詳細操作欄が本文の子要素になっていたため、`Modal`へ任意の`modal__footer`を追加し、詳細をタイトル／画像・商品情報／操作欄の3段構成に分離した。A90横画面は本文overflowなし、700px未満のlandscapeだけ本文内スクロールへ切り替える。`100dvh`、`min-height: 0`、画像`object-fit: contain`を使用する。
+- 修正後の1280×721相当はmodal 760×496.70px、body 335.97px、footer top523.10／bottom607.08px、操作ボタン top549.09／bottom597.09px。1280×640ではfooter top483.02／bottom567.00px、1280×480では本文内スクロールとfooter top372.94／bottom456.92pxを確認した。修正前は操作欄が本文内にあり、body 417.96px、操作欄 top548.09／bottom596.08pxだった。
+- `これにする`、`一覧へ戻る`、既存の飲み方選択からのカート追加を修正後に再確認し、カートを空へ戻した。関連UI 26/26、prototype 83/83、Direct Vite build 4580 modules、Sites worker 4/4、`git diff --check`をPASS。商品情報、画像、価格、ふりがな、飲み方、注文処理、DBは変更していない。
+- 今回の詳細モーダルは物理A90未確認。前回PASS済みの焼酎商品行・価格・ふりがな位置は維持し、今回のA90相当ブラウザ確認を完全な実機PASSとは扱わない。stage・commitは保留。
+
+次: 物理A90で詳細モーダルの表示収まりとAndroidナビゲーションとの重なりを確認する。
+
+## A90詳細画像表示微調整 2026-08-26
+
+- 画像微調整前の詳細モーダルのスクロールなし表示は、ユーザー報告で物理A90 ALL PASS。今回の変更は画像領域とCSS背景だけで、`App.jsx`、画像ファイル、商品情報、価格、DB、注文処理は変更していない。
+- 伊佐美・黒霧島のdetail画像を確認した結果、画像ファイル自体は写真背景を含むため、再加工せず利用した。固定されていた`background: #fff`を画像要素から除去し、`object-fit: contain`を維持した。
+- 左画像列を34%から38%へ、画像`max-height`を320pxから400pxへ変更。1280×721相当では画像要素が245.08×319.99pxから273.91×400pxへ拡大し、本文scrollHeight/clientHeightは416/416、footer top563.11／bottom647.09px、ボタン top589.10／bottom637.09pxで画面内に収まった。1280×640、1280×480でもfooter固定と小画面本文スクロールを確認した。
+- 関連UI 26/26、prototype 83/83、Sites worker 4/4、Direct Vite build 4580 modules、`git diff --check`をPASS。画像拡大後の物理A90目視は未実施のため、今回の画像調整は完全PASS・stage・commit扱いにしない。
+
+次: 物理A90で画像拡大後の密度、右側情報、下部操作欄の実画面収まりを確認する。
+
+## A90詳細画像最大高550px調整 2026-08-26
+
+- 詳細画像のCSS最大高を400pxから550pxへ変更した。A90相当で本文が欠けないよう実使用高は`min(550px, calc(100dvh - 260px))`、`object-fit: contain`、左列38%、画像背景transparentを維持し、画像ファイルと商品データは変更していない。
+- 1280×721相当で画像は400pxから460.63px、本文scrollHeight/clientHeightは416/416から477/477へ変化した。footerはtop593.42／bottom677.39px、ボタンはtop619.41／bottom667.40pxで完全表示。1280×640、1280×480では本文のみ内部スクロールへ安全に切り替わることを確認した。
+- 関連UI 26/26、prototype 83/83、Sites worker 4/4、Direct Vite build 4580 modules、`git diff --check`をPASS。画像拡大後の物理A90は未確認のため、既存のスクロールなしPASSを維持対象として記録し、stage・commitは保留。
+
+次: 物理A90で550px設定後の画像表示密度と下部操作欄を確認する。
+
+## A90詳細画像・横画面scale廃止・枠内収容 2026-08-26
+
+- 横画面で画像が小さく見える原因をCSSと実DOMで確認した。縦横共通の詳細画像枠に`100dvh`由来の高さ制約はあったが、`aspect-ratio`や別の横幅固定はなく、元写真自体に背景が焼き込まれているため、`contain`ではボトル周囲の写真も表示されていた。画像ファイル、画像URI、商品情報、DB、注文処理は変更していない。
+- 縦画面の既存ルールを維持したまま、landscape用に詳細本文overflow、左列48%、gap10px、画像枠を本文の使用可能高へstretchするgridを明示した。画像枠は透明背景で本文背景を継承し、画像は中央配置・`object-fit: contain`・`object-position: center`を維持した。portraitは従来の`scale(1.05)`、landscapeは表示高にかかわらずscaleなしとし、短いlandscapeだけ本文内部スクロールへ戻る。
+- 物理A90で前版`scale(1.08)`は、画像が大きくなった一方でボトル下部が切れるNGだった。横画面のscale拡大を廃止し、`max-height:100%`、`min-height:0`を画像要素へ追加した。画像ファイルの再加工はしていない。
+- safe-copy客席URLを読み取り表示し、横1280×721（visualViewport 720.63px）でmodal 760.00×704.63px、body 756.82×573.75px、画像枠355.59×571.75px、実画像355.59×571.75px、右情報375.24px、footer top653.06／bottom711.05px、本文scrollHeight/clientHeight 574/574を確認した。画像矩形の上下左右は枠内判定true、computedはcontain／center／transform none／透明背景だった。footerと2ボタンは画面内だった。
+- 縦800×1280ではmodal 736.00×686.73px、body 732.82×552px、画像枠322.57×550px、portrait倍率1.05、footer top923.87／bottom981.86pxで既存表示を維持した。1280×480ではbody 312px・overflow auto、footer top403.94／bottom461.93px、2ボタンbottom451.93pxで、小画面の本文内部スクロールと操作欄分離を維持した。
+- 検証: 関連UI 26/26、prototype全83/83、Sites worker 4/4、Direct Vite build 4580 modules、`git diff --check`。safe-copy／production DB、画像、注文、QR、pairing、stage、commitは操作していない。前版の物理A90 scale1.08はユーザー確認でNG、今回のscale廃止・枠内収容後の物理A90は未確認のため、完全PASS扱いにしない。
+
+次: 物理A90で横画面の画像密度、ボトル上下の欠け、右側情報、footerとAndroidナビゲーションの重なりを確認する。
+
+## A90詳細画像550px表示確定調整 2026-08-26
+
+- 実画像縮小の原因は、後段の`.modal-actions`によるfooterのmargin-top 26pxとmodal上限の二重制限だった。詳細actionsのmarginを0、modalを`100dvh`基準、左画像列44%、画像上限を`min(550px, calc(100dvh - 170px))`へ変更した。画像ファイル、商品データ、`App.jsx`、DBは変更していない。
+- A90相当1280×721で画像317.16×550px、本文566/566、footer top651.10／bottom709.09px、ボタン top651.10／bottom699.09px。`object-fit: contain`、background transparent、本文の縦スクロールなしを確認した。1280×640／480では画像470.47px／310.16px、本文のみ内部スクロール可能で操作欄は完全表示された。
+- 関連UI 26/26、prototype 83/83、Sites worker 4/4、Direct Vite build 4580 modules、`git diff --check`をPASS。画像拡大後の物理A90目視は未確認で、既存の物理A90スクロールなしPASSを維持対象として記録し、stage・commitは保留する。
+
+次: 物理A90で画像550pxの表示密度とfooter位置を確認する。
+
+## A90横画面CSS適用経路診断・geometry fallback 2026-08-28
+
+- 物理A90で横画面変更が見えない原因を、推測で画像サイズを変えずに配信経路と実装で切り分けた。診断開始時のsafe-copyは`192.168.1.5:25173/28787`・PID 8204だったが、確認中に待受が停止した。正式な`server/start-safe-copy.ps1 -NoBrowser`でsafe-copyだけを再起動したところ、現LANアドレスは`192.168.1.11`、PID 9960へ変わり、旧`192.168.1.5`は待受なしになった。旧URLを保持したA90は現safe-copy bundleを受け取れないため、配信経路差異を確認した。ただし物理A90が実際に保持しているURL・screen値はこの環境から直接取得できず、端末側の最終原因は未確定とする。
+- 再build後の現safe-copy URLは`http://192.168.1.11:25173/customer/customer-01`。index／main JS／styles JS／CSSのローカルとHTTP配信SHA-256はそれぞれ一致し、HTTPは`Cache-Control: no-store`。healthはHTTP 200、ready、db ready、schema v5、safe-copy、health PID 9960である。safe-copy DBは読み取り専用`integrity_check=ok`、件数はcategories 7、menu_items 43、menu_item_details 43、menu_item_variants 12、menu_item_serving_options 56、orders 14、order_items 23、event_log 142で、再起動・buildによるDB書き込みはない。
+- 横画面メディア判定がAndroidブラウザで古い場合にもA90相当viewportを拾えるよう、`prototype/src/styles.css`へ`min-width:900px`かつ`max-height:800px`のgeometry fallbackを追加した。高さ701px以上は本文overflowなし、700px以下は本文内scrollを維持する。portrait（800×1280）は既存`scale(1.05)`を維持する。画像ファイル、画像URI、DB、商品情報、注文処理は変更していない。
+- 物理A90値を取得するため、`?layout-debug=1`のときだけ商品詳細へviewport（inner／screen／orientation）、画像枠・画像矩形、computed style、overflowを表示する一時診断表示を追加した。token、QR、pairing code、注文本文は表示しない。現ブラウザのsafe-copy相当確認では、1280×721、landscape／wideShort true、grid 48%、画像`transform:none`／`contain`／center、枠内、本文574/574、footer完全表示だったが、これは物理A90ではない。新URLの未登録ブラウザではpairing画面までの表示に留め、pairing操作はしていない。
+- 検証: 関連UI 26/26、prototype全83/83、Sites worker 4/4、Direct Vite build 4580 modules、現safe-copy HTTP資産SHA-256一致、health、DB integrity_check。serverコードは変更していないため既存serverテストPASS結果を再利用した。`git diff --check`は状態文書追記後に再実施する。stage・commit・push・pull・merge・rebase・resetは行っていない。
+- 物理A90の横画面表示変更、screen実値、実DOM、実機の下部ボタン／Androidナビゲーションは未確認で、今回の変更をPASS扱いにしない。一時debug表示は物理A90確認後に削除する。
+
+次: 現行safe-copy URLでA90を再表示し、debug値と画像枠外はみ出しを実機確認してから、debug表示を削除する。
+
+## Safe-copy固定origin・runtime-state更新 2026-08-28
+
+- Buffalo WSR-2533DHP3のMANUAL／ROUTER運用とDHCP手動割当により、PCの実測IPv4は`192.168.11.6`、gatewayは`192.168.11.1`。旧IPを記録した過去セクションは履歴として保持し、現行値と混同しないよう本セクションを最新状態とする。
+- 正式な`server/start-safe-copy.ps1 -NoBrowser`経路でsafe-copyを再起動し、Web/API 25173/28787を同一PID 20180で確認した。localhost／LANのhealthはHTTP 200、`ready`、`db=ready`、schema v5、environment／database targetはsafe-copy。
+- 現行safe-copy DBは`server/var/safe-copies/initial-menu-20260818.sqlite3`。runtime-stateはPID 20180、LAN IPv4 `192.168.11.6`、pairing URL origin `http://192.168.11.6:25173`、A90 URL `http://192.168.11.6:25173/customer/customer-01`を記録している。
+- 旧`192.168.1.11`は、既存safe-copyプロセスが正常な場合にlauncherが再起動せずruntime-stateを更新しないため残っていた。旧`192.168.1.10`は`server/start-windows.ps1`の別レガシー起動経路の固定値で、今回の正式safe-copy経路のactive設定ではない。旧IPの履歴記録・コードは一括置換していない。
+- 固定origin、table 1の管理された再pairing、A90の`GET /v1/menu` HTTP 200確認は完了した。物理A90では新originのpairing後にメニュー・商品画像が表示され、画像サイズ調整前の基準UIまで復旧した。次はこの基準表示を起点に詳細画像サイズを確認する。
+
+## Safe-copy table 1再pairing・物理A90メニュー復旧 2026-08-28
+
+- 固定origin `http://192.168.11.6:25173` のsafe-copyでtable 1を正式フローから管理された再pairingし、新しいactive customer device 1件への割当を確認した。旧table 1 deviceはrevokedのままである。
+- 物理A90では新originのpairing、`GET /v1/menu` HTTP 200、商品・画像表示の成功を確認した。現在は画像サイズ調整前の基準UIまで復旧した状態である。
+- read-only確認時点のsafe-copyはhealth localhost／LAN HTTP 200、`ready`、`db=ready`、schema v5、integrity_check `ok`、foreign_key_check 0件。orders 14、order_items 23、menu_items 43、event_log 142を保持している。
+- pairing code、QR payload、token、token hashは記録していない。コード、CSS、DB、server、network、Git stage・commitは変更していない。
+
+## checkpoint前の現行最終状態 2026-08-29
+
+- 固定originは`http://192.168.11.6:25173`。safe-copyの対象DB、画像URI、stable_id、DB内容は維持している。
+- 物理A90で商品詳細モーダルを確認し、横画面画像列38%、gap 20px、`object-fit: contain`、`object-position: left bottom`、ボトル全体、footer、48px操作ボタン、本文スクロールなしをALL PASSとした。一覧復帰、「これにする」、飲み方選択、カート追加も維持した。
+- `layout-debug`のquery判定・診断パネル・診断専用CSS・診断専用テスト、credential／deviceIdの画面診断は削除済み。server側のGET `/v1/menu`診断は秘密値を含まないmetadata限定で、safe-copy明示時だけ有効化する。
+- 全12商品の元写真を既存の非生成Pillow処理で傾き補正し、detail v1（760×1320）、thumb v1（560×560）、thumb v2（560×700）を更新した。ボトル形状、ラベル、商品情報、画像URI、DBは変更していない。元画像、バックアップ、比較用出力はcommit対象外。
+- commit前HEADは`f4238a91538489f9f652684a140859cdd0fcea13`、branchは`feature/sqlite-foundation`。関連UI 26/26、prototype全体83/83、server全体370/370、Sites worker 4/4、Direct Vite build（4580 modules）、`git diff --check`をPASSした。画像36枚の寸法・形式、参照24件、機密情報パターン、local dist／safe-copy HTTP資産SHA-256一致、localhost／LAN health HTTP 200／ready／db=ready／schema v5を確認した。
+- read-only確認で実listener PID 15312と既存runtime-stateのprocessId 20180が不一致だった。runtime-stateは変更せず、commit対象外とする。次回のsafe-copy正式起動経路確認時に解消する残余リスクである。
+
+次: 焼酎の所属・並び順確認後、8カテゴリー折りたたみと「芋／麦・その他」固定ナビを実装する。

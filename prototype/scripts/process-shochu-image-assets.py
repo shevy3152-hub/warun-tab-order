@@ -7,18 +7,18 @@ from PIL import Image, ImageEnhance, ImageOps
 
 
 ASSETS = {
-    "shochu-imo-kuro-kirishima": {"angle": -2.0, "label_y": 1030},
-    "shochu-imo-akarui-nouson": {"angle": -1.3, "label_y": 1050},
-    "shochu-imo-sekitoba": {"angle": -1.8, "label_y": 1050},
-    "shochu-imo-jukugaki": {"angle": -1.5, "label_y": 1080},
-    "shochu-imo-mitake": {"angle": -1.0, "label_y": 1080},
-    "shochu-imo-tonohozan": {"angle": -1.5, "label_y": 1110},
-    "shochu-mugi-iichiko": {"angle": -2.5, "label_y": 1040},
-    "shochu-mugi-gesshin": {"angle": -1.3, "label_y": 980},
-    "shochu-mugi-ginnomizu": {"angle": -1.4, "label_y": 1050},
-    "shochu-kokuto-asahi": {"angle": -1.3, "label_y": 1050},
-    "shochu-awamori-zanpa-white": {"angle": -1.2, "label_y": 1040},
-    "shochu-imo-rice-tenchu": {"angle": -1.2, "label_y": 1090},
+    "shochu-imo-kuro-kirishima": {"angle": 8.0, "label_y": 1030},
+    "shochu-imo-akarui-nouson": {"angle": 7.0, "label_y": 1050},
+    "shochu-imo-sekitoba": {"angle": 8.0, "label_y": 1050},
+    "shochu-imo-jukugaki": {"angle": 8.0, "label_y": 1080},
+    "shochu-imo-mitake": {"angle": 7.0, "label_y": 1080},
+    "shochu-imo-tonohozan": {"angle": 8.0, "label_y": 1110},
+    "shochu-mugi-iichiko": {"angle": 10.0, "label_y": 1040},
+    "shochu-mugi-gesshin": {"angle": 2.5, "label_y": 980},
+    "shochu-mugi-ginnomizu": {"angle": 3.0, "label_y": 1050},
+    "shochu-kokuto-asahi": {"angle": 4.0, "label_y": 1050},
+    "shochu-awamori-zanpa-white": {"angle": 7.0, "label_y": 1040},
+    "shochu-imo-rice-tenchu": {"angle": 1.5, "label_y": 1090},
 }
 
 

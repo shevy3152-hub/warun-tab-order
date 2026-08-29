@@ -69,6 +69,41 @@ test("customer cards show only stored readings and keep the detail hint separate
   assert.match(styles, /\.menu-row__reading \{[\s\S]*white-space: nowrap[\s\S]*overflow: hidden/);
 });
 
+test("product details keep stored readings conditional and let shochu continue to serving selection", () => {
+  assert.match(appSource, /function Modal\(\{ title, children, footer = null, onClose/);
+  assert.match(appSource, /\{footer \? <div className="modal__footer">\{footer\}<\/div> : null\}/);
+  assert.match(appSource, /className="modal--product-detail" footer=\{<div className="modal-actions product-detail__actions">/);
+  assert.match(appSource, /detailItem\.detail\?\.reading \? <p className="product-detail__reading">\{detailItem\.detail\.reading\}<\/p> : null/);
+  assert.match(appSource, /const chooseShochuFromDetail = \(item\) => \{[\s\S]*setDetailItem\(null\)[\s\S]*openShochuSelection\(item\)/);
+  assert.match(appSource, /detailItem\.categoryId === "shochu" && detailItem\.servingOptions\?\.length/);
+  assert.match(appSource, />これにする<\/button>/);
+  assert.match(appSource, /className="button button--quiet" onClick=\{\(\) => setDetailItem\(null\)\}>一覧へ戻る<\/button>/);
+  assert.match(styles, /\.modal--product-detail \.modal__body \{[\s\S]*overflow: hidden/);
+  assert.match(styles, /\.product-detail__actions \.button \{ min-height: 48px; \}/);
+  assert.match(styles, /\.modal--product-detail \.modal__footer \{[\s\S]*flex: 0 0 auto/);
+  assert.match(appSource, /className="product-detail__image"><img src=\{detailItem\.detail\?\.imageUri \|\| detailItem\.imageUri\}/);
+  assert.match(styles, /\.product-detail \{[\s\S]*grid-template-columns: minmax\(220px, 45%\) minmax\(0, 1fr\)[\s\S]*align-items: center/);
+  assert.match(styles, /\.product-detail__image \{[\s\S]*height: var\(--product-detail-image-height, min\(550px, calc\(100dvh - 170px\)\)\)[\s\S]*overflow: hidden[\s\S]*background: transparent/);
+  assert.match(styles, /\.product-detail__image > img \{[\s\S]*object-fit: contain[\s\S]*object-position: center[\s\S]*transform: scale\(1\.05\)/);
+  assert.match(styles, /@media \(orientation: portrait\) \{[\s\S]*\.product-detail \{[\s\S]*grid-template-columns: minmax\(220px, 45%\)/);
+  assert.match(styles, /@media \(orientation: landscape\) \{[\s\S]*\.modal--product-detail \{ display: grid; grid-template-rows: auto minmax\(0, 1fr\) auto; \}[\s\S]*\.modal--product-detail \.modal__body \{ overflow: hidden; display: grid; grid-template-rows: minmax\(0, 1fr\); \}[\s\S]*\.product-detail \{ height: auto;[\s\S]*grid-template-columns: minmax\(0, calc\(38% - 20px\)\) minmax\(0, 1fr\)[\s\S]*column-gap: 20px; align-items: start/);
+  assert.match(styles, /@media \(orientation: landscape\) \{[\s\S]*\.product-detail__image \{ height: 100%; padding: 0 0 0 40px; place-items: end start; \}[\s\S]*\.product-detail__image > img \{ min-height: 0; max-height: 100%; transform: translateY\(10%\) scale\(1\.1\); transform-origin: left bottom; object-position: left bottom; \}/);
+  assert.match(styles, /\.modal--product-detail \.product-detail__actions \{ position: relative; top: -5px; margin-top: 0/);
+  assert.match(styles, /@media \(orientation: landscape\) and \(max-height: 700px\) \{[\s\S]*\.modal--product-detail \.modal__body \{ overflow-y: auto/);
+  assert.match(styles, /@media \(orientation: landscape\) and \(max-height: 700px\) \{[\s\S]*\.product-detail__image > img \{ min-height: 0; max-height: 100%; transform: translateY\(10%\) scale\(1\.1\); transform-origin: left bottom; \}/);
+  assert.match(styles, /@media \(min-width: 900px\) and \(max-height: 800px\) \{[\s\S]*\.product-detail \{ height: auto;[\s\S]*grid-template-columns: minmax\(0, calc\(38% - 20px\)\) minmax\(0, 1fr\)[\s\S]*column-gap: 20px; align-items: start/);
+  assert.match(styles, /\.product-detail > :not\(\.product-detail__image\) \{ margin: 0; padding: 10px 0 0; align-self: start; \}/);
+  assert.match(styles, /@media \(min-width: 900px\) and \(max-height: 800px\) \{[\s\S]*\.product-detail__image \{ height: 100%; padding: 0 0 0 40px; place-items: end start; \}[\s\S]*\.product-detail__image > img \{ min-height: 0; max-height: 100%; transform: translateY\(10%\) scale\(1\.1\); transform-origin: left bottom; object-position: left bottom; \}/);
+  assert.match(styles, /\.modal--product-detail \.modal__header \{[\s\S]*min-height: 64px; padding: 4px 16px/);
+  assert.match(styles, /\.modal--product-detail \.modal__body \{[\s\S]*padding: 0 8px/);
+  assert.match(styles, /\.modal--product-detail \.modal__footer \{[\s\S]*padding: 0 18px 4px/);
+  assert.match(styles, /\.product-detail__actions \.button \{ min-height: 48px; \}/);
+  assert.match(styles, /@media \(min-width: 900px\) and \(max-height: 700px\) \{[\s\S]*\.modal--product-detail \{ display: grid; grid-template-rows: auto minmax\(0, 1fr\) auto; height: calc\(100dvh - 16px\); \}[\s\S]*\.modal--product-detail \.modal__body \{ overflow-y: auto/);
+  assert.match(styles, /@media \(min-width: 900px\) and \(min-height: 701px\) and \(max-height: 800px\) \{[\s\S]*\.modal--product-detail \.modal__body \{ overflow: hidden; display: grid/);
+  assert.match(styles, /@media \(min-width: 900px\) and \(max-height: 700px\) \{[\s\S]*\.modal--product-detail \.modal__body \{ overflow-y: auto/);
+  assert.match(appSource, /document\.body\.style\.overflow = "hidden"/);
+});
+
 test("admin menu editing is grouped, cancellable, and keeps edit ordering data", () => {
   assert.match(appSource, /const menuGroups = \[/);
   assert.match(appSource, /menu-admin-group__heading/);

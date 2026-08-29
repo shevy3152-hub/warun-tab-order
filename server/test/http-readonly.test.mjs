@@ -9,6 +9,7 @@ import test from 'node:test';
 
 import { createDeviceAuthenticator } from '../src/auth/device-auth.mjs';
 import { createCatalogRepository } from '../src/catalog/catalog-repository.mjs';
+import { createMenuRequestDiagnosticRecorder } from '../src/diagnostics/menu-request-recorder.mjs';
 import { initializeDatabase } from '../src/db/database.mjs';
 import {
   createReadOnlyHttpServer,
@@ -129,6 +130,7 @@ async function withFixture(run, options = {}) {
       readServiceState: options.readServiceState,
       requestIdFactory: options.requestIdFactory,
       now: options.now,
+      menuDiagnosticRecorder: options.menuDiagnosticRecorder,
     });
     const port = await listen(server);
     await run({
@@ -153,6 +155,27 @@ async function withFixture(run, options = {}) {
     await rm(directory, { recursive: true, force: true });
   }
 }
+
+test('safe menu diagnostics records only GET /v1/menu outcome metadata', async () => {
+  const recorder = createMenuRequestDiagnosticRecorder({ enabled: true, now: () => 1_700_000_000_000 });
+  await withFixture(async ({ port }) => {
+    assert.equal((await request({ port, path: '/v1/menu?ignored=1', headers: authHeaders(CUSTOMER_TOKEN) })).statusCode, 200);
+    assert.equal((await request({ port, path: '/v1/menu' })).statusCode, 401);
+    assert.equal((await request({ port, path: '/v1/menu', headers: authHeaders(UNASSIGNED_TOKEN) })).statusCode, 403);
+  }, { menuDiagnosticRecorder: recorder });
+
+  const entries = recorder.list();
+  assert.equal(entries.length, 3);
+  assert.deepEqual(entries.map((entry) => [entry.status, entry.authClassification, entry.authorizationPresent]), [
+    [403, 'authorization_rejected', true],
+    [401, 'missing', false],
+    [200, 'authenticated', true],
+  ]);
+  assert.ok(entries.every((entry) => entry.method === 'GET' && entry.pathname === '/v1/menu' && entry.completion === 'completed'));
+  assert.doesNotMatch(JSON.stringify(entries), new RegExp(UNASSIGNED_TOKEN));
+  assert.doesNotMatch(JSON.stringify(entries), /ignored=1/);
+  assert.doesNotMatch(JSON.stringify(entries), /response|cookie|token_hash/i);
+});
 
 function authHeaders(token, scheme = 'Bearer') {
   return { Authorization: `${scheme} ${token}` };
