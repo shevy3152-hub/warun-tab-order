@@ -6,7 +6,7 @@
 ## 2026-08-29 checkpoint時点の現行正本
 
 - branch: `feature/sqlite-foundation`
-- commit前HEAD: `f4238a91538489f9f652684a140859cdd0fcea13`
+- HEAD: `573370ad2e4c217d53991d5e0f5c9e3e1992d9e0`
 - 固定origin: `http://192.168.11.6:25173`
 - safe-copy DB: `server/var/safe-copies/initial-menu-20260818.sqlite3`
 - 物理A90の商品詳細モーダルはユーザー確認でALL PASS。横画面の画像列38%、column-gap 20px、`object-fit: contain`、`object-position: left bottom`、footer、48pxボタン、スクロール条件を確認済み。一覧復帰、「これにする」、飲み方選択、カート追加も維持した。
@@ -21,6 +21,7 @@
 - 画像36枚の寸法・形式・ファイル名、source／documentの参照24件、機密情報パターンを確認し、画像不整合・参照切れ・文書への秘密値混入は0件。
 - local distとsafe-copy HTTP配信のasset SHA-256は3件、画像SHA-256は36件すべて一致。localhost／LAN healthはHTTP 200、`ready`、`db=ready`、schema v5。environment／database targetはruntime-stateでsafe-copyを確認した。
 - read-only確認で実listener PID 15312と既存runtime-stateのprocessId 20180が不一致だった。runtime-stateは変更せずcommit対象外とし、次回のsafe-copy正式起動経路確認時に解消する残余リスクとして扱う。
+- 商品詳細の読み仮名をモーダルタイトル横へ移動する改善をcommit `573370a`（`fix: move product reading beside modal title`）として確定した。
 
 ### 次の未完了タスク
 
@@ -42,21 +43,21 @@
 ## Git状態
 
 - branch: `feature/sqlite-foundation`
-- HEAD: `f4238a91538489f9f652684a140859cdd0fcea13`
+- HEAD: `573370ad2e4c217d53991d5e0f5c9e3e1992d9e0`
 - staged差分: なし
-- tracked変更: `DEV_STATE.md`、`prototype/CONTEXT.md`、`prototype/src/App.jsx`、`prototype/src/customer-bootstrap.js`、`prototype/src/styles.css`、`prototype/tests/customer-bootstrap.test.mjs`、`prototype/tests/customer-ui.test.mjs`、`server/src/http/http-server.mjs`、`server/src/run-server.mjs`、`server/start-safe-copy.ps1`、`server/test/http-readonly.test.mjs`、`server/test/safe-copy-launcher.test.mjs`
-- 未追跡: `.codex-worktrees/`、`docs/isami-dedup-import.md`、`server/src/diagnostics/menu-request-recorder.mjs`
+- tracked変更: なし
+- 未追跡: `.codex-worktrees/`、`docs/isami-dedup-import.md`
 - 未追跡ファイルは保持し、stageしていない。
 - `dist`、DB、バックアップ、ログ、runtime-state、token、元写真はcommit対象にしていない。
 
 ## 現在の目標
 
-通信再発防止の設計を整理し、固定origin、管理された再pairing、A90の認証済みメニュー取得、物理A90 UI確認の前提条件と順序を確定する。物理A90実機UI確認は、固定originの確定、table 1の管理された再pairing、A90の`GET /v1/menu` HTTP 200確認が完了するまでBLOCKEDとする。
+焼酎の所属・並び順を確認したうえで、客席の8カテゴリー折りたたみと「芋／麦・その他」固定ナビを実装する。
 
 ## 完了済みの内容
 
 - 商品詳細モーダルをタイトル／本文（画像・商品情報）／footer操作欄の3段構成にした。`min-height: 0`、`100dvh`、本文とfooterの分離、背景ページのスクロール停止を使用している。
-- 登録済み`detail.reading`だけを商品名上へ表示し、未登録時は空行を作らない。焼酎の「これにする」は同一商品の飲み方選択を開くだけで、選択確定前にカートへ追加しない。「一覧へ戻る」は選択処理を開始しない。
+- 登録済み`detail.reading`だけをモーダルタイトル横へ表示し、未登録時は表示しない。焼酎の「これにする」は同一商品の飲み方選択を開くだけで、選択確定前にカートへ追加しない。「一覧へ戻る」は選択処理を開始しない。
 - portraitでは既存の`transform: scale(1.05)`を維持している。landscapeでは`transform: none`、`object-fit: contain`、`object-position: center`、画像の`max-height: 100%`、48%画像列を使用している。
 - A90相当viewport用に、orientation判定が不安定な場合を補う`(min-width: 900px) and (max-height: 800px)`のgeometry fallbackを追加した。高さ701px以上は本文overflowなし、700px以下は本文内スクロールを維持する。画像ファイル、画像URI、商品情報、DB、注文処理は変更していない。
 - `?layout-debug=1`のときだけ、viewport（inner／screen／orientation）、画像枠・画像矩形、computed style、overflowを表示する一時診断表示を追加した。token、Cookie、QR本文、pairing code、注文本文は表示しない。
@@ -112,29 +113,18 @@
 
 ## 現在の未完了事項
 
-- 通信再発防止の設計を整理し、origin固定、credentialのライフサイクル、再pairingの実施条件、失敗時の復旧手順を明文化する。
-- PCのLAN origin `http://192.168.11.6:25173` の固定を確認済み。今後も固定確認前は失効・pairing・QR発行を行わない。
-- table 1の管理された再pairingとA90の`GET /v1/menu` HTTP 200確認は完了した。table 1は新しいactive customer device 1件に割り当てられ、旧table 1 deviceはrevokedのままである。
-- 物理A90で固定originのpairingとメニュー表示・商品画像表示が成功した。現在の表示は画像サイズ調整前の基準UIである。
-- 次は画像サイズ調整前の基準表示を基準に、A90の詳細画像表示を確認する。
-- 物理A90で横画面の画像枠と実画像の矩形を比較し、ボトル全体、中央配置、枠外はみ出しなし、footer完全表示、本文スクロールなしを確認する。
-- 物理A90が登録画面や旧URLを表示する場合は、追加のpairingや接続解除を勝手に行わず、その状態を報告する。
-- 物理確認後、一時診断表示を削除し、portrait表示と小画面内部scrollを再確認する。
-- 物理A90確認とcommit前レビューが終わるまでstage・commitを保留する。
+- 8カテゴリー折りたたみと「芋／麦・その他」固定ナビの実装。
+- 実装時も焼酎商品の所属・並び順、既存の注文処理、画像資産、server／DB／networkを変更しない。
 
 ## 次回最初に行う具体的な作業
 
-1. 通信再発防止の設計を整理し、実装前の確認項目と停止条件を確定する。
-2. PCのLAN origin `http://192.168.11.6:25173` の固定確認は完了済み。
-3. 固定確認後、table 1の管理された再pairingを正式フローで行う。
-4. A90の`GET /v1/menu`がHTTP 200となることを確認する。200になるまで物理A90 UI確認は行わない。
-5. A90で現行URL `http://192.168.11.6:25173/customer/customer-01?layout-debug=1` を開き、詳細モーダルの実viewport、media判定、画像枠／画像矩形、`transform`、`object-fit`、`max-height`、`overflow`、scroll値を記録する。
-6. その実測値がgeometry fallbackと一致するかを確認し、一致しない場合だけCSSを最小修正する。
-7. 物理A90で確認後、`layout-debug`のApp／CSS／テストを削除して再度軽量検証する。
+1. 現在の8サブカテゴリー構成と既存の4大分類ナビを照合する。
+2. 客席ナビを8カテゴリー折りたたみへ最小変更する。
+3. 焼酎一覧の「芋／麦・その他」固定ナビを実装し、既存の所属・並び順を維持する。
 
 ## stage・commit保留理由
 
-通信・認証の再発防止設計と画像サイズ調整後の物理A90確認は未完了である。固定origin、table 1の管理された再pairing、A90の`GET /v1/menu` HTTP 200確認、画像サイズ調整前の基準UI復旧は完了した。実機確認とcommit前レビューが完了するまでstage・commitしない。
+商品詳細読み仮名移動の実装commitは完了し、tracked差分はない。次回は8カテゴリー折りたたみと焼酎固定ナビに着手する。
 
 ## 2026-08-28 safe-copy origin固定・runtime-state更新
 
