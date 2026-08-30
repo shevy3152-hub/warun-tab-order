@@ -3,6 +3,41 @@
 最終更新: 2026-08-29
 対象: `C:\Users\user\Documents\ChatGPT\タブレットオーダーシステム`
 
+## 2026-08-30 customer UI code checkpoint
+
+本セクションを現行正本とする。実装commit（code checkpoint）は `c085b29fd80342e074b1dc94abcd702d177900e5`（`feat: refine customer menu interactions`）。この後の文書更新commitは別のHEADを作るため、実装状態の基準としてはこのcode checkpointを使用する。
+
+- branch: `feature/sqlite-foundation`
+- code checkpoint HEAD: `c085b29fd80342e074b1dc94abcd702d177900e5`
+- code checkpointのtracked差分: なし
+- code checkpoint直後の未追跡: `.codex-worktrees/`、`docs/isami-dedup-import.md`（保持、stage対象外）
+- 実装対象は `prototype/src/App.jsx`、`prototype/src/styles.css`、`prototype/tests/customer-ui.test.mjs` の3ファイルのみ。
+- メニュー閲覧・スクロール中の上部共通操作行を収納し、Grid行を縮めてメニュー領域を上へ拡張。約5秒無操作で復帰する。
+- `ドリンク＞○○`の下段を削除し、選択中カテゴリのパンくずを表示。「酒類選択に戻る」は右端へ配置し、太枠・淡色・44pxタップ領域とした。
+- ドリンク先頭カテゴリーを「おかわり！」へ変更し、現在の客席の直近ドリンク注文を重複なし・新しい順で表示する。
+- 注文内容内の×ボタンは商品行全削除ではなく、数量を1点ずつ減らす。
+- 左赤レール展開時の旧ロゴ・縦書き説明を削除し、「IZAKAYA WARUN」「お品書き」を横書き2行で表示。お品書きは拡大し全体を約5px上へ移動した。
+- footerのアレルギー案内を削除し、「店内禁煙」を「全席喫煙可能」へ変更。INFORMATION本文は専用定数で後から変更可能とした。
+- Fullscreen API、Fullscreenボタン、Fullscreen専用CSS・テストは撤回済み。通常Chrome表示を現在の基準とする。失敗したFullscreen専用2段Grid方式は再採用しない。
+- カテゴリー折り畳み、左大分類レールの中央メニュータップ折り畳み、商品・注文一覧の内部スクロール、注文・価格・飲み方選択、DB、server、pairing、network、画像資産は維持・変更していない。
+
+### 検証
+
+- 関連UIテスト: 34/34 PASS。
+- prototype全体テスト: 91/91 PASS。
+- Direct Vite build: 4580 modules transformed、PASS。
+- `git diff --check`: whitespace errorなし。既存のLF/CRLF変換警告のみ。
+
+### 物理A90の確認状況
+
+- ユーザー実機報告で、通常Chrome表示では新CSSの反映、注文内容右端・全画面ボタン・テーブル番号の概ねの収まり、横スクロールなし、画面全体非スクロール、商品一覧・注文一覧のみの内部スクロール、footer下端表示を確認済み。
+- 通常Chrome表示のfooter実寸、左レール下部の完全表示、現在の「おかわり！」表示、直近ドリンク注文の反映、数量1点ずつ取り消し、メニュー閲覧中の5秒収納、左レールの新ブランド表示は物理A90未確認。
+- Fullscreen表示は過去に複数回FAILとなり、Fullscreen機能自体を撤回済み。Fullscreenの受入PASSとは扱わない。
+
+### 次回作業
+
+最初のタスクは、最小Android WebViewキオスク基盤を作成し、A90実機のviewportを測定する。その後、注文内容の大型確認画面と1点ずつ削除操作を確認する。
+
 ## 2026-08-29 checkpoint時点の現行正本
 
 - branch: `feature/sqlite-foundation`
