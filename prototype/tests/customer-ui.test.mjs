@@ -24,6 +24,10 @@ test("customer menu uses major category navigation with a collapsible rail", () 
   assert.match(customerScreen, /majorNavOpen/);
   assert.match(customerScreen, /customer-app--category-collapsed/);
   assert.match(customerScreen, /大分類カテゴリー/);
+  assert.match(customerScreen, /IZAKAYA WARUN[\s\S]*お品書き/);
+  assert.doesNotMatch(customerScreen, /customer-system-label|vertical-copy|IZAKAYA<br \/>ORDER<br \/>SYSTEM/);
+  assert.match(styles, /\.customer-title--horizontal \{[\s\S]*transform: translateY\(-5px\)/);
+  assert.match(styles, /\.customer-title--horizontal strong \{ font-size: clamp\(36px, 4vw, 44px\); \}/);
   assert.match(customerScreen, /カテゴリーを変更/);
   assert.match(customerScreen, /setMajorNavOpen\(true\)/);
   assert.match(customerScreen, /setMajorNavOpen\(false\)/);
@@ -31,11 +35,113 @@ test("customer menu uses major category navigation with a collapsible rail", () 
   assert.match(customerScreen, /menu-heading__breadcrumb/);
   assert.match(customerScreen, /currentMajorCategory\.name/);
   assert.match(customerScreen, /currentCategoryLabel/);
+  assert.match(customerScreen, /recentDrinkItemIds = \[\.\.\.new Set\(customerHistory\.flatMap/);
+  assert.match(customerScreen, /CUSTOMER_DRINK_CATEGORY_IDS\.has\(menuItems\.find\(\(menu\) => menu\.id === item\.menuItemId\)\?\.categoryId\)/);
+  assert.doesNotMatch(customerScreen, /お好みの商品をお選びください。/);
+  assert.doesNotMatch(customerScreen, /menu-heading__body/);
   assert.match(customerScreen, /subcategory-nav--drink/);
   assert.match(customerScreen, /shochu-menu-row[\s\S]*product-image-button/);
   assert.match(styles, /\.shochu-menu-row \.product-image-button img \{[\s\S]*object-fit: cover[\s\S]*object-position: center/);
-  assert.match(appSource, /おすすめ/);
+  assert.match(appSource, /おかわり！/);
+  assert.match(appSource, /ビール/);
+  assert.match(appSource, /ハイボール/);
+  assert.match(appSource, /サワー・酎ハイ/);
+  assert.match(appSource, /焼酎/);
+  assert.match(appSource, /日本酒/);
+  assert.match(appSource, /ソフトドリンク/);
   assert.match(appSource, /ノンアル/);
+});
+
+test("customer categories collapse after selection while the product list keeps its own scroll", () => {
+  assert.match(customerScreen, /const \[drinkCategoryNavOpen, setDrinkCategoryNavOpen\] = useState\(true\)/);
+  assert.match(customerScreen, /currentMajorCategory\.id === "drink" && !drinkCategoryNavOpen \? <button className="category-return-button category-return-button--inline"/);
+  assert.match(customerScreen, />酒類選択に戻る<\/button>/);
+  assert.match(customerScreen, /setDrinkCategoryNavOpen\(true\)/);
+  assert.match(customerScreen, /setDrinkCategoryNavOpen\(false\)/);
+  assert.match(customerScreen, /menu-heading[\s\S]*menu-heading__breadcrumb[\s\S]*category-return-button category-return-button--inline/);
+  assert.match(styles, /\.category-return-button--inline \{[\s\S]*min-height: 44px[\s\S]*padding: 0 10px[\s\S]*border: 3px solid var\(--red\)[\s\S]*background: #fff1d8[\s\S]*font-size: 13px/);
+  assert.match(styles, /\.menu-list \{[\s\S]*overflow-y: auto/);
+  assert.match(styles, /\.category-return-button \{[\s\S]*min-height: 44px/);
+  assert.doesNotMatch(customerScreen, /category-nav-toggle|▲ 商品を見る|▼ カテゴリー/);
+  assert.doesNotMatch(customerScreen, /setTimeout\([\s\S]*20[\s\S]*000/);
+});
+
+test("tapping the central menu folds only the expanded major rail and keeps the original action", () => {
+  assert.match(customerScreen, /const collapseMajorNavOnMenuTap = \(\) => \{[\s\S]*if \(majorNavOpen\) setMajorNavOpen\(false\)/);
+  assert.match(customerScreen, /const handleMenuClick = \(\) => \{[\s\S]*collapseMajorNavOnMenuTap\(\);[\s\S]*handleMenuInteraction\(\);/);
+  assert.match(customerScreen, /<section className="menu-panel" onWheel=\{handleMenuInteraction\} onTouchMove=\{handleMenuInteraction\} onClick=\{handleMenuClick\}>/);
+  assert.match(customerScreen, /onClick=\{\(\) => setDetailItem\(item\)\}/);
+  assert.match(customerScreen, /onClick=\{\(\) => selectSubcategory\(category\.id\)\}/);
+  assert.match(customerScreen, /scrollIntoView\(\{ behavior: "smooth", block: "start" \}\)/);
+  assert.doesNotMatch(customerScreen, /customer-content" onClick|cart-panel" onClick|customer-header" onClick|customer-footer" onClick/);
+});
+
+test("menu interaction stores the common action row offscreen and restores it after five seconds", () => {
+  assert.match(customerScreen, /const \[isMenuHeaderHidden, setIsMenuHeaderHidden\] = useState\(false\)/);
+  assert.match(customerScreen, /const handleMenuInteraction = \(\) => \{[\s\S]*setIsMenuHeaderHidden\(true\)[\s\S]*}, 5000\);/);
+  assert.match(customerScreen, /<header className=\{`customer-header \$\{isMenuHeaderHidden \? "customer-header--menu-hidden" : ""\}`\}>/);
+  assert.match(customerScreen, /<section className=\{`customer-main \$\{isMenuHeaderHidden \? "customer-main--menu-active" : ""\}`\}>/);
+  assert.match(customerScreen, /<section className="menu-panel" onWheel=\{handleMenuInteraction\} onTouchMove=\{handleMenuInteraction\} onClick=\{handleMenuClick\}>/);
+  assert.match(styles, /\.customer-header--menu-hidden \{ transform: translateY\(-100%\); pointer-events: none; opacity: 0/);
+  assert.match(styles, /\.customer-main--menu-active \{ grid-template-rows: 0 auto minmax\(0, 1fr\) 32px; \}/);
+  assert.match(styles, /\.customer-main--menu-active \.customer-header \{ min-height: 0; height: 0; padding-block: 0[\s\S]*visibility: hidden/);
+});
+
+test("customer common actions stay outside the independently scrolling content row", () => {
+  assert.match(customerScreen, /<header className=\{`customer-header \$\{isMenuHeaderHidden \? "customer-header--menu-hidden" : ""\}`\}>[\s\S]*<div className="customer-content">/);
+  assert.match(styles, /\.customer-main \{[\s\S]*display: grid;[\s\S]*grid-template-rows: auto auto minmax\(0, 1fr\) 32px/);
+  assert.match(styles, /\.customer-content \{[\s\S]*min-height: 0;[\s\S]*grid-template-columns/);
+  assert.match(styles, /\.menu-list \{[\s\S]*overflow-y: auto/);
+  assert.match(customerScreen, /注文履歴/);
+  assert.match(customerScreen, /スタッフを呼ぶ/);
+  assert.match(customerScreen, /お会計/);
+  assert.match(customerScreen, /タクシー・運転代行/);
+});
+
+test("customer footer keeps information replaceable and shows smoking availability", () => {
+  assert.match(appSource, /const CUSTOMER_FOOTER_INFORMATION = ""/);
+  assert.match(customerScreen, /CUSTOMER_FOOTER_INFORMATION \? <span>\{CUSTOMER_FOOTER_INFORMATION\}<\/span> : null/);
+  assert.match(customerScreen, /<strong>全席喫煙可能<\/strong>/);
+  assert.doesNotMatch(customerScreen, /アレルギー・原材料についてはスタッフまでお尋ねください。|<strong>店内禁煙<\/strong>/);
+});
+
+test("cart cancel buttons decrement one quantity at a time", () => {
+  assert.match(customerScreen, /const decrementCartRow = \(key\) => \{[\s\S]*if \(row\.quantity <= 1\)[\s\S]*row\.quantity - 1/);
+  assert.match(customerScreen, /onClick=\{\(\) => decrementCartRow\(row\.key\)\}/);
+  assert.match(customerScreen, /を1点取り消す/);
+});
+
+test("A90 landscape keeps product information readable beside a compact cart", () => {
+  const a90Styles = styles.slice(styles.indexOf("@media (max-width: 1350px)"), styles.indexOf("@media (orientation: landscape) and (max-height: 700px)"));
+  assert.match(a90Styles, /\.customer-content \{[\s\S]*grid-template-columns: minmax\(0, 1fr\) clamp\(280px, 30vw, 320px\)/);
+  assert.match(a90Styles, /\.cart-panel > header \{[\s\S]*min-height: 58px[\s\S]*padding: 8px 12px/);
+  assert.match(a90Styles, /\.cart-panel > header h2 \{ font-size: 16px; \}/);
+  assert.match(a90Styles, /\.menu-row \{[\s\S]*grid-template-columns: 48px 64px minmax\(140px, 1fr\) 86px 156px/);
+  assert.match(a90Styles, /\.shochu-menu-row \{[\s\S]*grid-template-columns: 48px 64px minmax\(140px, 1fr\) 84px 148px/);
+  assert.match(a90Styles, /\.menu-row__copy \{ min-width: 140px/);
+  assert.match(a90Styles, /\.menu-row__copy p \{[\s\S]*-webkit-line-clamp: 3[\s\S]*white-space: normal/);
+  assert.match(styles, /\.menu-row__copy h2 \{[\s\S]*white-space: nowrap/);
+  assert.match(styles, /\.cart-list \{ flex: 1; min-height: 0; overflow-y: auto/);
+});
+
+test("customer route fits A90 and 1024x499 geometry without document overflow", () => {
+  assert.match(styles, /\.customer-app \{ width: 100%; height: 100dvh; min-width: 0; min-height: 0/);
+  assert.match(styles, /#root:has\(\.customer-app\) \{ width: 100%; height: 100%; min-width: 0; min-height: 0; \}/);
+  assert.doesNotMatch(styles, /\.customer-app \{[^}]*overflow:\s*hidden/);
+  assert.doesNotMatch(styles, /\.customer-main \{[^}]*overflow:\s*hidden/);
+  assert.doesNotMatch(styles, /\.customer-sidebar \{[^}]*overflow:\s*hidden/);
+  assert.match(styles, /\.customer-content \{ min-width: 0; min-height: 0;[\s\S]*grid-template-columns: minmax\(0, 1fr\) minmax\(0, 454px\)/);
+  assert.match(styles, /@media \(min-width: 901px\) and \(max-width: 1100px\)[\s\S]*\.customer-header \{[\s\S]*grid-template-columns: repeat\(4, minmax\(0, 1fr\)\)/);
+  assert.match(styles, /\.customer-header > \* \{ min-width: 0; box-sizing: border-box; \}/);
+  assert.match(styles, /@media \(min-width: 901px\) and \(max-width: 1100px\)[\s\S]*\.menu-row \{ grid-template-columns: 40px 52px minmax\(0, 1fr\) 70px 112px/);
+  assert.match(styles, /@media \(min-width: 901px\) and \(max-height: 600px\)[\s\S]*\.customer-sidebar \{ height: 100%; box-sizing: border-box; padding: 12px 16px; display: grid; grid-template-rows: auto minmax\(0, 1fr\) auto auto/);
+  assert.match(styles, /@media \(min-width: 901px\) and \(max-height: 600px\)[\s\S]*\.category-nav button \{ min-height: 44px; height: 100%/);
+  assert.match(styles, /@media \(min-width: 901px\) and \(max-height: 600px\)[\s\S]*\.cart-empty \{ min-height: 0; \}/);
+  assert.match(styles, /@media \(min-width: 901px\) and \(max-height: 600px\)[\s\S]*\.confirm-button \{ width: calc\(100% - 28px\); box-sizing: border-box/);
+  assert.match(styles, /\.customer-footer \{ width: 100%; height: 32px; min-width: 0/);
+  assert.match(styles, /\.customer-main \{ min-width: 0; min-height: 0; display: grid; grid-template-rows: auto auto minmax\(0, 1fr\) 32px; \}/);
+  assert.match(styles, /\.customer-footer \{ width: 100%; height: 32px; min-width: 0; min-height: 32px; box-sizing: border-box;[\s\S]*line-height: 1;[\s\S]*white-space: nowrap; \}/);
+  assert.match(styles, /\.customer-footer span \{ min-width: 0; white-space: nowrap; \}/);
 });
 
 test("shochu rows keep fixed image, price, and action columns without changing the detail image", () => {
@@ -46,7 +152,7 @@ test("shochu rows keep fixed image, price, and action columns without changing t
   assert.match(styles, /\.shochu-menu-row \.product-image-button \{ width: 84px; height: 108px; \}/);
   assert.match(styles, /\.shochu-serving-button \{[\s\S]*width: 160px[\s\S]*white-space: nowrap/);
   assert.match(styles, /\.shochu-menu-row\.menu-row--no-image \{ grid-template-columns: 60px minmax\(0, 1fr\) 104px 160px; \}/);
-  assert.match(styles, /\.shochu-menu-row \{ grid-template-columns: 48px 64px minmax\(0, 1fr\) 84px 148px; column-gap: 10px/);
+  assert.match(styles, /\.shochu-menu-row \{ grid-template-columns: 48px 64px minmax\(140px, 1fr\) 84px 148px; column-gap: 10px/);
   assert.match(styles, /\.shochu-serving-button \{ width: 138px; min-width: 138px/);
   assert.match(styles, /\.shochu-menu-row \.menu-price b \{ font-size: 28px; line-height: 1\.05; font-weight: 900/);
   assert.match(styles, /\.menu-price b \{ font: 900 30px\/1\.05 var\(--font-ui\); font-variant-numeric: tabular-nums; font-feature-settings: "tnum" 1/);
@@ -135,8 +241,9 @@ test("major category selection collapses to a 78px rail and the rail reopens it"
 
 test("all customer product lists use a shared compact header", () => {
   const menuHeaderCss = styles.slice(styles.indexOf(".menu-heading {"), styles.indexOf(".menu-list {"));
-  assert.match(menuHeaderCss, /\.menu-heading \{[\s\S]*min-height: 86px/);
-  assert.match(menuHeaderCss, /\.menu-heading__body > div \{[\s\S]*display: flex/);
+  assert.match(menuHeaderCss, /\.menu-heading \{[\s\S]*min-height: 44px[\s\S]*display: flex/);
+  assert.match(menuHeaderCss, /\.menu-heading__breadcrumb strong \{[\s\S]*font-size: 2em/);
+  assert.doesNotMatch(menuHeaderCss, /menu-heading__body|menu-heading h1|menu-heading p/);
   assert.match(menuHeaderCss, /\.subcategory-nav \{[\s\S]*grid-template-columns: repeat\(4/);
   assert.match(menuHeaderCss, /padding: 6px 0 8px/);
   assert.match(styles, /\.empty-state \{/);

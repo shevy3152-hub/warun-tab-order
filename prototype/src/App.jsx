@@ -184,7 +184,7 @@ const defaultState = {
 };
 
 const CUSTOMER_DRINK_SUBCATEGORIES = [
-  { id: "recommended", name: "おすすめ", categoryIds: [] },
+  { id: "recommended", name: "おかわり！", categoryIds: [] },
   { id: "beer", name: "ビール", categoryIds: ["beer"] },
   { id: "highball", name: "ハイボール", categoryIds: ["highball"] },
   { id: "sour", name: "サワー・酎ハイ", categoryIds: ["sour"] },
@@ -203,6 +203,7 @@ const CUSTOMER_MAJOR_CATEGORIES = [
 
 const CUSTOMER_DRINK_CATEGORY_IDS = new Set(CUSTOMER_DRINK_SUBCATEGORIES.flatMap((subcategory) => subcategory.categoryIds));
 const CUSTOMER_FEATURED_MENU_IDS = ["edamame", "dashimaki", "beer", "lemon", "karaage"];
+const CUSTOMER_FOOTER_INFORMATION = "";
 
 function makeId(prefix) {
   return `${prefix}-${crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`}`;
@@ -523,6 +524,7 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
   const [majorCategoryId, setMajorCategoryId] = useState("drink");
   const [majorNavOpen, setMajorNavOpen] = useState(true);
   const [categoryId, setCategoryId] = useState("recommended");
+  const [drinkCategoryNavOpen, setDrinkCategoryNavOpen] = useState(true);
   const [cart, setCart] = useState(() => apiMode ? {} : Object.fromEntries([
     ["edamame", 1], ["dashimaki", 1], ["beer", 2], ["lemon", 1], ["karaage", 1], ["yakitori", 2], ["otoshi", 2],
   ].map(([menuItemId, quantity]) => [menuItemId, { menuItemId, quantity }])));
@@ -532,11 +534,13 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
   const [sakeSelectionError, setSakeSelectionError] = useState("");
   const [shochuSelection, setShochuSelection] = useState(null);
   const [notice, setNotice] = useState(null);
+  const [isMenuHeaderHidden, setIsMenuHeaderHidden] = useState(false);
   const [apiOrders, setApiOrders] = useState([]);
   const [apiHistoryState, setApiHistoryState] = useState({ loading: false, error: false });
   const [historyRefreshKey, setHistoryRefreshKey] = useState(0);
   const [submitting, setSubmitting] = useState(false);
   const submitLock = useRef(false);
+  const menuIdleTimerRef = useRef(null);
   const imoRef = useRef(null);
   const otherRef = useRef(null);
   const currentMajorCategory = CUSTOMER_MAJOR_CATEGORIES.find((category) => category.id === majorCategoryId) ?? CUSTOMER_MAJOR_CATEGORIES[0];
@@ -545,9 +549,6 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
   const currentCategoryLabel = currentCategory?.id === "sake" ? "日本酒・地酒" : currentCategory?.name;
   const isShochu = currentCategory?.id === "shochu";
   const isSake = currentCategory?.id === "sake";
-  const currentItems = currentCategory?.id === "recommended"
-    ? menuItems.filter((item) => !CUSTOMER_DRINK_CATEGORY_IDS.has(item.categoryId) || (!apiMenu && CUSTOMER_FEATURED_MENU_IDS.includes(item.id)))
-    : menuItems.filter((item) => currentCategory?.categoryIds.includes(item.categoryId)).sort(compareMenuItems);
   const cartRows = Object.entries(cart).map(([key, selection]) => ({
     key,
     ...selection,
@@ -557,6 +558,12 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
   const customerHistory = (apiMode ? apiOrders : state.orders)
     .filter((order) => apiMode || order.tableId === device.tableId)
     .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+  const recentDrinkItemIds = [...new Set(customerHistory.flatMap((order) => order.items ?? [])
+    .filter((item) => CUSTOMER_DRINK_CATEGORY_IDS.has(menuItems.find((menu) => menu.id === item.menuItemId)?.categoryId))
+    .map((item) => item.menuItemId))];
+  const currentItems = currentCategory?.id === "recommended"
+    ? recentDrinkItemIds.map((itemId) => menuItems.find((item) => item.id === itemId)).filter(Boolean)
+    : menuItems.filter((item) => currentCategory?.categoryIds.includes(item.categoryId)).sort(compareMenuItems);
 
   useEffect(() => {
     if (!apiMode) return undefined;
@@ -644,6 +651,10 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
     if (nextNotice) setNotice((current) => current?.kind === nextNotice.kind && current?.message === nextNotice.message ? current : nextNotice);
   }, [apiMode, customerHistory, state.orders]);
 
+  useEffect(() => () => {
+    if (menuIdleTimerRef.current) window.clearTimeout(menuIdleTimerRef.current);
+  }, []);
+
   const addSelection = (item, selection = {}, quantity = 1) => {
     if (!item || item.isSoldOut) return;
     const normalizedQuantity = Number.isInteger(quantity) && quantity > 0 ? quantity : 0;
@@ -659,6 +670,18 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
         quantity: (current[key]?.quantity ?? 0) + normalizedQuantity,
       },
     }));
+  };
+  const decrementCartRow = (key) => {
+    setCart((current) => {
+      const row = current[key];
+      if (!row) return current;
+      if (row.quantity <= 1) {
+        const next = { ...current };
+        delete next[key];
+        return next;
+      }
+      return { ...current, [key]: { ...row, quantity: row.quantity - 1 } };
+    });
   };
 
   const submitOrder = async () => {
@@ -760,6 +783,7 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
     const nextMajorCategory = CUSTOMER_MAJOR_CATEGORIES.find((category) => category.id === nextMajorCategoryId) ?? CUSTOMER_MAJOR_CATEGORIES[0];
     setMajorCategoryId(nextMajorCategory.id);
     setCategoryId(nextMajorCategory.subcategories[0]?.id ?? "recommended");
+    setDrinkCategoryNavOpen(true);
     setMajorNavOpen(false);
     setShochuSelection(null);
     setSakeSelection(null);
@@ -767,10 +791,26 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
   };
   const selectSubcategory = (nextCategoryId) => {
     setCategoryId(nextCategoryId);
+    setDrinkCategoryNavOpen(false);
     setMajorNavOpen(false);
     setShochuSelection(null);
     setSakeSelection(null);
     setSakeSelectionError("");
+  };
+  const collapseMajorNavOnMenuTap = () => {
+    if (majorNavOpen) setMajorNavOpen(false);
+  };
+  const handleMenuClick = () => {
+    collapseMajorNavOnMenuTap();
+    handleMenuInteraction();
+  };
+  const handleMenuInteraction = () => {
+    setIsMenuHeaderHidden(true);
+    if (menuIdleTimerRef.current) window.clearTimeout(menuIdleTimerRef.current);
+    menuIdleTimerRef.current = window.setTimeout(() => {
+      setIsMenuHeaderHidden(false);
+      menuIdleTimerRef.current = null;
+    }, 5000);
   };
   const selectedSakeItem = sakeSelection ? menuItems.find((item) => item.id === sakeSelection.itemId) : null;
   const selectedSakeVariant = selectedSakeItem?.variants.find((variant) => variant.variantId === sakeSelection?.variantId) ?? null;
@@ -834,18 +874,15 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
   return (
     <div className={`customer-app ${majorNavOpen ? "" : "customer-app--category-collapsed"}`}>
       <aside className="customer-sidebar">
-        <div className="customer-system-label">IZAKAYA<br />ORDER<br />SYSTEM</div>
-        <div className="customer-title"><span>お</span><span>品</span><span>書</span><span>き</span></div>
-        <p className="vertical-copy">おすすめの逸品を<br />ごゆっくりどうぞ。</p>
+        <div className="customer-title customer-title--horizontal"><span>IZAKAYA WARUN</span><strong>お品書き</strong></div>
         {majorNavOpen ? <nav className="category-nav" aria-label="大分類カテゴリー">
           {CUSTOMER_MAJOR_CATEGORIES.map((category, index) => <button key={category.id} className={category.id === majorCategoryId ? "is-active" : ""} onClick={() => selectMajorCategory(category.id)}><b>{String(index + 1).padStart(2, "0")}</b><span>{category.name}</span></button>)}
         </nav> : <button className="customer-sidebar__collapsed-toggle" onClick={() => setMajorNavOpen(true)} aria-label="カテゴリーを変更"><span>現在のカテゴリー</span><strong>{currentMajorCategory.name}</strong><span>カテゴリーを変更</span></button>}
         <div className="customer-hours"><b>本日の営業時間</b><span>17:00 — 24:00</span><small>（ラストオーダー 23:30）</small></div>
-        <Brand compact />
       </aside>
 
-      <section className="customer-main">
-        <header className="customer-header">
+      <section className={`customer-main ${isMenuHeaderHidden ? "customer-main--menu-active" : ""}`}>
+        <header className={`customer-header ${isMenuHeaderHidden ? "customer-header--menu-hidden" : ""}`}>
           <IconButton icon={ClipboardText} onClick={() => setModal("history")}>注文履歴</IconButton>
           <IconButton icon={Bell} onClick={() => setModal("staff")}>スタッフを呼ぶ</IconButton>
           <IconButton icon={CurrencyJpy} onClick={() => setModal("feature")}>お会計</IconButton>
@@ -856,11 +893,11 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
         {notice ? <div className={`customer-notice ${noticeKind === "success" ? "is-success" : "is-queued"}`}><span>{noticeKind === "success" ? <CheckCircle size={26} weight="fill" /> : noticeKind === "sending" ? <WifiHigh size={26} weight="bold" /> : <WifiSlash size={26} weight="bold" />}{noticeMessage}</span><button onClick={() => setNotice(null)} aria-label="通知を閉じる"><X size={20} /></button></div> : null}
 
         <div className="customer-content">
-          <section className="menu-panel">
-            <div className="menu-heading"><div className="menu-heading__breadcrumb"><span>{currentMajorCategory.name}</span><b>&gt;</b><strong>{currentCategoryLabel}</strong></div><div className="menu-heading__body"><div><span className="section-kicker">MENU</span><h1>{currentCategoryLabel}</h1></div><p>お好みの商品を<br />お選びください。</p></div></div>
-            <nav className={`subcategory-nav ${currentMajorCategory.id === "drink" ? "subcategory-nav--drink" : ""}`} aria-label={`${currentMajorCategory.name}の細分類`}>
+          <section className="menu-panel" onWheel={handleMenuInteraction} onTouchMove={handleMenuInteraction} onClick={handleMenuClick}>
+            <div className="menu-heading"><div className="menu-heading__breadcrumb"><span>{currentMajorCategory.name}</span><b>&gt;</b><strong>{currentCategoryLabel}</strong></div>{currentMajorCategory.id === "drink" && !drinkCategoryNavOpen ? <button className="category-return-button category-return-button--inline" type="button" onClick={() => setDrinkCategoryNavOpen(true)}>酒類選択に戻る</button> : null}</div>
+            {currentMajorCategory.id !== "drink" || drinkCategoryNavOpen ? <nav className={`subcategory-nav ${currentMajorCategory.id === "drink" ? "subcategory-nav--drink" : ""}`} aria-label={`${currentMajorCategory.name}の細分類`}>
               {currentSubcategories.map((category) => <button key={category.id} className={category.id === currentCategory?.id ? "is-active" : ""} onClick={() => selectSubcategory(category.id)}>{category.name}</button>)}
-            </nav>
+            </nav> : null}
             {isShochu ? <nav className="drink-jump-nav" aria-label="焼酎の分類"><button onClick={() => imoRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })}>芋</button><button onClick={() => otherRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })}>麦・その他</button></nav> : null}
             <div className="menu-list">
               {apiMenuState.loading ? <div className="empty-state"><ListBullets size={42} /><p>メニューを読み込んでいます。</p></div> : apiMenuState.error ? <div className="empty-state"><ListBullets size={42} /><p>メニューを取得できません。</p></div> : currentItems.length ? currentItems.map((item, index) => {
@@ -893,12 +930,12 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
           <aside className="cart-panel">
             <header><Receipt size={36} weight="bold" /><div><h2>ご注文内容</h2><span>ORDER SUMMARY</span></div></header>
             <div className="cart-list">
-              {cartRows.length ? cartRows.map((row, index) => <div className="cart-row" key={row.key}><span className="cart-row__index">{index + 1}</span><b>{selectionDisplayName(row.item, row)}</b><span>{row.quantity}点</span><button onClick={() => setCart((current) => { const next = { ...current }; delete next[row.key]; return next; })} aria-label={`${selectionDisplayName(row.item, row)}を削除`}><X size={18} /></button></div>) : <div className="cart-empty"><Receipt size={54} weight="thin" /><p>商品を追加すると<br />ここに表示されます。</p></div>}
+              {cartRows.length ? cartRows.map((row, index) => <div className="cart-row" key={row.key}><span className="cart-row__index">{index + 1}</span><b>{selectionDisplayName(row.item, row)}</b><span>{row.quantity}点</span><button onClick={() => decrementCartRow(row.key)} aria-label={`${selectionDisplayName(row.item, row)}を1点取り消す`}><X size={18} /></button></div>) : <div className="cart-empty"><Receipt size={54} weight="thin" /><p>商品を追加すると<br />ここに表示されます。</p></div>}
             </div>
             <button className="confirm-button" disabled={!cartCount} onClick={() => setModal("confirm")}>注文を確定する <ArrowRight size={28} weight="bold" /></button>
           </aside>
         </div>
-        <footer className="customer-footer"><b>INFORMATION</b><span>アレルギー・原材料についてはスタッフまでお尋ねください。</span><strong>店内禁煙</strong></footer>
+        <footer className="customer-footer"><b>INFORMATION</b>{CUSTOMER_FOOTER_INFORMATION ? <span>{CUSTOMER_FOOTER_INFORMATION}</span> : null}<strong>全席喫煙可能</strong></footer>
       </section>
 
       {modal === "confirm" ? <Modal title="注文内容の確認" onClose={() => { if (!submitting) setModal(null); }}><div className="confirm-list">{cartRows.map((row) => <div key={row.key}><b>{selectionDisplayName(row.item, row)}</b><span>{row.quantity}点</span></div>)}</div><p className="price-hidden-note">内容をご確認のうえ、注文を送信してください。</p><div className="modal-actions"><button className="button button--quiet" onClick={() => setModal(null)} disabled={submitting}>戻る</button><button className="button button--primary button--large" onClick={submitOrder} disabled={submitting}>{submitting ? "送信中" : online ? "注文を送信" : "送信待ちに保存"}</button></div></Modal> : null}
