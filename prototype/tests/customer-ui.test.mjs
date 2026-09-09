@@ -56,7 +56,10 @@ test("customer categories collapse after selection while the product list keeps 
   assert.match(customerScreen, /const \[drinkCategoryNavOpen, setDrinkCategoryNavOpen\] = useState\(true\)/);
   assert.match(customerScreen, /currentMajorCategory\.id === "drink" && !drinkCategoryNavOpen \? <button className="category-return-button category-return-button--inline"/);
   assert.match(customerScreen, />酒類選択に戻る<\/button>/);
-  assert.match(customerScreen, /setDrinkCategoryNavOpen\(true\)/);
+  assert.match(customerScreen, /const restoreDrinkCategoryNavigation = \(\) => \{[\s\S]*setDrinkCategoryNavOpen\(true\)[\s\S]*setShochuSelection\(null\)[\s\S]*setSakeSelection\(null\)/);
+  assert.match(customerScreen, /onClick=\{\(event\) => \{ event\.stopPropagation\(\); restoreDrinkCategoryNavigation\(\); \}\}/);
+  const restoreBlock = customerScreen.slice(customerScreen.indexOf("const restoreDrinkCategoryNavigation"), customerScreen.indexOf("const collapseMajorNavOnMenuTap"));
+  assert.doesNotMatch(restoreBlock, /setModal\(/);
   assert.match(customerScreen, /setDrinkCategoryNavOpen\(false\)/);
   assert.match(customerScreen, /menu-heading[\s\S]*menu-heading__breadcrumb[\s\S]*category-return-button category-return-button--inline/);
   assert.match(styles, /\.category-return-button--inline \{[\s\S]*min-height: 44px[\s\S]*padding: 0 10px[\s\S]*border: 3px solid var\(--red\)[\s\S]*background: #fff1d8[\s\S]*font-size: 13px/);
@@ -294,6 +297,7 @@ test("shochu uses a zero-based multi-quantity serving popup", () => {
   assert.match(styles, /\.modal--shochu \.modal-actions \{[\s\S]*width: 100%[\s\S]*grid-template-columns/);
   assert.match(styles, /\.modal--shochu \.modal-actions \.button \{[\s\S]*min-width: 0[\s\S]*width: 100%/);
   assert.match(styles, /\.modal--shochu \.modal__header h2 \{[\s\S]*font-size: clamp/);
+  assert.match(styles, /\.modal--shochu \.modal__header h2 \{[\s\S]*flex: 1 1 auto[\s\S]*min-width: 0[\s\S]*white-space: nowrap[\s\S]*word-break: keep-all/);
   assert.match(styles, /\.modal--shochu \{[\s\S]*max-height: calc\(100dvh - 40px\)[\s\S]*overflow: visible/);
   assert.match(styles, /@media \(orientation: landscape\) and \(max-height: 700px\)/);
   assert.match(styles, /\.modal--shochu \{[\s\S]*max-height: calc\(100dvh - 16px\)/);

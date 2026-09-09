@@ -797,6 +797,12 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
     setSakeSelection(null);
     setSakeSelectionError("");
   };
+  const restoreDrinkCategoryNavigation = () => {
+    setDrinkCategoryNavOpen(true);
+    setShochuSelection(null);
+    setSakeSelection(null);
+    setSakeSelectionError("");
+  };
   const collapseMajorNavOnMenuTap = () => {
     if (majorNavOpen) setMajorNavOpen(false);
   };
@@ -894,7 +900,7 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
 
         <div className="customer-content">
           <section className="menu-panel" onWheel={handleMenuInteraction} onTouchMove={handleMenuInteraction} onClick={handleMenuClick}>
-            <div className="menu-heading"><div className="menu-heading__breadcrumb"><span>{currentMajorCategory.name}</span><b>&gt;</b><strong>{currentCategoryLabel}</strong></div>{currentMajorCategory.id === "drink" && !drinkCategoryNavOpen ? <button className="category-return-button category-return-button--inline" type="button" onClick={() => setDrinkCategoryNavOpen(true)}>酒類選択に戻る</button> : null}</div>
+            <div className="menu-heading"><div className="menu-heading__breadcrumb"><span>{currentMajorCategory.name}</span><b>&gt;</b><strong>{currentCategoryLabel}</strong></div>{currentMajorCategory.id === "drink" && !drinkCategoryNavOpen ? <button className="category-return-button category-return-button--inline" type="button" onClick={(event) => { event.stopPropagation(); restoreDrinkCategoryNavigation(); }}>酒類選択に戻る</button> : null}</div>
             {currentMajorCategory.id !== "drink" || drinkCategoryNavOpen ? <nav className={`subcategory-nav ${currentMajorCategory.id === "drink" ? "subcategory-nav--drink" : ""}`} aria-label={`${currentMajorCategory.name}の細分類`}>
               {currentSubcategories.map((category) => <button key={category.id} className={category.id === currentCategory?.id ? "is-active" : ""} onClick={() => selectSubcategory(category.id)}>{category.name}</button>)}
             </nav> : null}
