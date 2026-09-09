@@ -14,7 +14,7 @@ Androidキオスク基盤の実装commitは `5921539`（`feat: add A90 WebView k
 - WebViewの固定originはsafe-copyの `http://192.168.11.6:25173`。JavaScript／DOM Storageを有効化し、WebViewデータは保持する。
 - pairing URL policyは、固定scheme／host／port／path、userInfo・query拒否、pairing fragment形式検証、不正URLの客席URLfallback、Intent dataの秘密値除去を実装している。
 - A90カメラからandroid-kioskが起動する実機確認はPASS。User 0の`192.168.11.6` host選択は`Enabled`。
-- fragmentなしの秘密値なしQRで端末登録画面への安全なfallbackを確認。実pairing code／実QRのclaimは未実施。
+- fragmentなしの秘密値なしQRで端末登録画面への安全なfallbackを確認済み。実pairingの導線は下記の管理された再pairing checkpointで確認した。
 - renderer障害と表示速度の過去事象は現在再現なし。初回表示は約770ms、HOME復帰は約248〜278ms。`process is bad`、renderer crash、安全な再試行画面、watchdog再生成は確認なし。
 - 専用QRスキャナーは現時点で不要。標準QRカメラのVIEW Intentからandroid-kioskへ渡る導線を確認済み。
 - 必須リリースブロッカー: `キオスク緊急解除.cmd`。
@@ -36,6 +36,25 @@ Androidキオスク基盤の実装commitは `5921539`（`feat: add A90 WebView k
 - 文書更新commitは `docs: record A90 kiosk checkpoint` として別commitにする。
 - 文書commit後はstaged差分なし、tracked差分なし、未追跡は`.codex-worktrees/`と`docs/isami-dedup-import.md`のみとする。
 - `.codex-worktrees/`、`docs/isami-dedup-import.md`は変更・stage対象外。
+
+## 2026-09-09 A90 managed pairing checkpoint（現行正本）
+
+固定origin `http://192.168.11.6:25173` のsafe-copyで、table 1をChromeからA90のandroid-kioskへ管理された再pairingで移行した。
+
+- A90前面package: `jp.co.warun.androidkiosk`
+- table 1の客席メニュー表示: 成功
+- 新customer device: `active`、table 1へ割当済み
+- 旧Chrome device: `revoked`
+- 重複割当: 0
+- pairing QR: 1件のみ発行・使用済み。pairing code、QR payload、token、device IDは記録していない。
+- 保護対象件数: `orders=17`、`order_items=30`、`event_log=147`、`menu_items=43`、`table_sessions=4`
+- safe-copy health: localhost／LANともHTTP 200、`ready`、`db=ready`、schema v5
+- renderer異常: `process is bad`、renderer crash、`renderProcessGone`なし
+- `/v1/menu`: 客席メニューの実画面表示による間接確認。直接のHTTP 200ログは未取得。
+- 事前バックアップ: `server/var/safe-copies/backups/initial-menu-20260818-before-table1-android-kiosk-20260909-200914027.sqlite3`
+- 事前バックアップSHA-256: `8279c46e48d095d501347587db8fba5c61a4d9f3c11fac73011ea987f9854a25`
+- 次のタスク: A90 WebView上での客席UI受入確認
+- 未実装: Lock task、隠しタップ＋PIN、`キオスク緊急解除.cmd`、自動起動
 
 ## 2026-08-30 customer UI code checkpoint
 
