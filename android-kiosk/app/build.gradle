@@ -1,0 +1,27 @@
+apply plugin: 'com.android.application'
+
+android {
+    namespace 'jp.co.warun.androidkiosk'
+    compileSdk 35
+
+    buildFeatures {
+        buildConfig true
+    }
+
+    defaultConfig {
+        applicationId 'jp.co.warun.androidkiosk'
+        minSdk 23
+        targetSdk 35
+        versionCode 1
+        versionName '0.1.0'
+    }
+}
+
+tasks.register('pairingPolicyTest', JavaExec) {
+    dependsOn 'compileDebugUnitTestJavaWithJavac'
+    classpath = files(
+        "$buildDir/intermediates/javac/debug/compileDebugJavaWithJavac/classes",
+        "$buildDir/intermediates/javac/debugUnitTest/compileDebugUnitTestJavaWithJavac/classes"
+    )
+    mainClass = 'jp.co.warun.androidkiosk.PairingUrlPolicyTest'
+}
