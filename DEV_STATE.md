@@ -56,6 +56,34 @@ Androidキオスク基盤の実装commitは `5921539`（`feat: add A90 WebView k
 - 次のタスク: A90 WebView上での客席UI受入確認
 - 未実装: Lock task、隠しタップ＋PIN、`キオスク緊急解除.cmd`、自動起動
 
+## 2026-09-09 A90 customer UI acceptance checkpoint（現行正本）
+
+A90 WebView実機でtable 1の認証済み客席UIを受入確認し、確認された2点を実装commit `9f33def7d3ab9cdac3887a2ee7fb5737749e5b79`（`fix: finalize A90 customer menu layout`）へ確定した。Androidキオスク、server、DB、pairing、注文送信は変更していない。
+
+- A90前面: `jp.co.warun.androidkiosk`
+- table 1客席メニュー: 表示成功
+- 実viewport: `1313x820 CSS px`
+- 横画面固定、immersive WebView、Android system bar非表示、debug overlay非表示
+- 初期画面: 左レール、営業時間・下枠、上部共通操作、table 1、8カテゴリー、空の注文内容、footer、画面端の収まりを確認
+- ビール画面の「酒類選択に戻る」: 8カテゴリーへ正式復帰。実装スタブ・alert・仮画面なし
+- 焼酎画面: 芋／麦・その他切替、商品一覧、商品詳細、飲み方選択を確認
+- 黒霧島の飲み方モーダル: 商品名は横一行で表示され、数量操作・飲み方ボタン・閉じる操作を確認
+- 商品一覧スクロール: 商品一覧のみがスクロールし、画面全体・上部共通操作・注文領域は固定
+- 商品追加・削除: 複数商品を注文内容へ追加し、`×`で1点ずつ削除。注文確定・送信は未実施
+- 未確認事項: 注文一覧は11行が画面内に収まり、注文一覧単独スクロールは未発生
+- DB確認件数: `orders=17`、`order_items=30`、`event_log=147`、`menu_items=43`、`table_sessions=4`。UI確認前後で不変
+- safe-copy health: localhost／LANともHTTP 200、`ready`、`db=ready`、schema v5
+
+### A90 customer UI checkpoint検証
+
+- 関連UIテスト: 34/34 PASS
+- prototype全体テスト: 91/91 PASS
+- Direct Vite build: 4580 modules transformed、PASS
+- local distとsafe-copy HTTP配信HTML／主要assetの一致: PASS
+- `git diff --check`: whitespace errorなし。既存のLF/CRLF変換警告のみ
+- Android APK再インストール、app data削除、OS再起動、DB操作、pairing操作、注文送信は実施していない
+- 次の確認候補: 注文一覧が画面内に収まらない件数で、注文一覧単独スクロールを追加確認する
+
 ## 2026-08-30 customer UI code checkpoint
 
 本セクションを現行正本とする。実装commit（code checkpoint）は `c085b29fd80342e074b1dc94abcd702d177900e5`（`feat: refine customer menu interactions`）。この後の文書更新commitは別のHEADを作るため、実装状態の基準としてはこのcode checkpointを使用する。
