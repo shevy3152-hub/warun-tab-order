@@ -1,7 +1,41 @@
 # 開発状態
 
-最終更新: 2026-08-29
+最終更新: 2026-09-09
 対象: `C:\Users\user\Documents\ChatGPT\タブレットオーダーシステム`
+
+## 2026-09-09 A90 Android kiosk checkpoint（現行正本）
+
+Androidキオスク基盤の実装commitは `5921539`（`feat: add A90 WebView kiosk foundation`）。この後の文書更新commitは別のHEADを作るため、Android実装の基準はこのcommitとする。
+
+- branch: `feature/sqlite-foundation`
+- Android実装checkpoint: `5921539`
+- A90実viewport: `1313x820 CSS px`
+- Android側は横画面固定、immersive表示のWebViewキオスク。Browser Fullscreen APIは使用しない。
+- WebViewの固定originはsafe-copyの `http://192.168.11.6:25173`。JavaScript／DOM Storageを有効化し、WebViewデータは保持する。
+- pairing URL policyは、固定scheme／host／port／path、userInfo・query拒否、pairing fragment形式検証、不正URLの客席URLfallback、Intent dataの秘密値除去を実装している。
+- A90カメラからandroid-kioskが起動する実機確認はPASS。User 0の`192.168.11.6` host選択は`Enabled`。
+- fragmentなしの秘密値なしQRで端末登録画面への安全なfallbackを確認。実pairing code／実QRのclaimは未実施。
+- renderer障害と表示速度の過去事象は現在再現なし。初回表示は約770ms、HOME復帰は約248〜278ms。`process is bad`、renderer crash、安全な再試行画面、watchdog再生成は確認なし。
+- 専用QRスキャナーは現時点で不要。標準QRカメラのVIEW Intentからandroid-kioskへ渡る導線を確認済み。
+- 必須リリースブロッカー: `キオスク緊急解除.cmd`。
+- Lock task mode、隠しタップ＋PIN、自動起動は未実装。
+- A90のhost選択Enabledを、将来の初期設定手順または`cmd`へ組み込む必要がある。
+
+### Android checkpoint検証
+
+- `assembleDebug`: PASS。
+- `lintDebug`: PASS。
+- `PairingUrlPolicyTest`: 4 cases PASS。
+- debug正常終了ACTION、計測表示、console診断、native HTTP probeは`BuildConfig.DEBUG`および明示debug指定でのみ有効。release通常起動では有効にならない。
+- pairing URLのfragment、pairing code、token、cookie、credential、device固有値はログ・overlayへ出さない。ログURLはquery／fragment除去済み。
+- APK、`build/`、`.gradle/`、`local.properties`はcommit対象外。
+
+### Git状態
+
+- Android実装commit直後のHEAD: `5921539`。
+- 文書更新commitは `docs: record A90 kiosk checkpoint` として別commitにする。
+- 文書commit後はstaged差分なし、tracked差分なし、未追跡は`.codex-worktrees/`と`docs/isami-dedup-import.md`のみとする。
+- `.codex-worktrees/`、`docs/isami-dedup-import.md`は変更・stage対象外。
 
 ## 2026-08-30 customer UI code checkpoint
 
