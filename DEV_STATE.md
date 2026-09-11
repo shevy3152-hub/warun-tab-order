@@ -308,3 +308,16 @@ A90 WebView実機でtable 1の認証済み客席UIを受入確認し、確認さ
 - 5回失敗・60秒lockoutなどの境界条件はunit testで確認したが、実機では発動させていない。
 - 通常スタッフ解除と既存の緊急解除CMDが揃った。現在はimmersive表示で、正式なLock Taskは未導入である。
 - 次のタスクはLock Task導入後の通常解除／緊急解除の再受入である。
+
+## 2026-09-11 A90 Lock Task調査と採用方針
+
+- A90はAndroid 14／API 34である。
+- device owner、profile owner、active device adminはなく、有効なDPC／EMMもない。
+- `jp.co.warun.androidkiosk`はLock Task許可リストに登録されておらず、現在のLock Task stateは`NONE`である。
+- 現状のまま正式Lock Taskを導入することはできない。DPC／device owner化には端末初期化を伴う可能性があるため、現在は実施しない。
+- 採用方針は、現在のimmersiveキオスクで開発・試験運用を継続することとする。Androidの画面固定も現時点では実施しない。
+- 7回タップ＋4桁PINを通常のスタッフ解除として使用し、`キオスク緊急解除.cmd`をADB接続時の障害対応として使用する。
+- immersiveは正式Lock Taskではなく、Androidのシステム操作によってHOMEへ抜けられる可能性が残る。
+- 注文管理画面からのキオスク解除は、DPCまたは安全な端末制御経路を設計した後へ延期する。
+- 正式Lock Taskは、A90を初期化できる時期または次期端末導入時に再検討する。
+- 次の開発候補は、端末再起動後のキオスク起動・復帰、server停止・LAN切断時の安全な案内と自動再接続、長時間連続稼働試験、release APK作成と試験運用である。
