@@ -259,6 +259,22 @@ A90 WebView実機でtable 1の認証済み客席UIを受入確認し、確認さ
 - read-only確認時点でhealthはlocalhost／LANともHTTP 200、`ready`、`db=ready`、schema v5、integrity_check `ok`、foreign_key_check 0件。orders 14、order_items 23、menu_items 43、event_log 142を保持している。
 - pairing code、QR payload、token、token hashは記録していない。コード、CSS、server、network、Git stage・commitは変更していない。
 
+## 2026-09-11 Windowsキオスク緊急解除ツール実機PASS
+
+- Windowsダブルクリック用のルート直下 `キオスク緊急解除.cmd` を追加した。
+- ADBを `%LOCALAPPDATA%\Android\Sdk\platform-tools\adb.exe`、続いてPATHから自動探索する。USB ADB／Wireless ADBに対応し、online端末が0台・1台・複数台の場合を安全に分岐する。
+- 複数台の場合は自動推測せず番号選択し、以後のADBコマンドへ選択serialを明示する。個人環境固有の絶対パスや固定ADB接続portは含めていない。
+- 正常解除は既存の `jp.co.warun.androidkiosk.action.DEBUG_NORMAL_EXIT` を明示componentへ送信し、Activity終了後にAndroid HOMEへ復帰する。
+- 正常解除を物理A90（serialは記録しない）で3回確認し、HOMEは `com.android.launcher3` だった。
+- 再起動後、再pairingなしでtable 1客席画面へ復帰した。pairing、アプリデータ、注文データは保持されている。
+- renderer異常、`process is bad`、`renderProcessGone`、安全な再試行画面は確認されなかった。
+- safe-copy healthはlocalhost／LANともHTTP 200、`ready`、`db=ready`、schema v5。DB件数は orders 20、order_items 33、event_log 162、menu_items 43、table_sessions 6で不変、`integrity_check=ok`、foreign key違反0件だった。
+- 正常解除が失敗した場合のみ、再試行・強制解除・中止を選択できる。強制解除は明示選択時のみLock Task解除→force-stop→HOMEを実行する分岐であり、今回の実機検証では静的確認のみで未実行。
+- 現在はimmersiveキオスクであり、Lock Task導入後に正常／強制解除経路を再受入する必要がある。
+- Androidソース、Web UI、server、DB、runtime-state、pairing、device、注文、A90設定は変更していない。
+- Gradle wrapperおよびPATH上のGradleがなく、Android build／lint／unit testは今回未実行。ただしCMDのみの変更で、既存APKを用いた実機検証はPASSした。
+- 次のタスクは、隠し操作＋PINによる通常解除、その後のLock Task導入。
+
 ## 2026-09-11 table 1注文E2E完了
 
 - table 1から黒霧島／水割り／数量1を1回だけ送信し、客席で受付成功を確認した。
