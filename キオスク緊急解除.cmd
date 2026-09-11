@@ -160,33 +160,82 @@ exit /b 0
 set "DEVICE_COUNT=0"
 for /l %%N in (1,1,20) do (
   set "SERIAL_%%N="
+  set "PHYS_%%N="
+  set "MODEL_%%N="
   set "DESC_%%N="
+  set "KEY_%%N="
+  set "PRIORITY_%%N="
 )
 for /f "skip=1 tokens=1,2,*" %%A in ('"%ADB%" devices -l') do (
-  if "%%B"=="device" (
-    set /a DEVICE_COUNT+=1
-    set "SERIAL_!DEVICE_COUNT!=%%A"
-    set "DESC_!DEVICE_COUNT!=%%C"
-  )
+  if "%%B"=="device" call :add_device "%%A" "%%C"
 )
-if not "%DEVICE_COUNT%"=="0" (
-  for /l %%N in (1,1,%DEVICE_COUNT%) do echo [%%N] !SERIAL_%%N! !DESC_%%N!
+if not "%DEVICE_COUNT%"=="0" for /l %%N in (1,1,%DEVICE_COUNT%) do echo [%%N] model=!MODEL_%%N! physical-serial=!PHYS_%%N! adb=!SERIAL_%%N!
+exit /b 0
+
+:add_device
+set "CANDIDATE=%~1"
+set "CAND_DESC=%~2"
+set "CAND_PHYS="
+set "PROP_FILE=%TEMP%\warun-adb-prop-%RANDOM%.tmp"
+"%ADB%" -s "%CANDIDATE%" shell getprop ro.serialno > "%PROP_FILE%" 2>nul
+for /f "usebackq delims=" %%S in ("%PROP_FILE%") do if not defined CAND_PHYS set "CAND_PHYS=%%S"
+del /q "%PROP_FILE%" >nul 2>&1
+if not defined CAND_PHYS (
+  set "PROP_FILE=%TEMP%\warun-adb-prop-%RANDOM%.tmp"
+  "%ADB%" -s "%CANDIDATE%" shell getprop ro.boot.serialno > "%PROP_FILE%" 2>nul
+  for /f "usebackq delims=" %%S in ("%PROP_FILE%") do if not defined CAND_PHYS set "CAND_PHYS=%%S"
+  del /q "%PROP_FILE%" >nul 2>&1
+)
+if /i "!CAND_PHYS!"=="unknown" set "CAND_PHYS="
+set "CAND_KEY=!CAND_PHYS!"
+if not defined CAND_KEY set "CAND_KEY=unknown:!CANDIDATE!"
+set "CAND_MODEL="
+set "PROP_FILE=%TEMP%\warun-adb-prop-%RANDOM%.tmp"
+"%ADB%" -s "%CANDIDATE%" shell getprop ro.product.model > "%PROP_FILE%" 2>nul
+for /f "usebackq delims=" %%M in ("%PROP_FILE%") do if not defined CAND_MODEL set "CAND_MODEL=%%M"
+del /q "%PROP_FILE%" >nul 2>&1
+if not defined CAND_MODEL set "CAND_MODEL=unknown"
+set "CAND_PRIORITY=3"
+echo(!CANDIDATE!^| findstr /r /x /c:"[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*:[0-9][0-9]*" >nul
+if not errorlevel 1 set "CAND_PRIORITY=1"
+if "!CAND_PRIORITY!"=="3" echo(!CANDIDATE!^| findstr /i /c:"_adb-tls-connect._tcp" >nul
+if "!CAND_PRIORITY!"=="3" if not errorlevel 1 set "CAND_PRIORITY=2"
+set "GROUP="
+for /l %%N in (1,1,%DEVICE_COUNT%) do if /i "!KEY_%%N!"=="!CAND_KEY!" set "GROUP=%%N"
+if defined GROUP (
+  for %%G in (!GROUP!) do if !CAND_PRIORITY! LSS !PRIORITY_%%G! (
+    set "SERIAL_%%G=!CANDIDATE!"
+    set "PHYS_%%G=!CAND_PHYS!"
+    set "MODEL_%%G=!CAND_MODEL!"
+    set "DESC_%%G=!CAND_DESC!"
+    set "PRIORITY_%%G=!CAND_PRIORITY!"
+  )
+  exit /b 0
+)
+set /a DEVICE_COUNT+=1
+for %%G in (!DEVICE_COUNT!) do (
+  set "KEY_%%G=!CAND_KEY!"
+  set "SERIAL_%%G=!CANDIDATE!"
+  set "PHYS_%%G=!CAND_PHYS!"
+  set "MODEL_%%G=!CAND_MODEL!"
+  set "DESC_%%G=!CAND_DESC!"
+  set "PRIORITY_%%G=!CAND_PRIORITY!"
 )
 exit /b 0
 
 :choose_device
 set "CHOICE="
-set /p "CHOICE=ëŒè€serialÇÃî‘çÜÇì¸óÕ: "
+echo Logical device list. Select a target by number.
+for /l %%N in (1,1,%DEVICE_COUNT%) do echo [%%N] model=!MODEL_%%N! physical-serial=!PHYS_%%N! adb=!SERIAL_%%N!
+set /p "CHOICE=Target device number: "
 for /f "delims=0123456789" %%A in ("%CHOICE%") do set "CHOICE="
-if not defined CHOICE (
-  echo î‘çÜÇ™ïsê≥Ç≈Ç∑ÅB
-  exit /b 1
-)
+if not defined CHOICE exit /b 1
 if %CHOICE% LSS 1 exit /b 1
 if %CHOICE% GTR %DEVICE_COUNT% exit /b 1
 for %%N in (%CHOICE%) do set "SERIAL=!SERIAL_%%N!"
 if not defined SERIAL exit /b 1
-echo ëIëÇµÇΩserial: %SERIAL%
+echo Selected physical-serial: !PHYS_%CHOICE%!
+echo Selected ADB target: !SERIAL!
 exit /b 0
 
 :wait_for_not_kiosk
