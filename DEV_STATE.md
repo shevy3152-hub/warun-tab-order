@@ -258,3 +258,19 @@ A90 WebView実機でtable 1の認証済み客席UIを受入確認し、確認さ
 - 物理A90では新originのpairing後、`GET /v1/menu` HTTP 200、商品・画像表示の成功を確認した。現在は画像サイズ調整前の基準UIまで復旧した状態である。
 - read-only確認時点でhealthはlocalhost／LANともHTTP 200、`ready`、`db=ready`、schema v5、integrity_check `ok`、foreign_key_check 0件。orders 14、order_items 23、menu_items 43、event_log 142を保持している。
 - pairing code、QR payload、token、token hashは記録していない。コード、CSS、server、network、Git stage・commitは変更していない。
+
+## 2026-09-11 table 1注文E2E完了
+
+- table 1から黒霧島／水割り／数量1を1回だけ送信し、客席で受付成功を確認した。
+- 厨房正式UIで新着受信を確認し、通常操作で提供済み／完了へ移動した。
+- 完了履歴への移動と注文保持を確認した。再送信・追加注文・重複はない。
+- 完了後の件数は orders 20、order_items 33、event_log 162、menu_items 43、table_sessions 6。
+- `PRAGMA integrity_check` は `ok`、foreign key違反は0件。
+- localhost／LAN healthはいずれもHTTP 200、`ready`、`db=ready`、schema v5。
+- T1/T2のcustomer device割当は変更していない。kitchen deviceは既存のactive credentialを利用した。
+- kitchen pairing code発行、再pairing、再割当は行っていない。
+- A90の現在の注文経路はT1として正常に動作した。
+- 管理画面上で表示名「A90」のdeviceがT2に残っている件は、物理A90との同一性が未確定なdevice inventory課題として残す。
+- 事前バックアップは `server/var/safe-copies/backups/initial-menu-20260818-before-kitchen-repair-e2e-20260911170304732.sqlite3`。SHA-256は `A4FD9014E802A19E48EBAB753A0BC60597FAA8F1E7B851020646CF4DCAE20B4E`。
+- バックアップはschema v5、integrity_check `ok`、foreign key違反0、基準件数（orders 20、order_items 33、event_log 161、menu_items 43、table_sessions 6）一致を検証済み。バックアップファイル自体はstage・commitしていない。
+- 機密情報、device ID、token、credential、pairing code、QR payload、注文ID、session IDは記録していない。
