@@ -286,7 +286,7 @@ A90 WebView実機でtable 1の認証済み客席UIを受入確認し、確認さ
 - T1/T2のcustomer device割当は変更していない。kitchen deviceは既存のactive credentialを利用した。
 - kitchen pairing code発行、再pairing、再割当は行っていない。
 - A90の現在の注文経路はT1として正常に動作した。
-- 管理画面上で表示名「A90」のdeviceがT2に残っている件は、物理A90との同一性が未確定なdevice inventory課題として残す。
+- 管理画面上で表示名「A90」のT2 deviceは、後続のread-only inventory確認を経て未使用と判定し、2026-09-11に正式管理APIで失効した。
 - 事前バックアップは `server/var/safe-copies/backups/initial-menu-20260818-before-kitchen-repair-e2e-20260911170304732.sqlite3`。SHA-256は `A4FD9014E802A19E48EBAB753A0BC60597FAA8F1E7B851020646CF4DCAE20B4E`。
 - バックアップはschema v5、integrity_check `ok`、foreign key違反0、基準件数（orders 20、order_items 33、event_log 161、menu_items 43、table_sessions 6）一致を検証済み。バックアップファイル自体はstage・commitしていない。
 - 機密情報、device ID、token、credential、pairing code、QR payload、注文ID、session IDは記録していない。
@@ -321,3 +321,15 @@ A90 WebView実機でtable 1の認証済み客席UIを受入確認し、確認さ
 - 注文管理画面からのキオスク解除は、DPCまたは安全な端末制御経路を設計した後へ延期する。
 - 正式Lock Taskは、A90を初期化できる時期または次期端末導入時に再検討する。
 - 次の開発候補は、端末再起動後のキオスク起動・復帰、server停止・LAN切断時の安全な案内と自動再接続、長時間連続稼働試験、release APK作成と試験運用である。
+
+## 2026-09-11 T2未使用customer device失効
+
+- 現在の物理A90はT1 customer deviceとしてactiveで、T1客席画面と注文機能を維持している。
+- 未使用だったT2の表示名「A90」のcustomer device（`ba86c8...b75d10`）を、`POST /v1/admin/devices/revoke`で1回だけ正式に失効した。DB直接更新ではない。
+- T2 deviceはactiveからrevokedとなり、T2へのdevice割当は解除された。table 2自体はactiveを維持し、table 2 versionは4から5になった。
+- T2はactive sessionなし、注文0件。T1 device（`7b60ef...d89912`）、割当、version 15、active sessionは不変である。
+- 将来table 2端末を導入するときは、新しい端末を正式pairingする。
+- 確認件数は orders 20、order_items 33、event_log 162、menu_items 43、table_sessions 6。`integrity_check=ok`、foreign key違反0。
+- localhost／LAN healthはHTTP 200、`ready`、`db=ready`、schema v5。environment／database targetはsafe-copyである。
+- 失効前バックアップは `server/var/safe-copies/backups/initial-menu-20260818-before-revoke-unused-t2-device-20260911-195435450.sqlite3`。SHA-256は `71636A7ACD41396515127A30A3A47DC61BAF8D58B8A9822FB93C0FD9DFE37D49`。
+- 現在のcode checkpointは `232ebe8157e2203833f8194929fc5f04457d8a9c`。完全device ID、token、credential、pairing code、PIN、cookieは記録していない。
