@@ -290,3 +290,21 @@ A90 WebView実機でtable 1の認証済み客席UIを受入確認し、確認さ
 - 事前バックアップは `server/var/safe-copies/backups/initial-menu-20260818-before-kitchen-repair-e2e-20260911170304732.sqlite3`。SHA-256は `A4FD9014E802A19E48EBAB753A0BC60597FAA8F1E7B851020646CF4DCAE20B4E`。
 - バックアップはschema v5、integrity_check `ok`、foreign key違反0、基準件数（orders 20、order_items 33、event_log 161、menu_items 43、table_sessions 6）一致を検証済み。バックアップファイル自体はstage・commitしていない。
 - 機密情報、device ID、token、credential、pairing code、QR payload、注文ID、session IDは記録していない。
+
+## 2026-09-11 スタッフ用PIN通常解除 実機受入
+
+- 右上テーブル番号領域を5秒以内に7回タップすると、スタッフ用PIN入力画面を表示することを確認した。
+- A90上で4桁スタッフPINを入力し、PINはA90内部でランダムsaltとPBKDF2-HMAC-SHA256 hashとして保存した。
+- PIN平文はPC、ADB引数、Git、ログへ保存・出力していない。
+- `キオスクPIN設定.cmd`はPINを入力させず、A90のネイティブPIN設定画面を開くだけの構成にした。
+- `PinSettingsReceiver`とDUMP receiver方式は、実機で設定値を保存できなかったため撤回した。無保護receiverには変更していない。
+- PIN設定済みのA90で、7回タップによるPIN画面表示、誤PIN 1回で解除されないこと、正しいPINで正常解除してAndroid HOMEへ復帰することを確認した。
+- 通常解除では`force-stop`を使用していない。
+- 解除後の通常起動で、再pairingなしにtable 1客席画面へ復帰した。
+- renderer異常、白画面、安全な再試行画面は確認されなかった。
+- safe-copy healthはlocalhost／LANともHTTP 200、`ready`、`db=ready`、schema v5。DB件数とT1/T2 customer device割当は不変だった。
+- Gradle 8.9 Wrapperを追加し、公式distributionのSHA-256を固定した。`testDebugUnitTest`、`assembleDebug`、`lintDebug`、`git diff --check`はPASSした。
+- APKは既存app dataとpairingを保持する`adb install -r`を1回実行した。
+- 5回失敗・60秒lockoutなどの境界条件はunit testで確認したが、実機では発動させていない。
+- 通常スタッフ解除と既存の緊急解除CMDが揃った。現在はimmersive表示で、正式なLock Taskは未導入である。
+- 次のタスクはLock Task導入後の通常解除／緊急解除の再受入である。
