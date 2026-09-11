@@ -25,3 +25,12 @@ tasks.register('pairingPolicyTest', JavaExec) {
     )
     mainClass = 'jp.co.warun.androidkiosk.PairingUrlPolicyTest'
 }
+
+tasks.register('pinSecurityTest', JavaExec) {
+    dependsOn 'compileDebugUnitTestJavaWithJavac'
+    classpath = files(
+        "$buildDir/intermediates/javac/debug/compileDebugJavaWithJavac/classes",
+        "$buildDir/intermediates/javac/debugUnitTest/compileDebugUnitTestJavaWithJavac/classes"
+    )
+    mainClass = 'jp.co.warun.androidkiosk.PinSecurityTest'
+}

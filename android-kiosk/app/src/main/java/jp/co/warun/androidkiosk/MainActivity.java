@@ -1,7 +1,10 @@
 package jp.co.warun.androidkiosk;
 
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.content.Intent;
+import android.content.SharedPreferences;
+import android.util.Base64;
 import android.graphics.Color;
 import android.os.Bundle;
 import android.os.Handler;
@@ -21,6 +24,10 @@ import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.FrameLayout;
 import android.widget.TextView;
+import android.widget.EditText;
+import android.widget.LinearLayout;
+import android.text.InputType;
+import android.text.InputFilter;
 import android.util.Log;
 
 import java.net.HttpURLConnection;
@@ -33,6 +40,7 @@ public final class MainActivity extends Activity {
     private static final String HEALTH_URL = "http://192.168.11.6:25173/v1/health";
     private static final String DEBUG_EXTRA = "debugViewport";
     private static final String DEBUG_NORMAL_EXIT_ACTION = "jp.co.warun.androidkiosk.action.DEBUG_NORMAL_EXIT";
+    private static final String PIN_SETUP_ACTION = "jp.co.warun.androidkiosk.action.OPEN_PIN_SETUP";
     private static final int MAX_RENDERER_RECOVERY_ATTEMPTS = 2;
     private static final long RENDERER_START_WATCHDOG_MS = 8000L;
     private WebView webView;
@@ -45,6 +53,15 @@ public final class MainActivity extends Activity {
     private boolean pairingFlowActive;
     private boolean rendererRecoveryInProgress;
     private int rendererRecoveryAttempts;
+    private int tableTapCount;
+    private long tableTapWindowStartMs;
+    private boolean pinDialogVisible;
+    private boolean pinSetupDialogVisible;
+    private SharedPreferences pinPreferences;
+    private static final int TABLE_TAP_TARGET = 7;
+    private static final long TABLE_TAP_WINDOW_MS = 5000L;
+    private static final int TABLE_REGION_RIGHT_DP = 180;
+    private static final int TABLE_REGION_TOP_DP = 90;
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private Runnable rendererStartWatchdog;
     private final StringBuilder diagnosticLog = new StringBuilder();
@@ -54,7 +71,9 @@ public final class MainActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         if (handleDebugNormalExitIntent(getIntent())) return;
+        boolean openPinSetup = isExplicitPinSetupIntent(getIntent());
         debugEnabled = BuildConfig.DEBUG && getIntent().getBooleanExtra(DEBUG_EXTRA, false);
+        pinPreferences = getSharedPreferences(PinSettings.PREFS, MODE_PRIVATE);
         debugTiming("onCreate");
         requestWindowFeature(Window.FEATURE_NO_TITLE);
         getWindow().setFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN, WindowManager.LayoutParams.FLAG_FULLSCREEN);
@@ -90,6 +109,7 @@ public final class MainActivity extends Activity {
         root.post(() -> {
             lastInsets = root.getRootWindowInsets();
             refreshDebug();
+            if (openPinSetup) showPinSetupDialog();
         });
         if (debugEnabled) runNativeHttpProbes();
     }
@@ -216,6 +236,12 @@ public final class MainActivity extends Activity {
             });
         }
         view.setOverScrollMode(View.OVER_SCROLL_NEVER);
+        view.setOnTouchListener((touchedView, event) -> {
+            if (event.getActionMasked() == android.view.MotionEvent.ACTION_UP) {
+                handleTableNumberTap(event.getX(), event.getY(), touchedView.getWidth(), touchedView.getHeight());
+            }
+            return false;
+        });
     }
 
     private boolean isAllowedWebViewUrl(android.net.Uri uri) {
@@ -354,18 +380,216 @@ public final class MainActivity extends Activity {
                 && getPackageName().equals(component.getPackageName())
                 && MainActivity.class.getName().equals(component.getClassName());
         if (!explicitSelf) return false;
-        disposeWebView();
-        finishAndRemoveTask();
+        exitToHome();
         return true;
+    }
+
+    private boolean isExplicitPinSetupIntent(Intent intent) {
+        if (intent == null || !PIN_SETUP_ACTION.equals(intent.getAction())) return false;
+        android.content.ComponentName component = intent.getComponent();
+        return component != null && getPackageName().equals(component.getPackageName())
+                && MainActivity.class.getName().equals(component.getClassName());
+    }
+
+    private void handleTableNumberTap(float x, float y, int width, int height) {
+        if (pinDialogVisible || recoveryView == null || recoveryView.getVisibility() != View.GONE
+                || webView == null || !isCustomerMenuUrl(webView.getUrl())) {
+            resetTableTapSequence();
+            return;
+        }
+        float density = getResources().getDisplayMetrics().density;
+        float rightStart = width - TABLE_REGION_RIGHT_DP * density;
+        float topEnd = TABLE_REGION_TOP_DP * density;
+        if (x < rightStart || y < 0 || y > topEnd || width <= 0 || height <= 0) {
+            resetTableTapSequence();
+            return;
+        }
+        long now = SystemClock.elapsedRealtime();
+        if (tableTapWindowStartMs == 0L || now - tableTapWindowStartMs > TABLE_TAP_WINDOW_MS) {
+            tableTapWindowStartMs = now;
+            tableTapCount = 0;
+        }
+        tableTapCount++;
+        if (tableTapCount >= TABLE_TAP_TARGET) {
+            resetTableTapSequence();
+            showStaffPinDialog();
+        }
+    }
+
+    private boolean isCustomerMenuUrl(String url) {
+        return url != null && url.contains("/customer/") && !PairingUrlPolicy.isPairingUrl(url);
+    }
+
+    private void resetTableTapSequence() {
+        tableTapCount = 0;
+        tableTapWindowStartMs = 0L;
+    }
+
+    private void showStaffPinDialog() {
+        pinDialogVisible = true;
+        if (pinPreferences == null) pinPreferences = getSharedPreferences(PinSettings.PREFS, MODE_PRIVATE);
+        long now = System.currentTimeMillis();
+        long lockoutUntil = pinPreferences.getLong(PinSettings.KEY_LOCKOUT_UNTIL, 0L);
+        if (PinLockoutPolicy.isLocked(now, lockoutUntil)) {
+            showPinMessage("スタッフ用PIN入力は一時的にロックされています。しばらく待ってください。", false);
+            return;
+        }
+        String storedSalt = pinPreferences.getString(PinSettings.KEY_SALT, null);
+        String storedHash = pinPreferences.getString(PinSettings.KEY_HASH, null);
+        int iterations = pinPreferences.getInt(PinSettings.KEY_ITERATIONS, 0);
+        if (storedSalt == null || storedHash == null || iterations != PinSecurity.ITERATIONS) {
+            showPinMessage("スタッフ用PINが未設定です", false);
+            return;
+        }
+        EditText input = new EditText(this);
+        input.setInputType(InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_VARIATION_PASSWORD);
+        input.setFilters(new InputFilter[]{new InputFilter.LengthFilter(4)});
+        input.setHint("4桁のPIN");
+        AlertDialog dialog = new AlertDialog.Builder(this)
+                .setTitle("スタッフ用解除")
+                .setView(input)
+                .setNegativeButton("キャンセル", (d, w) -> finishPinDialog())
+                .setPositiveButton("解除", null)
+                .create();
+        dialog.setOnShowListener(ignored -> dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
+            String pin = input.getText().toString();
+            if (pin.length() != 4 || !pin.matches("[0-9]{4}")) {
+                input.setError("数字4桁を入力してください");
+                return;
+            }
+            if (verifyStaffPin(pin, storedSalt, storedHash, iterations)) {
+                dialog.dismiss();
+                finishPinDialog();
+                exitToHome();
+            } else {
+                input.setText("");
+                if (recordPinFailure()) {
+                    dialog.dismiss();
+                    showPinMessage("PIN入力を5回失敗したため、60秒間ロックします。", false);
+                } else {
+                    input.setError("PINが正しくありません");
+                }
+            }
+        }));
+        dialog.setOnCancelListener(d -> finishPinDialog());
+        dialog.setOnDismissListener(d -> pinDialogVisible = false);
+        dialog.show();
+    }
+
+    private void showPinSetupDialog() {
+        if (pinSetupDialogVisible) return;
+        pinSetupDialogVisible = true;
+        if (pinPreferences == null) pinPreferences = getSharedPreferences(PinSettings.PREFS, MODE_PRIVATE);
+        if (PinSettings.isConfigured(pinPreferences)) {
+            showPinMessage("スタッフ用PINは設定済みです", false);
+            pinSetupDialogVisible = false;
+            return;
+        }
+        LinearLayout fields = new LinearLayout(this);
+        fields.setOrientation(LinearLayout.VERTICAL);
+        int padding = (int) (24 * getResources().getDisplayMetrics().density);
+        fields.setPadding(padding, 0, padding, 0);
+        EditText first = new EditText(this);
+        first.setInputType(InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_VARIATION_PASSWORD);
+        first.setFilters(new InputFilter[]{new InputFilter.LengthFilter(4)});
+        first.setHint("新しい4桁PIN");
+        EditText second = new EditText(this);
+        second.setInputType(InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_VARIATION_PASSWORD);
+        second.setFilters(new InputFilter[]{new InputFilter.LengthFilter(4)});
+        second.setHint("確認用4桁PIN");
+        fields.addView(first, new LinearLayout.LayoutParams(-1, -2));
+        fields.addView(second, new LinearLayout.LayoutParams(-1, -2));
+        AlertDialog dialog = new AlertDialog.Builder(this)
+                .setTitle("スタッフ用PIN設定")
+                .setView(fields)
+                .setNegativeButton("キャンセル", (d, w) -> finishPinSetupDialog())
+                .setPositiveButton("設定", null)
+                .create();
+        dialog.setOnShowListener(ignored -> dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
+            String firstText = first.getText().toString();
+            String secondText = second.getText().toString();
+            if (!firstText.matches("[0-9]{4}") || !firstText.equals(secondText)) {
+                second.setError("数字4桁を一致させて入力してください");
+                return;
+            }
+            if (PinSettings.saveNewPin(pinPreferences, firstText.toCharArray())) {
+                dialog.dismiss();
+                finishPinSetupDialog();
+                showPinMessage("スタッフ用PINを設定しました", false);
+            } else {
+                second.setError("PIN設定に失敗しました");
+            }
+        }));
+        dialog.setOnCancelListener(d -> finishPinSetupDialog());
+        dialog.setOnDismissListener(d -> pinSetupDialogVisible = false);
+        dialog.show();
+    }
+
+    private void finishPinSetupDialog() {
+        pinSetupDialogVisible = false;
+        resetTableTapSequence();
+        applyImmersiveMode();
+    }
+
+    private boolean verifyStaffPin(String pin, String storedSalt, String storedHash, int iterations) {
+        try {
+            byte[] salt = Base64.decode(storedSalt, Base64.NO_WRAP);
+            byte[] expected = Base64.decode(storedHash, Base64.NO_WRAP);
+            if (salt.length != PinSecurity.SALT_BYTES || expected.length != PinSecurity.HASH_BITS / 8) return false;
+            return PinSecurity.constantTimeEquals(expected, PinSecurity.derive(pin.toCharArray(), salt, iterations));
+        } catch (IllegalArgumentException | java.security.GeneralSecurityException error) {
+            return false;
+        }
+    }
+
+    private boolean recordPinFailure() {
+        int failures = pinPreferences.getInt(PinSettings.KEY_FAILURES, 0) + 1;
+        SharedPreferences.Editor editor = pinPreferences.edit();
+        if (PinLockoutPolicy.reachesLimit(failures - 1)) {
+            editor.putInt(PinSettings.KEY_FAILURES, 0).putLong(PinSettings.KEY_LOCKOUT_UNTIL, System.currentTimeMillis() + PinLockoutPolicy.LOCKOUT_MS);
+            editor.commit();
+            return true;
+        }
+        editor.putInt(PinSettings.KEY_FAILURES, failures).commit();
+        return false;
+    }
+
+    private void showPinMessage(String message, boolean finish) {
+        new AlertDialog.Builder(this).setMessage(message).setPositiveButton("OK", (d, w) -> {
+            finishPinDialog();
+            if (finish) exitToHome();
+        }).setOnCancelListener(d -> finishPinDialog()).show();
+    }
+
+    private void finishPinDialog() {
+        pinDialogVisible = false;
+        resetTableTapSequence();
+        applyImmersiveMode();
+    }
+
+    private void exitToHome() {
+        disposeWebView();
+        try {
+            stopLockTask();
+        } catch (IllegalStateException ignored) {
+            // Lock Task is not enabled in the current build.
+        }
+        finishAndRemoveTask();
+        Intent home = new Intent(Intent.ACTION_MAIN);
+        home.addCategory(Intent.CATEGORY_HOME);
+        home.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        startActivity(home);
     }
 
     @Override
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
         if (handleDebugNormalExitIntent(intent)) return;
+        boolean openPinSetup = isExplicitPinSetupIntent(intent);
         setIntent(intent);
         if (BuildConfig.DEBUG && intent != null && intent.getBooleanExtra(DEBUG_EXTRA, false)) debugEnabled = true;
         loadUrlForIntent(intent);
+        if (openPinSetup) mainHandler.post(this::showPinSetupDialog);
     }
 
     private void applyImmersiveMode() {
