@@ -1,5 +1,16 @@
 apply plugin: 'com.android.application'
 
+def releaseSigningEnvironment = [
+    'WARUN_KIOSK_KEYSTORE_FILE': System.getenv('WARUN_KIOSK_KEYSTORE_FILE'),
+    'WARUN_KIOSK_KEYSTORE_PASSWORD': System.getenv('WARUN_KIOSK_KEYSTORE_PASSWORD'),
+    'WARUN_KIOSK_KEY_ALIAS': System.getenv('WARUN_KIOSK_KEY_ALIAS'),
+    'WARUN_KIOSK_KEY_PASSWORD': System.getenv('WARUN_KIOSK_KEY_PASSWORD')
+]
+def missingReleaseSigningEnvironment = releaseSigningEnvironment.findAll { name, value ->
+    value == null || value.trim().isEmpty()
+}.keySet()
+def releaseSigningConfigured = missingReleaseSigningEnvironment.isEmpty()
+
 android {
     namespace 'jp.co.warun.androidkiosk'
     compileSdk 35
@@ -12,8 +23,49 @@ android {
         applicationId 'jp.co.warun.androidkiosk'
         minSdk 23
         targetSdk 35
-        versionCode 1
-        versionName '0.1.0'
+        versionCode 2
+        versionName '1.0.0'
+    }
+
+    signingConfigs {
+        release {
+            if (releaseSigningConfigured) {
+                storeFile file(releaseSigningEnvironment['WARUN_KIOSK_KEYSTORE_FILE'])
+                storePassword releaseSigningEnvironment['WARUN_KIOSK_KEYSTORE_PASSWORD']
+                keyAlias releaseSigningEnvironment['WARUN_KIOSK_KEY_ALIAS']
+                keyPassword releaseSigningEnvironment['WARUN_KIOSK_KEY_PASSWORD']
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            debuggable false
+            minifyEnabled false
+            shrinkResources false
+            if (releaseSigningConfigured) {
+                signingConfig signingConfigs.release
+            }
+        }
+    }
+}
+
+gradle.taskGraph.whenReady { taskGraph ->
+    def releaseTaskInGraph = taskGraph.allTasks.any { task ->
+        task.name.toLowerCase(Locale.ROOT).contains('release')
+    }
+    if (!releaseTaskInGraph) return
+    if (!missingReleaseSigningEnvironment.isEmpty()) {
+        throw new GradleException(
+            "Release signing is not configured. Set the required environment variables: "
+                    + missingReleaseSigningEnvironment.join(', ')
+                    + ". Password values are never printed or stored."
+        )
+    }
+    if (!file(releaseSigningEnvironment['WARUN_KIOSK_KEYSTORE_FILE']).isFile()) {
+        throw new GradleException(
+            "WARUN_KIOSK_KEYSTORE_FILE does not point to an existing keystore file."
+        )
     }
 }
 

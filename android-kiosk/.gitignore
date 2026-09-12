@@ -2,3 +2,7 @@
 build/
 app/build/
 local.properties
+*.jks
+*.keystore
+keystore.properties
+signing.properties
