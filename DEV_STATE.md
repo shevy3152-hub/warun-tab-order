@@ -3,6 +3,22 @@
 最終更新: 2026-09-09
 対象: `C:\Users\user\Documents\ChatGPT\タブレットオーダーシステム`
 
+## 2026-09-12 signed kiosk release build checkpoint（現行正本）
+
+release build基盤を `d0a2d4f`（`feat: add production kiosk release builder`）へ確定した。生成済みrelease APKは再ビルドせず、署名・artifact情報を検証した。
+
+- applicationId: `jp.co.warun.androidkiosk`
+- versionCode / versionName: `2` / `1.0.0`
+- debuggable: `false`
+- release APK SHA-256: `3064dacca008a9557c1c6788b8b093d0094f1d70115fd38566340ad8f3902ca2`
+- release署名証明書 SHA-256: `d700b5187985bc025914481fd9d278921afcf372ae0494530a993423f75fe46a`
+- release keystore SHA-256: `7895c7886e3cd4177eb8e83f9b70c2f3560644375129603b2508780315b4fa5d`
+- release APKはA90へ未導入。A90は現在debug署名版で稼働している。
+- debug版からrelease版へ移行する際は署名不一致となるため、管理された再pairingが必要になる。
+- 次の必須作業はrelease keystoreの別媒体バックアップである。バックアップ完了まではA90へrelease APKを導入しない。
+- keystoreとpasswordはGit管理しない。APK、実行可能JAR、class、build output、readiness markerもcommit対象外とする。
+- release builder GUIはpasswordなしの既存APK検証に対応し、検証時は起動中Javaの`java.home`から`JAVA_HOME`を設定する。password欄は成功・失敗・終了時に消去する。
+
 ## 2026-09-09 A90 Android kiosk checkpoint（現行正本）
 
 Androidキオスク基盤の実装commitは `5921539`（`feat: add A90 WebView kiosk foundation`）。この後の文書更新commitは別のHEADを作るため、Android実装の基準はこのcommitとする。
