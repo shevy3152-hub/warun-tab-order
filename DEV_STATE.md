@@ -1,9 +1,30 @@
 # 開発状態
 
-最終更新: 2026-09-09
+最終更新: 2026-09-12
 対象: `C:\Users\user\Documents\ChatGPT\タブレットオーダーシステム`
 
-## 2026-09-12 signed kiosk release build checkpoint（現行正本）
+## 2026-09-12 A90 release PIN acceptance checkpoint（現行正本）
+
+A90の正式release版更新とスタッフPIN解除の実機受入を完了扱いとする。生成済みrelease APKを再ビルドせず、同一正式署名で`adb install -r`を1回実行し、pairing、PIN、アプリデータを保持した。
+
+- A90正式release版: versionCode `3` / versionName `1.0.1`
+- APK SHA-256: `2abbf57a30d2b4ebd32de9e0fb27bb935d6accdcff6e7dea8b1cb6ecd678f9c2`
+- 署名証明書SHA-256: `d700b5187985bc025914481fd9d278921afcf372ae0494530a993423f75fe46a`
+- `debuggable=false`
+- 同一正式署名による`adb install -r`: 成功
+- pairing、PIN、アプリデータ: 保持
+- table 1客席メニュー表示: 成功
+- PIN設定画面終了後の不要なWebView再読み込みを抑止する修正を反映し、黒画面の再発なし
+- 7回タップ＋4桁PIN解除: ユーザー確認PASS
+- PIN解除後のHOME復帰、通常起動、再pairingなしのtable 1復帰: PASS
+- 白画面、黒画面、再試行画面、debug overlay: なし
+- safe-copy health: localhost／LANともHTTP 200、`ready`、`db=ready`、schema v5
+- DB件数: `orders=20`、`order_items=33`、`event_log=162`、`menu_items=43`、`table_sessions=6`
+- `integrity_check`: `ok`
+- foreign key違反: 0件
+- 注文操作・送信: なし
+
+## 2026-09-12 signed kiosk release build checkpoint（履歴）
 
 release build基盤を `d0a2d4f`（`feat: add production kiosk release builder`）へ確定した。生成済みrelease APKは再ビルドせず、署名・artifact情報を検証した。
 
