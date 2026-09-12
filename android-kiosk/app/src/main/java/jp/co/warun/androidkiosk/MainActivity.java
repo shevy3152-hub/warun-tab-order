@@ -588,8 +588,11 @@ public final class MainActivity extends Activity {
         boolean openPinSetup = isExplicitPinSetupIntent(intent);
         setIntent(intent);
         if (BuildConfig.DEBUG && intent != null && intent.getBooleanExtra(DEBUG_EXTRA, false)) debugEnabled = true;
+        if (openPinSetup) {
+            mainHandler.post(this::showPinSetupDialog);
+            return;
+        }
         loadUrlForIntent(intent);
-        if (openPinSetup) mainHandler.post(this::showPinSetupDialog);
     }
 
     private void applyImmersiveMode() {

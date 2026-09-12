@@ -43,8 +43,8 @@ import java.util.regex.Pattern;
 
 public class ReleaseBuilderGui extends JFrame {
     private static final String APPLICATION_ID = "jp.co.warun.androidkiosk";
-    private static final int VERSION_CODE = 2;
-    private static final String VERSION_NAME = "1.0.0";
+    private static final int VERSION_CODE = 3;
+    private static final String VERSION_NAME = "1.0.1";
     private static final String STORE_ENV = "WARUN_KIOSK_GUI_STOREPASS";
     private static final String KEY_ENV = "WARUN_KIOSK_GUI_KEYPASS";
     private static FileChannel instanceChannel;
@@ -85,6 +85,8 @@ public class ReleaseBuilderGui extends JFrame {
         setDefaultCloseOperation(DO_NOTHING_ON_CLOSE);
         setMinimumSize(new Dimension(760, 650));
         setContentPane(createContent());
+        pack();
+        setSize(new Dimension(900, 760));
         setLocationByPlatform(true);
         keystorePathField.setText(defaultKeystorePath());
         openButton.setEnabled(false);
