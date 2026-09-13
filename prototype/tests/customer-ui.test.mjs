@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { CUSTOMER_THEMES, CUSTOMER_TEST_THEME, normalizeCustomerTheme } from "../src/customer-theme.js";
 
 const appSource = await readFile(new URL("../src/App.jsx", import.meta.url), "utf8");
 const styles = await readFile(new URL("../src/styles.css", import.meta.url), "utf8");
@@ -13,6 +14,25 @@ test("CustomerScreen renders menu prices but no cart or customer-history totals"
   assert.match(customerScreen, /price-hidden-note/);
   const cartPanel = customerScreen.slice(customerScreen.indexOf('<aside className="cart-panel">'), customerScreen.indexOf('</aside>', customerScreen.indexOf('<aside className="cart-panel">')));
   assert.doesNotMatch(cartPanel, /menu-price|totalAmount|合計/);
+});
+
+test("CustomerScreen exposes a normalized rail theme with camellia as the active test theme", () => {
+  assert.deepEqual(CUSTOMER_THEMES, { standard: "standard", camellia: "camellia" });
+  assert.equal(CUSTOMER_TEST_THEME, "camellia");
+  assert.equal(normalizeCustomerTheme("unknown"), "standard");
+  assert.equal(normalizeCustomerTheme("standard"), "standard");
+  assert.equal(normalizeCustomerTheme("camellia"), "camellia");
+  assert.match(appSource, /normalizeCustomerTheme\(theme\)/);
+  assert.match(customerScreen, /data-customer-theme=\{customerTheme\}/);
+});
+
+test("Customer rail keeps standard red as the safe fallback and scopes camellia imagery", () => {
+  assert.match(styles, /\.customer-sidebar \{[^}]*background: var\(--red\);/);
+  assert.match(styles, /\.customer-app\[data-customer-theme="camellia"\] \.customer-sidebar \{ background: var\(--red\) url\('\/customer-rail-washi-camellia-accepted\.png'\) center \/ 100% 100% no-repeat; \}/);
+  assert.match(styles, /\.customer-app\.customer-app--category-collapsed\[data-customer-theme="camellia"\] \.customer-sidebar \{ background-image: none; background-color: var\(--red\); \}/);
+  assert.doesNotMatch(styles, /customer-sidebar::before|customer-sidebar::after/);
+  const standardRailRule = styles.match(/\.customer-sidebar \{[^}]*\}/)?.[0] ?? "";
+  assert.doesNotMatch(standardRailRule, /customer-rail-washi-camellia/);
 });
 
 test("customer menu uses major category navigation with a collapsible rail", () => {

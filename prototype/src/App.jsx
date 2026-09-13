@@ -28,6 +28,7 @@ import { closeKitchenTableSession, fetchKitchenOrderHistory, fetchKitchenSnapsho
 import { bootstrapCustomerOrderClient } from "./customer-bootstrap.js";
 import { taxExcludedYen } from "./pricing.js";
 import { pairingCodeQrSvg } from "./qr-code.js";
+import { CUSTOMER_TEST_THEME, normalizeCustomerTheme } from "./customer-theme.js";
 
 const STORAGE_KEY = "izakaya-order-prototype-v3";
 
@@ -494,7 +495,8 @@ function Launcher({ state, updateState }) {
   );
 }
 
-function CustomerScreen({ state, updateState, deviceId, orderClient, customerDeviceConfig }) {
+function CustomerScreen({ state, updateState, deviceId, orderClient, customerDeviceConfig, theme = CUSTOMER_TEST_THEME }) {
+  const customerTheme = normalizeCustomerTheme(theme);
   const localDevice = state.devices.find((item) => item.deviceId === deviceId) ?? state.devices[0];
   const apiMode = orderClient.mode === "api";
   const assignedTableId = apiMode && Number.isSafeInteger(customerDeviceConfig?.tableId) ? String(customerDeviceConfig.tableId) : null;
@@ -878,7 +880,7 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
   };
 
   return (
-    <div className={`customer-app ${majorNavOpen ? "" : "customer-app--category-collapsed"}`}>
+    <div className={`customer-app ${majorNavOpen ? "" : "customer-app--category-collapsed"}`} data-customer-theme={customerTheme}>
       <aside className="customer-sidebar">
         <div className="customer-title customer-title--horizontal"><span>IZAKAYA WARUN</span><strong>お品書き</strong></div>
         {majorNavOpen ? <nav className="category-nav" aria-label="大分類カテゴリー">
