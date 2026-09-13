@@ -3,6 +3,16 @@
 最終更新: 2026-09-12
 対象: `C:\Users\user\Documents\ChatGPT\タブレットオーダーシステム`
 
+## 2026-09-13 seasonal customer rail theme checkpoint
+
+- `standard`は従来の無地赤背景、`camellia`は展開時だけ完成PNGを1枚表示するテーマ基盤を実装した。
+- 収納時は既存の`customer-app--category-collapsed`で椿画像を非表示にし、`background-image: none`と`var(--red)`へ戻す。再展開時は1枚だけ復帰する。
+- 完成画像は`prototype/public/customer-rail-washi-camellia-accepted.png`（426x1587）。椿2組、開花2輪、つぼみ2輪。途中画像は未追跡のまま保全している。
+- ユーザー目視受入: 展開、収納、再展開、操作性、レイアウトはPASS。
+- prototype全体テスト93/93 PASS、Vite build PASS、`git diff --check` PASS。
+- A90、pairing、注文、DB、server、Android release基盤は変更していない。
+- code checkpoint: `23c7caf`（`feat: add seasonal customer rail themes`）。
+
 ## 2026-09-12 A90 release PIN acceptance checkpoint（現行正本）
 
 A90の正式release版更新とスタッフPIN解除の実機受入を完了扱いとする。生成済みrelease APKを再ビルドせず、同一正式署名で`adb install -r`を1回実行し、pairing、PIN、アプリデータを保持した。
