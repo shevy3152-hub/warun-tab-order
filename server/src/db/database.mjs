@@ -5,7 +5,7 @@ import { DatabaseSync } from 'node:sqlite';
 
 export const LEGACY_SCHEMA_VERSION = 1;
 export const SESSION_SCHEMA_VERSION = 2;
-export const SCHEMA_VERSION = 5;
+export const SCHEMA_VERSION = 6;
 
 export const REQUIRED_TABLES = Object.freeze([
   'system_state',
@@ -18,6 +18,7 @@ export const REQUIRED_TABLES = Object.freeze([
   'menu_item_details',
   'menu_item_variants',
   'menu_item_serving_options',
+  'menu_item_image_layouts',
   'orders',
   'order_items',
   'staff_calls',
@@ -43,6 +44,7 @@ export const REQUIRED_INDEXES = Object.freeze([
   'idx_staff_calls_table_status',
   'idx_event_log_type_event',
   'idx_event_log_aggregate',
+  'idx_menu_item_image_layouts_item',
 ]);
 
 export const REQUIRED_TRIGGERS = Object.freeze([
@@ -92,6 +94,9 @@ export const DEFAULT_V5_MIGRATION_PATH = resolve(
   '..',
   'docs',
   'schema-v5-migration.sql',
+);
+export const DEFAULT_V6_MIGRATION_PATH = resolve(
+  moduleDirectory, '..', '..', '..', 'docs', 'schema-v6-migration.sql',
 );
 
 export class DatabaseInitializationError extends Error {
@@ -257,9 +262,11 @@ function hasSessionExtension(database) {
 
 function validateLegacySchema(database) {
   const legacyTables = REQUIRED_TABLES.filter((name) => ![
+    'menu_item_image_layouts',
     'table_sessions', 'menu_item_details', 'menu_item_variants', 'menu_item_serving_options',
   ].includes(name));
   const legacyIndexes = REQUIRED_INDEXES.filter((name) => ![
+    'idx_menu_item_image_layouts_item',
     'idx_table_sessions_table_opened',
     'uq_table_sessions_open_table',
     'idx_menu_item_variants_item_sort',
@@ -295,9 +302,11 @@ function validateLegacySchema(database) {
 
 function validateSchemaV2(database) {
   const tables = REQUIRED_TABLES.filter((name) => ![
+    'menu_item_image_layouts',
     'menu_item_details', 'menu_item_variants', 'menu_item_serving_options',
   ].includes(name));
   const indexes = REQUIRED_INDEXES.filter((name) => ![
+    'idx_menu_item_image_layouts_item',
     'idx_menu_item_variants_item_sort',
     'idx_menu_item_serving_options_item_sort',
     'uq_order_items_order_selection',
@@ -353,6 +362,11 @@ function migrateSchemaV4ToV5(database, migrationPath) {
       { cause: error },
     );
   }
+}
+
+function migrateSchemaV5ToV6(database, migrationPath) {
+  try { database.exec(readFileSync(migrationPath, 'utf8')); }
+  catch (error) { try { if (database.isTransaction) database.exec('ROLLBACK;'); } catch {} throw new DatabaseInitializationError('MIGRATION_FAILED', 'The image layout schema migration failed.', { cause: error }); }
 }
 
 function migrateSchemaV1ToV2(database) {
@@ -624,12 +638,14 @@ export function initializeDatabase({
   v3MigrationPath = DEFAULT_V3_MIGRATION_PATH,
   v4MigrationPath = DEFAULT_V4_MIGRATION_PATH,
   v5MigrationPath = DEFAULT_V5_MIGRATION_PATH,
+  v6MigrationPath = DEFAULT_V6_MIGRATION_PATH,
 } = {}) {
   const resolvedDatabasePath = resolveFilePath(databasePath, 'databasePath');
   const resolvedSchemaPath = resolveFilePath(schemaPath, 'schemaPath');
   const resolvedV3MigrationPath = resolveFilePath(v3MigrationPath, 'v3MigrationPath');
   const resolvedV4MigrationPath = resolveFilePath(v4MigrationPath, 'v4MigrationPath');
   const resolvedV5MigrationPath = resolveFilePath(v5MigrationPath, 'v5MigrationPath');
+  const resolvedV6MigrationPath = resolveFilePath(v6MigrationPath, 'v6MigrationPath');
 
   mkdirSync(dirname(resolvedDatabasePath), { recursive: true });
 
@@ -669,8 +685,14 @@ export function initializeDatabase({
     if (currentVersion === 4) {
       migrateSchemaV4ToV5(database, resolvedV5MigrationPath);
       enableWriteAheadLogging(database);
+      currentVersion = 5;
+    }
+    if (currentVersion === 5) {
+      migrateSchemaV5ToV6(database, resolvedV6MigrationPath);
+      enableWriteAheadLogging(database);
       currentVersion = SCHEMA_VERSION;
-    } else if (currentVersion === SCHEMA_VERSION) {
+    }
+    if (currentVersion === SCHEMA_VERSION) {
       if (!hasSessionExtension(database)) {
         throw new DatabaseInitializationError(
           'SCHEMA_INCOMPLETE',

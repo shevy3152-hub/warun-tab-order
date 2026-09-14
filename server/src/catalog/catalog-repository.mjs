@@ -15,6 +15,29 @@ const DETAIL_TEXT_FIELDS = Object.freeze([
   'reading', 'itemType', 'origin', 'producer', 'taste', 'aroma',
   'sweetness', 'finish', 'recommendation', 'description',
 ]);
+const IMAGE_LAYOUT_USAGES = Object.freeze(['thumbnail', 'detail']);
+
+function normalizeImageLayout(value, fieldName) {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) throw invalidWrite(`${fieldName} must be an object.`);
+  const number = (key, min, max) => {
+    const n = value[key];
+    if (typeof n !== 'number' || !Number.isFinite(n) || n < min || n > max) throw invalidWrite(`${fieldName}.${key} is outside the supported range.`);
+    return n;
+  };
+  const fit = value.fit ?? 'contain';
+  if (fit !== 'contain' && fit !== 'cover') throw invalidWrite(`${fieldName}.fit must be contain or cover.`);
+  return { scale: number('scale', 0.5, 4), positionX: number('positionX', -1, 1), positionY: number('positionY', -1, 1), rotation: number('rotation', -15, 15), fit };
+}
+
+export function normalizeImageLayoutWriteRequest(request) {
+  if (request === null || typeof request !== 'object' || Array.isArray(request)) throw invalidWrite('Image layout request must be an object.');
+  const expectedVersion = normalizeNonNegativeInteger(request.expectedVersion ?? 0, 'expectedVersion');
+  const menuItemId = normalizeOpaqueId(request.menuItemId, 'menuItemId');
+  if (request.layouts === null || typeof request.layouts !== 'object' || Array.isArray(request.layouts)) throw invalidWrite('layouts must be an object.');
+  const layouts = {};
+  for (const usage of IMAGE_LAYOUT_USAGES) layouts[usage] = normalizeImageLayout(request.layouts[usage], `layouts.${usage}`);
+  return { expectedVersion, menuItemId, layouts };
+}
 
 function repositoryError(code, message, options = undefined) {
   return new CatalogRepositoryError(code, message, options);
@@ -245,6 +268,14 @@ function mapServingOption(row) {
   };
 }
 
+function mapImageLayouts(value) {
+  if (typeof value !== 'string' || value === '{}') return undefined;
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && Object.keys(parsed).length > 0 ? parsed : undefined;
+  } catch { return undefined; }
+}
+
 function mapPublicCategory(row) {
   return {
     categoryId: row.category_id,
@@ -276,6 +307,8 @@ function mapCustomerMenuItem(row) {
   optionalText(item, 'sectionKey', row.section_key);
   const detail = mapDetail(row, false, true);
   if (detail) item.detail = detail;
+  const imageLayouts = mapImageLayouts(row.image_layouts);
+  if (imageLayouts) item.imageLayouts = imageLayouts;
   return item;
 }
 
@@ -307,6 +340,8 @@ function mapAdminMenuItem(row) {
   }, row.image_uri);
   optionalText(item, 'sectionKey', row.section_key);
   item.detail = mapDetail(row, true, true) ?? { enabled: false };
+  const imageLayouts = mapImageLayouts(row.image_layouts);
+  if (imageLayouts) item.imageLayouts = imageLayouts;
   return item;
 }
 
@@ -505,6 +540,7 @@ export function createCatalogRepository({ database, now = Date.now } = {}) {
           d.finish,
           d.recommendation,
           d.detail_description
+          ,(SELECT json_group_object(usage, json_object('scale', scale, 'positionX', position_x, 'positionY', position_y, 'rotation', rotation, 'fit', fit)) FROM menu_item_image_layouts l WHERE l.menu_item_id = m.menu_item_id) AS image_layouts
         FROM menu_items AS m
         JOIN categories AS c
           ON c.category_id = m.category_id
@@ -558,6 +594,7 @@ export function createCatalogRepository({ database, now = Date.now } = {}) {
           ,d.finish
           ,d.recommendation
           ,d.detail_description
+          ,(SELECT json_group_object(usage, json_object('scale', scale, 'positionX', position_x, 'positionY', position_y, 'rotation', rotation, 'fit', fit)) FROM menu_item_image_layouts l WHERE l.menu_item_id = m.menu_item_id) AS image_layouts
         FROM menu_items AS m
         JOIN categories AS c
           ON c.category_id = m.category_id
@@ -565,6 +602,12 @@ export function createCatalogRepository({ database, now = Date.now } = {}) {
           ON d.menu_item_id = m.menu_item_id
         ORDER BY c.sort_order, m.sort_order, m.menu_item_id
       `),
+      findImageLayouts: database.prepare('SELECT usage, scale, position_x, position_y, rotation, fit FROM menu_item_image_layouts WHERE menu_item_id = ? ORDER BY usage'),
+      findImageLayoutItem: database.prepare('SELECT version FROM menu_items WHERE menu_item_id = ?'),
+      updateImageLayoutVersion: database.prepare('UPDATE menu_items SET version = version + 1, updated_at_ms = ? WHERE menu_item_id = ? AND version = ?'),
+      deleteImageLayouts: database.prepare('DELETE FROM menu_item_image_layouts WHERE menu_item_id = ?'),
+      upsertImageLayout: database.prepare(`INSERT INTO menu_item_image_layouts (menu_item_id, usage, scale, position_x, position_y, rotation, fit, updated_at_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(menu_item_id, usage) DO UPDATE SET scale=excluded.scale, position_x=excluded.position_x, position_y=excluded.position_y, rotation=excluded.rotation, fit=excluded.fit, updated_at_ms=excluded.updated_at_ms`),
+      insertImageLayoutEvent: database.prepare('INSERT INTO event_log (event_epoch, event_type, aggregate_type, aggregate_id, actor_device_id, payload_json, created_at_ms) VALUES (?, \'menu.updated\', \'menu_item\', ?, ?, ?, ?)'),
       findActiveVariants: database.prepare(`
         SELECT variant_id, menu_item_id, name, volume_label, price_yen, sort_order, temperature_options_json
         FROM menu_item_variants
@@ -1009,6 +1052,28 @@ export function createCatalogRepository({ database, now = Date.now } = {}) {
     });
   }
 
+  function writeImageLayouts(principal, request) {
+    ensureOpen();
+    authorizeCatalogWriter(principal);
+    const normalized = normalizeImageLayoutWriteRequest(request);
+    return runWriteTransaction(() => {
+      const current = statements.findImageLayoutItem.get(normalized.menuItemId);
+      if (!current) throw repositoryError(CATALOG_ERROR_CODES.MENU_ITEM_NOT_FOUND, 'The catalog item was not found.');
+      if (current.version !== normalized.expectedVersion) throw repositoryError(CATALOG_ERROR_CODES.VERSION_CONFLICT, 'The catalog item has changed since it was read.');
+      const timestamp = now();
+      const update = statements.updateImageLayoutVersion.run(timestamp, normalized.menuItemId, normalized.expectedVersion);
+      if (Number(update.changes) !== 1) throw repositoryError(CATALOG_ERROR_CODES.VERSION_CONFLICT, 'The catalog item has changed since it was read.');
+      for (const usage of IMAGE_LAYOUT_USAGES) {
+        const layout = normalized.layouts[usage];
+        statements.upsertImageLayout.run(normalized.menuItemId, usage, layout.scale, layout.positionX, layout.positionY, layout.rotation, layout.fit, timestamp);
+      }
+      const systemState = statements.findSystemState.get();
+      const payloadJson = JSON.stringify({ menuItemId: normalized.menuItemId, version: current.version + 1, operation: 'image-layout-updated' });
+      const event = statements.insertImageLayoutEvent.run(systemState.event_epoch, normalized.menuItemId, principal.deviceId, payloadJson, timestamp);
+      return { menuItemId: normalized.menuItemId, version: current.version + 1, eventId: Number(event.lastInsertRowid), eventEpoch: systemState.event_epoch };
+    });
+  }
+
   function getMenuForPrincipal(principal) {
     ensureOpen();
     assertAuthenticPrincipal(principal);
@@ -1078,6 +1143,7 @@ export function createCatalogRepository({ database, now = Date.now } = {}) {
     getDeviceSettings,
     getMenuForPrincipal,
     writeMenuItem,
+    writeImageLayouts,
     close() {
       closed = true;
     },

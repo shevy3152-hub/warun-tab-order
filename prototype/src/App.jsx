@@ -23,7 +23,7 @@ import {
 import { createCustomerOrderClient, resolveOrderApiConfig } from "./order-outbox.js";
 import { claimCustomerDevice, createIndexedDbCredentialStore, loadOrCreateCustomerDevice, pairingClaimErrorMessage, runtimeForCustomerCredentials } from "./device-credentials.js";
 import { customerOrderErrorCategory, customerOrderNoticeFromOutboxEvent } from "./customer-order-notice.js";
-import { AdminPairingError, configuredAdminToken, fetchAdminDiagnostics, fetchAdminMenu, fetchAdminOrderHistory, fetchAdminPairingPreflight, issueCustomerPairingCode, revokeAdminDevice, saveAdminMenuItem } from "./admin-pairing.js";
+import { AdminPairingError, configuredAdminToken, fetchAdminDiagnostics, fetchAdminMenu, fetchAdminOrderHistory, fetchAdminPairingPreflight, issueCustomerPairingCode, revokeAdminDevice, saveAdminMenuItem, saveAdminImageLayouts } from "./admin-pairing.js";
 import { closeKitchenTableSession, fetchKitchenOrderHistory, fetchKitchenSnapshot, kitchenApiConfigured, markKitchenItemServed } from "./kitchen-api.js";
 import { bootstrapCustomerOrderClient } from "./customer-bootstrap.js";
 import { taxExcludedYen } from "./pricing.js";
@@ -308,6 +308,20 @@ function shochuThumbUri(uri) {
   return typeof uri === "string" ? uri.replace(/-thumb-v1(\.webp(?:[?#].*)?)$/, "-thumb-v2$1") : uri;
 }
 
+function imageLayoutTransform(layout) {
+  if (!layout) return undefined;
+  return {
+    objectFit: layout.fit === "cover" ? "cover" : "contain",
+    objectPosition: "center",
+    transform: `translate(${Number(layout.positionX) * 100}%, ${Number(layout.positionY) * 100}%) scale(${Number(layout.scale)}) rotate(${Number(layout.rotation)}deg)`,
+    transformOrigin: "center",
+  };
+}
+
+function imageLayoutStyle(item, usage) {
+  return imageLayoutTransform(item?.imageLayouts?.[usage]);
+}
+
 function listImageVisible(item) {
   if (item?.categoryId === "sake") return true;
   if (Object.hasOwn(item?.detail ?? {}, "showImageInList")) return item.detail.showImageInList === true;
@@ -515,6 +529,7 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
       description: item.description,
       price: item.priceYen,
       imageUri: item.imageUri,
+      imageLayouts: item.imageLayouts,
       isSoldOut: item.isSoldOut,
       sortOrder: item.sortOrder,
       sectionKey: item.sectionKey,
@@ -915,14 +930,14 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
                 const row = isSake ? (
                   <article className={`menu-row sake-menu-row ${item.isSoldOut ? "is-sold-out" : ""}`} key={item.id}>
                     <div className="menu-row__index">{String(index + 1).padStart(2, "0")}</div>
-                    <button className="product-image-button" onClick={() => setDetailItem(item)} aria-label={`${item.name}の詳細を見る`} disabled={!item.imageUri && !item.detail?.enabled}>{item.imageUri ? <img src={item.imageUri} alt="" /> : <span>画像なし</span>}</button>
+                    <button className="product-image-button" onClick={() => setDetailItem(item)} aria-label={`${item.name}の詳細を見る`} disabled={!item.imageUri && !item.detail?.enabled}>{item.imageUri ? <img src={item.imageUri} alt="" style={imageLayoutStyle(item, "thumbnail")} /> : <span>画像なし</span>}</button>
                     <button className="menu-row__copy menu-row__copy--button" onClick={() => item.detail?.enabled ? setDetailItem(item) : undefined} disabled={!item.detail?.enabled} aria-label={item.name + "の詳細を見る"}>{item.detail?.reading ? <small className="menu-row__reading">{item.detail.reading}</small> : null}<h2>{item.name}</h2><small className="menu-row__detail-hint">タップで明細</small></button>
                     <button className="sake-serve-button" onClick={() => openSakeSelection(item)} disabled={item.isSoldOut || !item.variants.length} aria-label={`${item.name}の提供方法を選ぶ`}><span>提供方法を選ぶ</span><small>グラス／徳利</small></button>
                   </article>
                 ) : (
                   <article className={`menu-row ${isShochu ? "shochu-menu-row" : ""} ${showListImage ? "" : "menu-row--no-image"} ${item.isSoldOut ? "is-sold-out" : ""}`} key={item.id} ref={isShochu && item.sectionKey === "芋" && !previous ? imoRef : null}>
                     <div className="menu-row__index">{String(index + 1).padStart(2, "0")}</div>
-                    {showListImage ? <button className="product-image-button" onClick={() => setDetailItem(item)} aria-label={`${item.name}の詳細を見る`} disabled={!item.imageUri && !item.detail?.enabled}>{item.imageUri ? <img src={isShochu ? shochuThumbUri(item.imageUri) : item.imageUri} alt="" /> : <span>画像なし</span>}</button> : null}
+                    {showListImage ? <button className="product-image-button" onClick={() => setDetailItem(item)} aria-label={`${item.name}の詳細を見る`} disabled={!item.imageUri && !item.detail?.enabled}>{item.imageUri ? <img src={isShochu ? shochuThumbUri(item.imageUri) : item.imageUri} alt="" style={imageLayoutStyle(item, "thumbnail")} /> : <span>画像なし</span>}</button> : null}
                     <button className="menu-row__copy menu-row__copy--button" onClick={() => item.detail?.enabled ? setDetailItem(item) : undefined} aria-label={`${item.name}の詳細を見る`}>{item.detail?.reading ? <small className="menu-row__reading">{item.detail.reading}</small> : null}<h2>{item.name}</h2><small className="menu-row__detail-hint">タップで明細</small></button>
                     <PriceDisplay priceYen={item.price} />
                     {item.isSoldOut ? <div className="sold-out-label"><b>売り切れ</b><small>SOLD OUT</small></div> : item.servingOptions.length ? <button className="shochu-serving-button" onClick={() => openShochuSelection(item)} aria-label={`${item.name}の飲み方選択`}>飲み方選択</button> : <button className="add-button" onClick={() => addSelection(item)} aria-label={`${item.name}を追加`}><Plus size={36} weight="bold" /></button>}
@@ -989,7 +1004,7 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
       {modal === "staff" ? <Modal title="スタッフを呼びますか？" onClose={() => setModal(null)}><p className="modal-lead">テーブル {device.tableId} からスタッフへお知らせします。</p><div className="modal-actions"><button className="button button--quiet" onClick={() => setModal(null)}>やめる</button><button className="button button--primary button--large" onClick={callStaff}><Bell size={22} weight="bold" /> 呼び出す</button></div></Modal> : null}
       {modal === "feature" ? <Modal title="確認" onClose={() => setModal(null)}><p className="modal-lead">この機能は次の実装段階で接続します。</p><div className="modal-actions"><button className="button button--primary" onClick={() => setModal(null)}>閉じる</button></div></Modal> : null}
       {modal === "history" ? <Modal title="これまでのご注文" onClose={() => setModal(null)} wide><div className="customer-history">{apiMode && apiHistoryState.loading ? <div className="empty-state"><ClipboardText size={42} /><p>注文履歴を読み込んでいます。</p></div> : apiMode && apiHistoryState.error ? <div className="empty-state"><ClipboardText size={42} /><p>注文履歴を取得できません。</p></div> : customerHistory.length ? customerHistory.map((order) => <article key={order.id}><header><b>{formatTime(order.createdAt)} のご注文</b><span className={`status-chip status-${order.status}`}>{customerTransportLabel(order)}</span></header>{order.items.map((item) => <div key={item.id}><span>{selectionDisplayName({ name: item.nameSnapshot }, item)}</span><b>{item.quantity}点</b></div>)}</article>) : <div className="empty-state"><ClipboardText size={42} /><p>注文履歴はまだありません。</p></div>}</div></Modal> : null}
-      {detailItem ? <Modal title={detailItem.name} titleExtra={detailItem.detail?.reading ? <span className="modal__title-reading">{detailItem.detail.reading}</span> : null} onClose={() => setDetailItem(null)} wide className="modal--product-detail" footer={<div className="modal-actions product-detail__actions"><button className="button button--quiet" onClick={() => setDetailItem(null)}>一覧へ戻る</button>{detailItem.categoryId === "shochu" && detailItem.servingOptions?.length ? <button className="button button--primary button--large" onClick={() => chooseShochuFromDetail(detailItem)}>これにする</button> : null}</div>}><div className="product-detail">{detailItem.detail?.imageUri || detailItem.imageUri ? <div className="product-detail__image"><img src={detailItem.detail?.imageUri || detailItem.imageUri} alt={detailItem.name} /></div> : null}<div>{detailItem.detail?.itemType ? <span className="category-tag">{detailItem.detail.itemType}</span> : null}<p className="product-detail__description">{detailItem.detail?.description || detailItem.description}</p><dl>{[["産地", "origin"], ["蔵元", "producer"], ["味の特徴", "taste"], ["香り", "aroma"], ["甘辛", "sweetness"], ["キレ", "finish"]].filter(([, key]) => detailItem.detail?.[key]).map(([label, key]) => <div key={key}><dt>{label}</dt><dd>{detailItem.detail[key]}</dd></div>)}</dl>{detailItem.detail?.recommendation ? <blockquote>{detailItem.detail.recommendation}</blockquote> : null}</div></div></Modal> : null}
+      {detailItem ? <Modal title={detailItem.name} titleExtra={detailItem.detail?.reading ? <span className="modal__title-reading">{detailItem.detail.reading}</span> : null} onClose={() => setDetailItem(null)} wide className="modal--product-detail" footer={<div className="modal-actions product-detail__actions"><button className="button button--quiet" onClick={() => setDetailItem(null)}>一覧へ戻る</button>{detailItem.categoryId === "shochu" && detailItem.servingOptions?.length ? <button className="button button--primary button--large" onClick={() => chooseShochuFromDetail(detailItem)}>これにする</button> : null}</div>}><div className="product-detail">{detailItem.detail?.imageUri || detailItem.imageUri ? <div className="product-detail__image"><img src={detailItem.detail?.imageUri || detailItem.imageUri} alt={detailItem.name} style={imageLayoutStyle(detailItem, "detail")} /></div> : null}<div>{detailItem.detail?.itemType ? <span className="category-tag">{detailItem.detail.itemType}</span> : null}<p className="product-detail__description">{detailItem.detail?.description || detailItem.description}</p><dl>{[["産地", "origin"], ["蔵元", "producer"], ["味の特徴", "taste"], ["香り", "aroma"], ["甘辛", "sweetness"], ["キレ", "finish"]].filter(([, key]) => detailItem.detail?.[key]).map(([label, key]) => <div key={key}><dt>{label}</dt><dd>{detailItem.detail[key]}</dd></div>)}</dl>{detailItem.detail?.recommendation ? <blockquote>{detailItem.detail.recommendation}</blockquote> : null}</div></div></Modal> : null}
     </div>
   );
 }
@@ -1169,6 +1184,70 @@ const adminTabs = [
   { id: "devices", label: "端末割り当て", icon: Monitor },
 ];
 
+const DEFAULT_IMAGE_LAYOUT = Object.freeze({ scale: 1, positionX: 0, positionY: 0, rotation: 0, fit: "contain" });
+
+function ImageLayoutEditor({ item, onClose, onSaved }) {
+  const [usage, setUsage] = useState("thumbnail");
+  const [mode, setMode] = useState("manual");
+  const [layouts, setLayouts] = useState(() => ({ thumbnail: { ...DEFAULT_IMAGE_LAYOUT, ...(item.imageLayouts?.thumbnail ?? {}) }, detail: { ...DEFAULT_IMAGE_LAYOUT, ...(item.imageLayouts?.detail ?? {}) } }));
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const frameRef = useRef(null);
+  const dragRef = useRef(null);
+  const layout = layouts[usage];
+  const imageUri = usage === "thumbnail" ? item.imageUri : item.detail?.imageUri || item.imageUri;
+  const setLayout = (patch) => setLayouts((current) => ({ ...current, [usage]: { ...current[usage], ...patch } }));
+  const adjust = (key, amount) => setLayout({ [key]: Math.max(key === "scale" ? 0.5 : key === "rotation" ? -15 : -1, Math.min(key === "scale" ? 4 : key === "rotation" ? 15 : 1, Number((layout[key] + amount).toFixed(2)))) });
+  const reset = () => { setMode("manual"); setLayout({ ...DEFAULT_IMAGE_LAYOUT }); };
+  const selectMode = (nextMode) => {
+    setMode(nextMode);
+    if (nextMode === "contain") setLayout({ ...DEFAULT_IMAGE_LAYOUT });
+    if (nextMode === "cover") setLayout({ ...DEFAULT_IMAGE_LAYOUT, fit: "cover" });
+  };
+  const onPointerDown = (event) => {
+    if (event.button !== undefined && event.button !== 0) return;
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+    dragRef.current = { x: event.clientX, y: event.clientY, positionX: layout.positionX, positionY: layout.positionY };
+  };
+  const onPointerMove = (event) => {
+    if (!dragRef.current || !frameRef.current) return;
+    const rect = frameRef.current.getBoundingClientRect();
+    setLayout({ positionX: Math.max(-1, Math.min(1, dragRef.current.positionX + (event.clientX - dragRef.current.x) / rect.width)), positionY: Math.max(-1, Math.min(1, dragRef.current.positionY + (event.clientY - dragRef.current.y) / rect.height)) });
+  };
+  const onPointerUp = () => { dragRef.current = null; };
+  const onWheel = (event) => { event.preventDefault(); adjust("scale", event.deltaY < 0 ? 0.05 : -0.05); };
+  const save = async () => {
+    setSaving(true); setError("");
+    try {
+      const result = await saveAdminImageLayouts({ env: window, menuItemId: item.id, expectedVersion: item.version, layouts });
+      onSaved(layouts, result.version);
+    } catch (saveError) {
+      setError(saveError?.code === "CATALOG_CONFLICT" ? "別の管理端末で更新されています。再読込してからやり直してください。" : "画像構図を保存できませんでした。");
+    } finally { setSaving(false); }
+  };
+  return <Modal title={`画像を調整：${item.name}`} onClose={onClose} wide>
+    <div className="image-layout-editor">
+      <div className="image-layout-editor__tabs" role="tablist">{[["thumbnail", "一覧用"], ["detail", "詳細用"]].map(([id, label]) => <button type="button" role="tab" aria-selected={usage === id} className={usage === id ? "is-active" : ""} onClick={() => setUsage(id)} key={id}>{label}</button>)}</div>
+      <div className="image-layout-editor__workspace">
+        <div className={`image-layout-editor__frame image-layout-editor__frame--${usage}`} ref={frameRef} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerUp} onWheel={onWheel} aria-label={`${usage === "thumbnail" ? "一覧" : "詳細"}用画像プレビュー`}>
+          {imageUri ? <img src={imageUri} alt="" draggable="false" style={imageLayoutTransform(layout)} /> : <span>画像なし</span>}
+        </div>
+        <div className="image-layout-editor__controls">
+          <p className="image-layout-editor__hint">枠内をドラッグ／ホイールで調整（A90相当プレビュー）</p>
+          <label>表示モード<select value={mode} onChange={(event) => selectMode(event.target.value)}><option value="contain">全体を収める</option><option value="cover">枠を埋める</option><option value="manual">手動調整</option></select></label>
+          <label>ズーム <output>{layout.scale.toFixed(2)}×</output><input type="range" min="0.5" max="4" step="0.01" value={layout.scale} onChange={(event) => setLayout({ scale: Number(event.target.value) })} /></label>
+          <div className="image-layout-editor__button-row"><button type="button" onClick={() => adjust("positionY", -0.01)}>↑ 1px</button><button type="button" onClick={() => adjust("positionY", 0.01)}>↓ 1px</button><button type="button" onClick={() => adjust("positionX", -0.01)}>← 1px</button><button type="button" onClick={() => adjust("positionX", 0.01)}>→ 1px</button></div>
+          <div className="image-layout-editor__button-row"><button type="button" onClick={() => adjust("positionY", -0.05)}>↑ 5px</button><button type="button" onClick={() => adjust("positionY", 0.05)}>↓ 5px</button><button type="button" onClick={() => adjust("positionX", -0.05)}>← 5px</button><button type="button" onClick={() => adjust("positionX", 0.05)}>→ 5px</button></div>
+          <label>角度 <output>{layout.rotation.toFixed(1)}°</output><input type="range" min="-15" max="15" step="0.1" value={layout.rotation} onChange={(event) => setLayout({ rotation: Number(event.target.value) })} /></label>
+          <div className="image-layout-editor__button-row"><button type="button" onClick={() => adjust("rotation", -1)}>↶ 1°</button><button type="button" onClick={() => adjust("rotation", -0.1)}>↶ 0.1°</button><button type="button" onClick={() => adjust("rotation", 0.1)}>↷ 0.1°</button><button type="button" onClick={() => adjust("rotation", 1)}>↷ 1°</button></div>
+          <div className="image-layout-editor__actions"><button type="button" className="button button--quiet" onClick={reset}>リセット</button><button type="button" className="button button--quiet" onClick={onClose}>キャンセル</button><button type="button" className="button button--primary" disabled={saving} onClick={save}>{saving ? "保存中" : "保存"}</button></div>
+          {error ? <p role="alert" className="image-layout-editor__error">{error}</p> : null}
+        </div>
+      </div>
+    </div>
+  </Modal>;
+}
+
 function AdminScreen({ state, updateState, section = "menu" }) {
   const [showAdd, setShowAdd] = useState(false);
   const [editingMenuId, setEditingMenuId] = useState(null);
@@ -1181,6 +1260,7 @@ function AdminScreen({ state, updateState, section = "menu" }) {
   const [diagnosticState, setDiagnosticState] = useState({ loading: false, data: null, error: null });
   const [diagnosticRefreshKey, setDiagnosticRefreshKey] = useState(0);
   const [diagnosticExpanded, setDiagnosticExpanded] = useState(false);
+  const [imageLayoutItemId, setImageLayoutItemId] = useState(null);
   const [catalogState, setCatalogState] = useState({ loading: Boolean(configuredAdminToken(window)) && section === "menu", error: false, saving: false, message: "" });
   const adminApiMode = Boolean(configuredAdminToken(window));
   useEffect(() => {
@@ -1215,6 +1295,7 @@ function AdminScreen({ state, updateState, section = "menu" }) {
             detail: item.detail,
             variants: item.variants ?? [],
             servingOptions: item.servingOptions ?? [],
+            imageLayouts: item.imageLayouts,
           })),
         }));
         setCatalogState({ loading: false, error: false, saving: false, message: "" });
@@ -1515,7 +1596,7 @@ function AdminScreen({ state, updateState, section = "menu" }) {
             <label className="menu-editor__wide">おすすめコメント<textarea name="recommendation" defaultValue={editingMenu?.detail?.recommendation ?? ""} /></label>
              <div className="menu-editor__actions"><button className="button button--quiet" type="button" onClick={resetMenuEditor}>キャンセル</button><button className="button button--primary" type="submit">{editingMenu ? "変更を保存" : "追加する"}</button></div>
            </form> : null}
-           <div className="menu-admin-list"><div className="admin-row admin-row--header"><span>画像</span><span>カテゴリー</span><span>正式名・通称</span><span>価格（税込）</span><span>販売状況</span><span>並び順</span><span>操作</span></div>{menuGroups.map(({ category, items }) => <section className="menu-admin-group" key={category.id}><h3 className="menu-admin-group__heading"><span>{category.name}</span><small>{items.length}品</small></h3>{items.map((item) => <div className={`admin-row ${item.isSoldOut ? "is-muted" : ""}`} key={item.id}><div className="image-placeholder">画像なし</div><span className="category-tag">{category.name}</span><div className="admin-row__name"><b>{item.name}</b><small>通称：{item.kitchenAlias ?? DEFAULT_KITCHEN_MENU_ALIASES[item.id] ?? item.name}</small></div><label className="price-input"><input type="number" value={item.price} min="0" step="10" onChange={(event) => setMenuItem(item.id, { price: Number(event.target.value) })} /><small>円</small></label><button className={`toggle ${item.isSoldOut ? "" : "is-on"}`} onClick={() => setMenuItem(item.id, { isSoldOut: !item.isSoldOut })}><i></i><span>{item.isSoldOut ? "売り切れ" : "販売中"}</span></button><input className="sort-order-input" value={item.sortOrder} aria-label={`${item.name}の並び順`} onChange={(event) => setMenuItem(item.id, { sortOrder: Number(event.target.value) || 1 })} /><div className="admin-row__actions"><button className="button button--quiet" onClick={() => { setEditingMenuId(item.id); setShowAdd(true); }}>編集</button><button className="delete-button delete-button--icon" aria-label={`${item.name}を削除`} onClick={() => updateState((current) => ({ ...current, menuItems: current.menuItems.filter((menu) => menu.id !== item.id) }))}><X size={20} /></button></div></div>)}</section>)}</div>
+           <div className="menu-admin-list"><div className="admin-row admin-row--header"><span>画像</span><span>カテゴリー</span><span>正式名・通称</span><span>価格（税込）</span><span>販売状況</span><span>並び順</span><span>操作</span></div>{menuGroups.map(({ category, items }) => <section className="menu-admin-group" key={category.id}><h3 className="menu-admin-group__heading"><span>{category.name}</span><small>{items.length}品</small></h3>{items.map((item) => <div className={`admin-row ${item.isSoldOut ? "is-muted" : ""}`} key={item.id}><div className="image-placeholder">画像なし</div><span className="category-tag">{category.name}</span><div className="admin-row__name"><b>{item.name}</b><small>通称：{item.kitchenAlias ?? DEFAULT_KITCHEN_MENU_ALIASES[item.id] ?? item.name}</small></div><label className="price-input"><input type="number" value={item.price} min="0" step="10" onChange={(event) => setMenuItem(item.id, { price: Number(event.target.value) })} /><small>円</small></label><button className={`toggle ${item.isSoldOut ? "" : "is-on"}`} onClick={() => setMenuItem(item.id, { isSoldOut: !item.isSoldOut })}><i></i><span>{item.isSoldOut ? "売り切れ" : "販売中"}</span></button><input className="sort-order-input" value={item.sortOrder} aria-label={`${item.name}の並び順`} onChange={(event) => setMenuItem(item.id, { sortOrder: Number(event.target.value) || 1 })} /><div className="admin-row__actions"><button className="button button--quiet" onClick={() => { setEditingMenuId(item.id); setShowAdd(true); }}>編集</button><button className="button button--quiet" onClick={() => setImageLayoutItemId(item.id)}>画像を調整</button><button className="delete-button delete-button--icon" aria-label={`${item.name}を削除`} onClick={() => updateState((current) => ({ ...current, menuItems: current.menuItems.filter((menu) => menu.id !== item.id) }))}><X size={20} /></button></div></div>)}</section>)}</div>
         </> : null}
 
         {section === "categories" ? <>
@@ -1601,6 +1682,7 @@ function AdminScreen({ state, updateState, section = "menu" }) {
         </> : null}
       </section>
       {pairingQr ? <Modal title="客席端末をQRで登録" onClose={() => setPairingQr(null)} wide><div className="pairing-qr-modal"><p>A90のカメラでこのQRを読み取ってください。登録画面にコードが自動入力されます。</p><div className="pairing-qr-modal__image" dangerouslySetInnerHTML={{ __html: pairingQr.svg }} /><p>QR接続先: {pairingQr.origin}</p><p>QRには現在のLAN URLと一回限りのペアリング情報が含まれています。手入力コードは表示しません。</p><button className="button button--quiet" type="button" onClick={() => setPairingQr(null)}>閉じる</button></div></Modal> : null}
+      {imageLayoutItemId ? <ImageLayoutEditor item={state.menuItems.find((item) => item.id === imageLayoutItemId)} onClose={() => setImageLayoutItemId(null)} onSaved={(imageLayouts, version) => { updateState((current) => ({ ...current, menuItems: current.menuItems.map((item) => item.id === imageLayoutItemId ? { ...item, imageLayouts, version } : item) })); setImageLayoutItemId(null); }} /> : null}
     </StaffShell>
   );
 }

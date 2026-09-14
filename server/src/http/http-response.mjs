@@ -39,7 +39,7 @@ const EVENT_TYPES_BY_ROLE = Object.freeze({
     'table.assignment_updated',
   ]),
 });
-const SUPPORTED_SCHEMA_VERSION = 5;
+const SUPPORTED_SCHEMA_VERSION = 6;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const OPAQUE_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
 
@@ -116,6 +116,21 @@ function mapProductDetail(detail) {
   return response;
 }
 
+function mapImageLayouts(value) {
+  if (!Object.hasOwn(value, 'imageLayouts')) return undefined;
+  requireObject(value.imageLayouts);
+  const response = {};
+  for (const usage of ['thumbnail', 'detail']) {
+    if (!Object.hasOwn(value.imageLayouts, usage)) throw invalidDto();
+    const layout = requireObject(value.imageLayouts[usage]);
+    const numbers = ['scale', 'positionX', 'positionY', 'rotation'];
+    for (const key of numbers) if (typeof layout[key] !== 'number' || !Number.isFinite(layout[key])) throw invalidDto();
+    if (layout.scale < 0.5 || layout.scale > 4 || layout.positionX < -1 || layout.positionX > 1 || layout.positionY < -1 || layout.positionY > 1 || layout.rotation < -15 || layout.rotation > 15) throw invalidDto();
+    response[usage] = { scale: layout.scale, positionX: layout.positionX, positionY: layout.positionY, rotation: layout.rotation, fit: requireOneOf(layout.fit, new Set(['contain', 'cover'])) };
+  }
+  return response;
+}
+
 function mapMenuVariant(variant, admin = false) {
   requireObject(variant);
   const response = {
@@ -188,6 +203,8 @@ function mapCustomerMenuItem(item) {
   });
   optionalStringField(item, response, 'sectionKey');
   if (Object.hasOwn(item, 'detail')) response.detail = mapProductDetail(item.detail);
+  const imageLayouts = mapImageLayouts(item);
+  if (imageLayouts) response.imageLayouts = imageLayouts;
   return response;
 }
 
@@ -223,6 +240,8 @@ function mapAdminMenuItem(item) {
     servingOptions: requireArray(item.servingOptions).map((option) => mapServingOption(option, true)),
   });
   optionalStringField(item, response, 'sectionKey');
+  const imageLayouts = mapImageLayouts(item);
+  if (imageLayouts) response.imageLayouts = imageLayouts;
   return response;
 }
 

@@ -235,3 +235,18 @@ export async function saveAdminMenuItem({ env = globalThis, item, expectedVersio
   }
   return body;
 }
+
+export async function saveAdminImageLayouts({ env = globalThis, menuItemId, expectedVersion, layouts, fetchImpl = env.fetch } = {}) {
+  const token = configuredAdminToken(env);
+  const base = apiBase(env);
+  if (!token || !base || typeof fetchImpl !== "function") throw new Error("Admin catalog is not configured.");
+  const response = await fetchImpl(`${base}/admin/catalog/menu-item/image-layouts`, {
+    method: "PUT",
+    headers: { Accept: "application/json", "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ expectedVersion, menuItemId, layouts }),
+  });
+  if (!response.ok) await responseError(response, "画像構図を保存できません。");
+  const body = await response.json();
+  if (body?.menuItemId !== menuItemId || !Number.isSafeInteger(body.version)) throw new Error("Image layout response was invalid.");
+  return body;
+}

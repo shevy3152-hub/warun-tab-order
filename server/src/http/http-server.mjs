@@ -75,6 +75,7 @@ const ROUTE_METHODS = new Map([
   ['/v1/pairings/claim', 'POST'],
   ['/v1/admin/devices/revoke', 'POST'],
   ['/v1/admin/catalog/menu-item', 'PUT'],
+  ['/v1/admin/catalog/menu-item/image-layouts', 'PUT'],
 ]);
 const READ_ONLY_ROUTE_METHODS = new Map([
   ['/v1/health', 'GET'],
@@ -774,6 +775,7 @@ function createConfiguredHttpServer({
     integrated
     && (
       typeof catalog.writeMenuItem !== 'function'
+      || typeof catalog.writeImageLayouts !== 'function'
       || !orderRepository
       || typeof orderRepository.createOrder !== 'function'
       || typeof orderRepository.getCustomerHistory !== 'function'
@@ -1069,6 +1071,16 @@ function createConfiguredHttpServer({
         if (diagnosticContext) diagnosticContext.stage = 'saved';
         recordRequestDiagnostic(diagnosticRecorder, diagnosticContext, { requestId, status: 200, now });
         writeJsonResponse(response, { statusCode: 200, body: revoked, requestId });
+        return;
+      }
+
+      if (target.path === '/v1/admin/catalog/menu-item/image-layouts') {
+        authorizeDeviceRole(principal, ['admin']);
+        const body = await readJsonBody(request);
+        const writer = requireService(catalog, 'writeImageLayouts');
+        const result = writer.writeImageLayouts(principal, body);
+        await notifyCommittedSafely(sseHub, { event: { eventEpoch: result.eventEpoch, eventId: result.eventId } });
+        writeJsonResponse(response, { statusCode: 200, body: result, requestId });
         return;
       }
 
