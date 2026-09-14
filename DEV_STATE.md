@@ -397,3 +397,23 @@ A90 WebView実機でtable 1の認証済み客席UIを受入確認し、確認さ
 - localhost／LAN healthはHTTP 200、`ready`、`db=ready`、schema v5。environment／database targetはsafe-copyである。
 - 失効前バックアップは `server/var/safe-copies/backups/initial-menu-20260818-before-revoke-unused-t2-device-20260911-195435450.sqlite3`。SHA-256は `71636A7ACD41396515127A30A3A47DC61BAF8D58B8A9822FB93C0FD9DFE37D49`。
 - 現在のcode checkpointは `232ebe8157e2203833f8194929fc5f04457d8a9c`。完全device ID、token、credential、pairing code、PIN、cookieは記録していない。
+
+## 2026-09-14 日本酒4商品正式画像受入
+
+- 日本酒4商品の背景付き実写JPEGを正式画像として追加した。元画像の実画素を使用し、AI加工、背景除去、透過処理は行っていない。
+- 正式画像は `prototype/public/menu-images/sake/` に配置した。
+  - W（甘口）：`sake-w.jpg`
+  - 房島屋：`sake-fusashimaya.jpg`
+  - 醴泉：`sake-reisen.jpg`
+  - 三千盛：`sake-sanshimori.jpg`
+- 一覧は主ラベル中心、詳細は瓶全体を表示する。画像は背景付きJPEG方式で、一覧用・詳細用とも商品ごとの正式JPEGを参照する。
+- safe-copyの構図設定は以下のとおり。全商品とも `fit=contain`、`rotation=0`。
+  - W thumbnail：`scale=1.65, positionX=0, positionY=-0.20`
+  - 房島屋 thumbnail：`scale=1.65, positionX=0, positionY=-0.16`
+  - 醴泉 thumbnail：`scale=1.65, positionX=0, positionY=-0.12`
+  - 三千盛 thumbnail：`scale=1.65, positionX=0, positionY=-0.24`
+  - 全商品の detail：`scale=1, positionX=0, positionY=0`
+- 管理画面と客席画面で画像・構図の表示一致を確認した。日本酒一覧4商品、主ラベル中心サムネイル、醴泉詳細はPASS。
+- 静的画像追加後は `prototype` で `pnpm run build` を実行する必要がある。Vite buildはPASSした。
+- safe-copy schema v6、`integrity_check=ok`、foreign key違反0件。production DBは変更していない。
+- production反映、実機A90確認、pairing、注文送信は未実施。
