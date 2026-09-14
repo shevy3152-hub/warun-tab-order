@@ -3,6 +3,23 @@
 最終更新: 2026-09-12
 対象: `C:\Users\user\Documents\ChatGPT\タブレットオーダーシステム`
 
+## 2026-09-14 共通画像構図エディター checkpoint
+
+共通画像構図エディターを `cb6008d`（`feat: add menu image layout editor`）へ確定した。対象は商品カテゴリではなく、全メニュー商品の画像用途 `thumbnail`／`detail` である。
+
+- schema v6で `menu_item_image_layouts` を追加。元画像、既存商品データ、注文データは変更しない。
+- thumbnail／detailを独立して保存し、`contain`／`cover`／手動調整を選択できる。
+- 手動調整はドラッグ（Pointer Events）、ホイールズーム、ズームスライダー、回転スライダー、1px／5px相当の位置微調整、0.1度／1度の回転微調整、リセット、保存、キャンセルに対応する。
+- positionは表示枠に対する正規化値で保存し、画像の縦横比を維持する。未設定商品は従来表示を維持する。
+- 管理APIは `PUT /v1/admin/catalog/menu-item/image-layouts`。管理認証、数値範囲検証、競合検出、トランザクション保存を行う。
+- 1313×820の管理画面で、モーダル内スクロールとsticky操作部により保存・キャンセル・リセットへ到達できることを確認した。
+- safe-copyの `sake-reisen` 設定：thumbnailは `scale 1.65 / positionX 0 / positionY -0.12 / rotation 0 / fit contain`。detailは既定値（`1 / 0 / 0 / 0 / contain`）。production DBは変更していない。
+- safe-copyはschema v6、`integrity_check=ok`、`foreign_key_check=0`。注文20、注文項目33、セッション6を確認した。
+- prototype 93/93 PASS、server 370/370 PASS、Vite build PASS、`git diff --check` PASS。
+- フード実商品での視覚確認は保留。safe-copyにフードカテゴリ／商品が存在しないため、仮商品・仮データは作成していない。最初のフード登録時に確認する。
+- A90実機、pairing、注文送信、APK、production DB、画像加工は実施していない。
+- Commit 1から画像、QAスクリーンショット、safe-copy DB、backup DB、ログ、node_modules、pnpm-lock、旧試行スクリプト、既存未追跡ファイルを除外した。
+
 ## 2026-09-13 seasonal customer rail theme checkpoint
 
 - `standard`は従来の無地赤背景、`camellia`は展開時だけ完成PNGを1枚表示するテーマ基盤を実装した。
