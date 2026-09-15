@@ -3,7 +3,38 @@
 最終更新: 2026-09-12
 対象: `C:\Users\user\Documents\ChatGPT\タブレットオーダーシステム`
 
-## 2026-09-15 rotation一時無効化 checkpoint
+## 2026-09-15 画像角度調整・房島屋透過PNG checkpoint
+
+画像構図エディターの角度調整を復旧し、Escapeを保存なしのキャンセル経路として追加した。角度復旧とEscape対応は `6abb6f6`（`fix: restore image-only rotation controls`）へ確定した。
+
+- thumbnail／detailを独立して編集できる。
+- frameは固定し、contain／cover、position、scale、ドラッグ、1px／5px微調整、reset、save、cancelを維持した。
+- 回転transformは内側の画像要素だけへ適用し、透過PNGでは瓶だけが回転する。frame、背景、モーダル、商品情報、操作欄は回転しない。
+- Escapeはキャンセル扱いで、保存APIを呼ばずDBを更新しない。listenerはエディター終了時に解除する。
+- 背景込みJPEGでは写真の矩形外周も回転して見えるため、回転を使う商品は透過PNGを推奨する。
+
+房島屋 `sake-fusashimaya` について、元写真品質に由来する限界を踏まえて透過PNG方式を暫定受入とした。透過PNG方式、枠固定、瓶だけの回転は技術的PASS。後から管理画面で位置・大きさ・角度を調整できる。正式画像追加は `cb1d790`（`feat: add transparent Fusashimaya menu images`）へ確定した。
+
+- detail画像: `prototype/public/menu-images/sake/sake-fusashimaya-detail.png`（760×1320、RGBA PNG、SHA-256 `86BC04F49DDEAB9051A128F8EE0726C9A60CAF3132264621F221366224C37D1C`）。
+- thumbnail画像: `prototype/public/menu-images/sake/sake-fusashimaya-thumb.png`（560×560、RGBA PNG、SHA-256 `79F34621B8441CA95C22F10273D21A0C68E05051AB15BA552BDDD441C73397E8`）。
+- 旧房島屋JPEGは保全し、原本PNGはGitへ追加していない。
+- safe-copyでは房島屋のimage URIをthumbnail PNG、detail URIをdetail PNGへ更新済み。現在のread-only確認ではthumbnail `contain / scale 2.02 / X 0.0226688233 / Y -0.2223721706 / rotation 0.4`、detail `contain / scale 1.05 / X -0.1615159379 / Y 0.0156621089 / rotation 0`。今回のcheckpoint commit中にDBは変更していない。
+- safe-copyはhealth `ready`／`db=ready`／schema v6、`integrity_check=ok`、foreign key違反0件。注文20、order_items 33、table_sessions 6。production DBは未変更。
+- A90実機では房島屋を目視し、元写真品質を踏まえて暫定受入とした。残り3商品の透過PNG展開は未実施。
+- prototype 94/94 PASS、Vite build PASS、`git diff --check` PASS。
+
+### 未完了タスク
+
+- 残り3商品の透過PNG正式化。
+- 左赤レール画像のアップロード・位置・大きさ調整機能。
+- 左赤レールの制作ガイド表示。
+- 管理画面の商品カテゴリー横並び・商品行コンパクト化。
+- 食事メニュー登録用Markdownは未作成。
+- 実フード商品での画像エディター確認。
+- production環境の正式確定。
+- `/admin`から正式管理URLへのredirectと起動ショートカット整備。
+
+## 2026-09-15 rotation一時無効化 checkpoint（履歴）
 
 画像構図エディターの未解決回転表示問題を切り離すため、rotation操作を一時無効化し、Commit 1 `76f1208`（`fix: temporarily disable image rotation`）へ確定した。
 
@@ -14,17 +45,7 @@
 - prototype 94/94 PASS、Vite build PASS。production DB／safe-copy DBは未変更。
 - 角度調整の正しい再実装は後続タスクとする。
 
-### 未完了タスク
-
-- 管理画面メニュー編集UX（優先度：中）
-  - 大分類・細分類を横並び表示する。
-  - 商品行をコンパクト表示する。
-  - 編集ボタンで商品直下に編集フォームを展開する。
-  - 保存・キャンセル後は元の商品位置へ戻す。
-  - 全商品共通とする。
-- フード実商品での構図エディター確認：最初の実フード登録時に実施する。
-- 日本酒画像と構図設定のproduction反映。
-- A90実機確認。
+後続の「画像角度調整・房島屋透過PNG checkpoint」で、角度調整復旧、透過PNG方式、受入結果、現在の未完了タスクを更新した。
 
 ## 2026-09-14 共通画像構図エディター checkpoint
 
