@@ -394,6 +394,21 @@ test("sake product details and order snapshots retain the shared selection model
   assert.match(customerScreen, /unitPriceSnapshot: row\.variant\?\.priceYen/);
 });
 
+test("image layout editor temporarily disables rotation without changing layout controls", () => {
+  assert.match(appSource, /transform: `translate\(\$\{Number\(layout\.positionX\) \* 100\}%\, \$\{Number\(layout\.positionY\) \* 100\}%\) scale\(\$\{Number\(layout\.scale\)\}\)`/);
+  assert.doesNotMatch(appSource.slice(appSource.indexOf("function imageLayoutTransform"), appSource.indexOf("function listImageVisible")), /rotate\(/);
+  const editor = appSource.slice(appSource.indexOf("function ImageLayoutEditor"), appSource.indexOf("function AdminScreen"));
+  assert.doesNotMatch(editor, /角度|rotation.*range|0\.1°|1°/);
+  assert.match(editor, /positionY/);
+  assert.match(editor, /positionX/);
+  assert.match(editor, /scale/);
+  assert.match(editor, /thumbnail.*detail|\[\["thumbnail", "一覧用"\].*\["detail", "詳細用"\]\]/s);
+  assert.match(editor, /リセット/);
+  assert.match(editor, /キャンセル/);
+  assert.match(editor, /保存/);
+  assert.match(editor, /rotation: layout\.rotation/);
+});
+
 test("admin detail editing covers every displayed tasting field", () => {
   assert.match(appSource, /name="aroma"/);
   assert.match(appSource, /name="sweetness"/);
