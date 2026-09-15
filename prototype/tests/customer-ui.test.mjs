@@ -394,19 +394,29 @@ test("sake product details and order snapshots retain the shared selection model
   assert.match(customerScreen, /unitPriceSnapshot: row\.variant\?\.priceYen/);
 });
 
-test("image layout editor temporarily disables rotation without changing layout controls", () => {
-  assert.match(appSource, /transform: `translate\(\$\{Number\(layout\.positionX\) \* 100\}%\, \$\{Number\(layout\.positionY\) \* 100\}%\) scale\(\$\{Number\(layout\.scale\)\}\)`/);
-  assert.doesNotMatch(appSource.slice(appSource.indexOf("function imageLayoutTransform"), appSource.indexOf("function listImageVisible")), /rotate\(/);
+test("image layout editor rotates only the inner image and preserves layout controls", () => {
+  const transformSource = appSource.slice(appSource.indexOf("function imageLayoutTransform"), appSource.indexOf("function listImageVisible"));
+  assert.match(transformSource, /transform: `translate\(\$\{Number\(layout\.positionX\) \* 100\}%\, \$\{Number\(layout\.positionY\) \* 100\}%\) scale\(\$\{Number\(layout\.scale\)\}\) rotate\(\$\{Number\(layout\.rotation\)\}deg\)`/);
+  assert.doesNotMatch(transformSource, /image-layout-editor__frame/);
   const editor = appSource.slice(appSource.indexOf("function ImageLayoutEditor"), appSource.indexOf("function AdminScreen"));
-  assert.doesNotMatch(editor, /角度|rotation.*range|0\.1°|1°/);
+  assert.match(editor, /<img src=\{imageUri\} alt="" draggable="false" style=\{imageLayoutTransform\(layout\)\} \/>/);
+  assert.match(editor, /角度 <output>\{layout\.rotation\.toFixed\(1\)\}°<\/output><input type="range" min="-15" max="15" step="0\.1" value=\{layout\.rotation\}/);
+  assert.match(editor, /adjust\("rotation", -1\)/);
+  assert.match(editor, /adjust\("rotation", -0\.1\)/);
+  assert.match(editor, /adjust\("rotation", 0\.1\)/);
+  assert.match(editor, /adjust\("rotation", 1\)/);
   assert.match(editor, /positionY/);
   assert.match(editor, /positionX/);
   assert.match(editor, /scale/);
   assert.match(editor, /thumbnail.*detail|\[\["thumbnail", "一覧用"\].*\["detail", "詳細用"\]\]/s);
+  assert.match(editor, /const handleKeyDown = \(event\) => \{[\s\S]*event\.key === "Escape"[\s\S]*event\.preventDefault\(\)[\s\S]*onClose\(\)[\s\S]*\};[\s\S]*window\.addEventListener\("keydown", handleKeyDown\);[\s\S]*return \(\) => window\.removeEventListener\("keydown", handleKeyDown\);/);
+  assert.match(editor, /const save = async \(\) => \{[\s\S]*saveAdminImageLayouts\(/);
   assert.match(editor, /リセット/);
   assert.match(editor, /キャンセル/);
   assert.match(editor, /保存/);
   assert.match(editor, /rotation: layout\.rotation/);
+  assert.match(styles, /\.image-layout-editor__frame \{[^}]*overflow: hidden[^}]*\}/);
+  assert.doesNotMatch(styles, /\.image-layout-editor__frame \{[^}]*transform:/);
 });
 
 test("admin detail editing covers every displayed tasting field", () => {

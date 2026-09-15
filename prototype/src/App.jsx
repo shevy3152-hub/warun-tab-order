@@ -313,7 +313,7 @@ function imageLayoutTransform(layout) {
   return {
     objectFit: layout.fit === "cover" ? "cover" : "contain",
     objectPosition: "center",
-    transform: `translate(${Number(layout.positionX) * 100}%, ${Number(layout.positionY) * 100}%) scale(${Number(layout.scale)})`,
+    transform: `translate(${Number(layout.positionX) * 100}%, ${Number(layout.positionY) * 100}%) scale(${Number(layout.scale)}) rotate(${Number(layout.rotation)}deg)`,
     transformOrigin: "center",
   };
 }
@@ -1198,6 +1198,13 @@ function ImageLayoutEditor({ item, onClose, onSaved }) {
   const imageUri = usage === "thumbnail" ? item.imageUri : item.detail?.imageUri || item.imageUri;
   const setLayout = (patch) => setLayouts((current) => ({ ...current, [usage]: { ...current[usage], ...patch } }));
   const adjust = (key, amount) => setLayout({ [key]: Math.max(key === "scale" ? 0.5 : key === "rotation" ? -15 : -1, Math.min(key === "scale" ? 4 : key === "rotation" ? 15 : 1, Number((layout[key] + amount).toFixed(2)))) });
+  useEffect(() => {
+    const handleKeyDown = (event) => {
+      if (event.key === "Escape") { event.preventDefault(); onClose(); }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [onClose]);
   const reset = () => { setMode("manual"); setLayout({ ...DEFAULT_IMAGE_LAYOUT, rotation: layout.rotation }); };
   const selectMode = (nextMode) => {
     setMode(nextMode);
@@ -1238,6 +1245,8 @@ function ImageLayoutEditor({ item, onClose, onSaved }) {
           <label>ズーム <output>{layout.scale.toFixed(2)}×</output><input type="range" min="0.5" max="4" step="0.01" value={layout.scale} onChange={(event) => setLayout({ scale: Number(event.target.value) })} /></label>
           <div className="image-layout-editor__button-row"><button type="button" onClick={() => adjust("positionY", -0.01)}>↑ 1px</button><button type="button" onClick={() => adjust("positionY", 0.01)}>↓ 1px</button><button type="button" onClick={() => adjust("positionX", -0.01)}>← 1px</button><button type="button" onClick={() => adjust("positionX", 0.01)}>→ 1px</button></div>
           <div className="image-layout-editor__button-row"><button type="button" onClick={() => adjust("positionY", -0.05)}>↑ 5px</button><button type="button" onClick={() => adjust("positionY", 0.05)}>↓ 5px</button><button type="button" onClick={() => adjust("positionX", -0.05)}>← 5px</button><button type="button" onClick={() => adjust("positionX", 0.05)}>→ 5px</button></div>
+          <label>角度 <output>{layout.rotation.toFixed(1)}°</output><input type="range" min="-15" max="15" step="0.1" value={layout.rotation} onChange={(event) => setLayout({ rotation: Number(event.target.value) })} /></label>
+          <div className="image-layout-editor__button-row"><button type="button" onClick={() => adjust("rotation", -1)}>↶ 1°</button><button type="button" onClick={() => adjust("rotation", -0.1)}>↶ 0.1°</button><button type="button" onClick={() => adjust("rotation", 0.1)}>↷ 0.1°</button><button type="button" onClick={() => adjust("rotation", 1)}>↷ 1°</button></div>
           <div className="image-layout-editor__actions"><button type="button" className="button button--quiet" onClick={reset}>リセット</button><button type="button" className="button button--quiet" onClick={onClose}>キャンセル</button><button type="button" className="button button--primary" disabled={saving} onClick={save}>{saving ? "保存中" : "保存"}</button></div>
           {error ? <p role="alert" className="image-layout-editor__error">{error}</p> : null}
         </div>
