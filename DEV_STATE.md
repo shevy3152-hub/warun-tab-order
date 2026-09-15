@@ -3,6 +3,29 @@
 最終更新: 2026-09-12
 対象: `C:\Users\user\Documents\ChatGPT\タブレットオーダーシステム`
 
+## 2026-09-15 rotation一時無効化 checkpoint
+
+画像構図エディターの未解決回転表示問題を切り離すため、rotation操作を一時無効化し、Commit 1 `76f1208`（`fix: temporarily disable image rotation`）へ確定した。
+
+- 角度スライダー、角度表示、±0.1°／±1°操作は画面から非表示とした。
+- 保存済みのrotation値は保持し、画像描画時にはrotationを適用しない。
+- position、scale、contain、cover、ドラッグ、微調整、reset、save、cancel、thumbnail／detail独立設定は維持した。
+- schema v6とAPIのrotation項目は互換性のため維持し、DB内のrotation値は変更していない。
+- prototype 94/94 PASS、Vite build PASS。production DB／safe-copy DBは未変更。
+- 角度調整の正しい再実装は後続タスクとする。
+
+### 未完了タスク
+
+- 管理画面メニュー編集UX（優先度：中）
+  - 大分類・細分類を横並び表示する。
+  - 商品行をコンパクト表示する。
+  - 編集ボタンで商品直下に編集フォームを展開する。
+  - 保存・キャンセル後は元の商品位置へ戻す。
+  - 全商品共通とする。
+- フード実商品での構図エディター確認：最初の実フード登録時に実施する。
+- 日本酒画像と構図設定のproduction反映。
+- A90実機確認。
+
 ## 2026-09-14 共通画像構図エディター checkpoint
 
 共通画像構図エディターを `cb6008d`（`feat: add menu image layout editor`）へ確定した。対象は商品カテゴリではなく、全メニュー商品の画像用途 `thumbnail`／`detail` である。
