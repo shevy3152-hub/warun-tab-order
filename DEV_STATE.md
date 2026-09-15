@@ -20,12 +20,20 @@
 - 旧房島屋JPEGは保全し、原本PNGはGitへ追加していない。
 - safe-copyでは房島屋のimage URIをthumbnail PNG、detail URIをdetail PNGへ更新済み。現在のread-only確認ではthumbnail `contain / scale 2.02 / X 0.0226688233 / Y -0.2223721706 / rotation 0.4`、detail `contain / scale 1.05 / X -0.1615159379 / Y 0.0156621089 / rotation 0`。今回のcheckpoint commit中にDBは変更していない。
 - safe-copyはhealth `ready`／`db=ready`／schema v6、`integrity_check=ok`、foreign key違反0件。注文20、order_items 33、table_sessions 6。production DBは未変更。
-- A90実機では房島屋を目視し、元写真品質を踏まえて暫定受入とした。残り3商品の透過PNG展開は未実施。
+- A90実機では房島屋を目視し、元写真品質を踏まえて暫定受入とした。残り3商品の透過PNG展開は後続記録へ更新した。
+- prototype 94/94 PASS、Vite build PASS、`git diff --check` PASS。
+
+今回、残り3商品（W・醴泉・三千盛）についても、元PNGの実画素を用いた決定的なalphaマスク処理と規格化を行い、透過PNG方式を正式採用した。4商品すべてで透過PNG方式、枠固定、瓶だけの回転を受入対象とする。A90では日本酒4商品の表示をユーザー目視でALL PASSとした。元写真品質に由来する限界は残るが、位置・大きさ・角度は管理画面から後調整できる。
+
+- W: `prototype/public/menu-images/sake/sake-w-detail.png`（760×1320、RGBA PNG、SHA-256 `CBF87FC94093CB83CA936A35EA199E8F5F075EB9314830828DC0298E503B2972`）、`prototype/public/menu-images/sake/sake-w-thumb.png`（560×560、RGBA PNG、SHA-256 `56425873702519B03BB9563A3BD497A6BD3820BAFE66A88963B2777E4AE68674`）。
+- 醴泉: `prototype/public/menu-images/sake/sake-reisen-detail.png`（760×1320、RGBA PNG、SHA-256 `2A0454A4C37534AABE86ADCF7987B0FC9A46ECC5381C1CC0ECE9E3E698FFDBC4`）、`prototype/public/menu-images/sake/sake-reisen-thumb.png`（560×560、RGBA PNG、SHA-256 `EBA4DD94CEF606BAFE0E6FD7D24D7513E340E1803D7A5330034A0752530AE246`）。
+- 三千盛: `prototype/public/menu-images/sake/sake-sanshimori-detail.png`（760×1320、RGBA PNG、SHA-256 `CCFDEA3F650E04422D4AF3F39EF908F8C748107137619A3F421E2E73F36063F5`）、`prototype/public/menu-images/sake/sake-sanshimori-thumb.png`（560×560、RGBA PNG、SHA-256 `481EB83FD5E39D2E3D8878A2CC409459A563B244374CCB0422F096530E0DC1BC`）。
+- safe-copyでは3商品のthumbnail/detail URIを上記PNGへ反映し、thumbnail/detailとも `contain / scale 1 / X 0 / Y 0 / rotation 0` とした。房島屋、注文、セッション、他商品は変更していない。反映後はsafe-copy `event_log=217`、`orders=20`、`order_items=33`、`table_sessions=6`、`integrity_check=ok`、foreign key違反0件、schema v6を確認した。
+- production DBは未反映。A90のpairing・注文操作は行っていない。
 - prototype 94/94 PASS、Vite build PASS、`git diff --check` PASS。
 
 ### 未完了タスク
 
-- 残り3商品の透過PNG正式化。
 - 左赤レール画像のアップロード・位置・大きさ調整機能。
 - 左赤レールの制作ガイド表示。
 - 管理画面の商品カテゴリー横並び・商品行コンパクト化。
