@@ -3,6 +3,20 @@
 最終更新: 2026-09-16
 対象: `C:\Users\user\Documents\ChatGPT\タブレットオーダーシステム`
 
+## 2026-09-16 管理画面フード商品編集永続化 checkpoint
+
+管理画面の商品編集永続化と、食事商品への日本酒variant欄誤表示修正を受入済みとした。実装commitは`0db3eae`（`feat: persist food menu admin edits`）。
+
+- 認証済み正式管理画面（safe-copy）で、茶豆説明の一時保存・通常再読込保持・正式APIによる元値復元を確認した。
+- 串カツ塩レモン税込価格の181円一時保存・通常再読込保持・客席データ反映・正式APIによる180円復元を確認した。
+- 串カツ4variantのIDは不変。商品画像URIとimage layoutは不変。
+- 食事variantを持たない食事商品では日本酒variant編集欄を表示しない。黒焼きは小・中・大、串カツは塩レモン・ソース・おろしポン酢・味噌を編集できる。
+- 保存成功後は管理APIの正式データとversionを再取得して画面stateを更新する。保存中の二重送信を防止し、API失敗・競合時は成功扱いにしない。
+- safe-copy最終値: `orders=20`、`order_items=33`、`table_sessions=6`、`event_log=291`、`integrity_check=ok`、`foreign_key_check=0`。
+- 正式価格は未確定で、production DBへ反映していない。production DB、pairing、注文送信は未操作。
+- 最終検証: customer-ui 40/40、prototype 97/97、server 371/371、Vite build、`git diff --check`。正式管理画面の最終再読込も正常表示を確認した。
+- 次工程は商品ドラッグ並び替えと中カテゴリー追加・編集。
+
 ## 食事メニュー最小実装・串カツUI acceptance checkpoint
 
 食事メニュー最小実装と串カツUIの受入をA90実機でALL PASSとした。実装commitは`277a023`（`feat: add food menu customer flow`）。
