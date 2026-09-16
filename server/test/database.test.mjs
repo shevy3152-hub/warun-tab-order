@@ -160,19 +160,19 @@ function legacySchemaSql() {
   return schema;
 }
 
-test('new database creates its parent directory and applies schema v6', async () => {
+test('new database creates its parent directory and applies schema v7', async () => {
   await withTemporaryDatabase(({ databasePath }) => {
     const connection = initializeDatabase({ databasePath });
     assert.equal(existsSync(databasePath), true);
-    assert.equal(connection.schemaVersion, 6);
+    assert.equal(connection.schemaVersion, 7);
     connection.close();
   });
 });
 
-test('new database records PRAGMA user_version = 6', async () => {
+test('new database records PRAGMA user_version = 7', async () => {
   await withTemporaryDatabase(({ databasePath }) => {
     const connection = initializeDatabase({ databasePath });
-    assert.equal(pragmaValue(connection.database, 'user_version'), 6);
+    assert.equal(pragmaValue(connection.database, 'user_version'), 7);
     connection.close();
   });
 });
@@ -236,16 +236,16 @@ test('synchronous mode is FULL', async () => {
   });
 });
 
-test('a valid schema v6 database can be closed and reopened', async () => {
+test('a valid schema v7 database can be closed and reopened', async () => {
   await withTemporaryDatabase(({ databasePath }) => {
     initializeDatabase({ databasePath }).close();
     const reopened = initializeDatabase({ databasePath });
-    assert.equal(reopened.schemaVersion, 6);
+    assert.equal(reopened.schemaVersion, 7);
     reopened.close();
   });
 });
 
-test('reopening schema v6 preserves existing data', async () => {
+test('reopening schema v7 preserves existing data', async () => {
   await withTemporaryDatabase(({ databasePath }) => {
     const first = initializeDatabase({ databasePath });
     first.database.exec(`
@@ -266,7 +266,7 @@ test('reopening schema v6 preserves existing data', async () => {
   });
 });
 
-test('schema v6 repairs the legacy unique pairing-device constraint for revoked re-registration', async () => {
+test('schema v7 repairs the legacy unique pairing-device constraint for revoked re-registration', async () => {
   await withTemporaryDatabase(({ databasePath }) => {
     const databaseModuleUrl = new URL('../src/db/database.mjs', import.meta.url).href;
     const pairingModuleUrl = new URL('../src/pairing/pairing-service.mjs', import.meta.url).href;
@@ -336,7 +336,7 @@ test('schema v6 repairs the legacy unique pairing-device constraint for revoked 
   });
 });
 
-test('legacy schema v1 migrates through schema v6 and assigns existing orders to one open table session', async () => {
+test('legacy schema v1 migrates through schema v7 and assigns existing orders to one open table session', async () => {
   await withTemporaryDatabase(({ directory }) => {
     const legacyPath = join(directory, 'legacy.sqlite3');
     const legacy = new DatabaseSync(legacyPath);
@@ -376,9 +376,9 @@ test('legacy schema v1 migrates through schema v6 and assigns existing orders to
       WHERE order_id = ?
     `).get(ORDER_ID);
 
-    assert.equal(connection.schemaVersion, 6);
-    assert.equal(pragmaValue(connection.database, 'user_version'), 6);
-    assert.equal(connection.database.prepare('SELECT schema_version FROM system_state').get().schema_version, 6);
+    assert.equal(connection.schemaVersion, 7);
+    assert.equal(pragmaValue(connection.database, 'user_version'), 7);
+    assert.equal(connection.database.prepare('SELECT schema_version FROM system_state').get().schema_version, 7);
     assert.deepEqual({
       orders: connection.database.prepare('SELECT COUNT(*) AS count FROM orders').get().count,
       orderItems: connection.database.prepare('SELECT COUNT(*) AS count FROM order_items').get().count,
@@ -395,7 +395,7 @@ test('legacy schema v1 migrates through schema v6 and assigns existing orders to
   });
 });
 
-test('schema v4 fixture migrates through the formal v6 path while preserving catalog selections and operational history', async () => {
+test('schema v4 fixture migrates through the formal v7 path while preserving catalog selections and operational history', async () => {
   await withTemporaryDatabase(({ directory }) => {
     const v4Path = join(directory, 'schema-v4-fixture.sqlite3');
     const v4 = new DatabaseSync(v4Path);
@@ -450,8 +450,8 @@ test('schema v4 fixture migrates through the formal v6 path while preserving cat
 
     const connection = initializeDatabase({ databasePath: v4Path });
     const database = connection.database;
-    assert.equal(connection.schemaVersion, 6);
-    assert.equal(pragmaValue(database, 'user_version'), 6);
+    assert.equal(connection.schemaVersion, 7);
+    assert.equal(pragmaValue(database, 'user_version'), 7);
     assert.equal(database.prepare('PRAGMA integrity_check').get().integrity_check, 'ok');
     assert.deepEqual({
       orders: database.prepare('SELECT COUNT(*) AS count FROM orders').get().count,
@@ -528,11 +528,11 @@ test('invalid item quantities are rejected by CHECK constraints', async () => {
   });
 });
 
-test('schema versions newer than v6 are rejected without migration', async () => {
+test('schema versions newer than v7 are rejected without migration', async () => {
   await withTemporaryDatabase(({ directory }) => {
     const databasePath = join(directory, 'version-5.sqlite3');
     const raw = new DatabaseSync(databasePath);
-    raw.exec('PRAGMA user_version = 7;');
+    raw.exec('PRAGMA user_version = 8;');
     raw.close();
 
     assert.throws(

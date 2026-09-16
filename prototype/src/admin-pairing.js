@@ -236,6 +236,35 @@ export async function saveAdminMenuItem({ env = globalThis, item, expectedVersio
   return body;
 }
 
+async function saveAdminCatalogResource({ env = globalThis, path, body, fetchImpl = env.fetch, invalidMessage }) {
+  const token = configuredAdminToken(env);
+  const base = apiBase(env);
+  if (!token || !base || typeof fetchImpl !== "function") throw new Error("Admin catalog is not configured.");
+  const response = await fetchImpl(`${base}${path}`, {
+    method: "PUT",
+    headers: { Accept: "application/json", "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) await responseError(response, "管理カタログを保存できません。");
+  const result = await response.json();
+  if (!result || typeof result.categoryId !== "string" || !Number.isSafeInteger(result.version)) throw new Error(invalidMessage);
+  return result;
+}
+
+export function saveAdminCategory({ env = globalThis, category = {}, expectedVersion = category.version ?? 0, fetchImpl = env.fetch } = {}) {
+  return saveAdminCatalogResource({
+    env, fetchImpl, path: "/admin/catalog/category", invalidMessage: "Admin category write response was invalid.",
+    body: { categoryId: category.id ?? null, expectedVersion, name: category.name, sectionKey: category.sectionKey, sortOrder: category.sortOrder ?? 0, isVisible: category.isVisible === true },
+  });
+}
+
+export function saveAdminMenuOrdering({ env = globalThis, categoryId, menuItemIds, expectedVersion = 0, fetchImpl = env.fetch } = {}) {
+  return saveAdminCatalogResource({
+    env, fetchImpl, path: "/admin/catalog/menu-order", invalidMessage: "Admin menu ordering response was invalid.",
+    body: { categoryId, menuItemIds, expectedVersion },
+  });
+}
+
 export async function saveAdminImageLayouts({ env = globalThis, menuItemId, expectedVersion, layouts, fetchImpl = env.fetch } = {}) {
   const token = configuredAdminToken(env);
   const base = apiBase(env);

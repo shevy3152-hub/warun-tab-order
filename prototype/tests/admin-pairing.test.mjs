@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { saveAdminMenuItem } from '../src/admin-pairing.js';
+import { saveAdminCategory, saveAdminMenuItem, saveAdminMenuOrdering } from '../src/admin-pairing.js';
 
 const env = {
   WARUN_ADMIN_API_TOKEN: 'admin-token-for-test',
@@ -70,4 +70,18 @@ test('saveAdminMenuItem exposes the safe HTTP status, code, and request ID on fa
       && error.code === 'INTERNAL_ERROR'
       && error.requestId === '00000000-0000-4000-8000-000000000003',
   );
+});
+
+test('admin category and ordering writes keep the authenticated batch contracts', async () => {
+  const requests = [];
+  const fetchImpl = async (url, options) => {
+    requests.push({ url, options, body: JSON.parse(options.body) });
+    return { ok: true, json: async () => ({ categoryId: 'food-ready', version: 3, menuItemIds: ['a', 'b'], eventEpoch: '00000000-0000-4000-8000-000000000001', eventId: 9 }) };
+  };
+  await saveAdminCategory({ env, fetchImpl, category: { id: 'food-ready', name: 'とりあえず', sectionKey: 'food', sortOrder: 10, isVisible: true, version: 2 } });
+  await saveAdminMenuOrdering({ env, fetchImpl, categoryId: 'food-ready', menuItemIds: ['a', 'b'], expectedVersion: 3 });
+  assert.equal(requests[0].url, 'http://127.0.0.1:8787/v1/admin/catalog/category');
+  assert.equal(requests[0].body.expectedVersion, 2);
+  assert.equal(requests[1].url, 'http://127.0.0.1:8787/v1/admin/catalog/menu-order');
+  assert.deepEqual(requests[1].body.menuItemIds, ['a', 'b']);
 });

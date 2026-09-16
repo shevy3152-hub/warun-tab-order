@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import {
   authorizeDeviceRole,
 } from '../auth/device-auth.mjs';
@@ -16,6 +17,7 @@ const DETAIL_TEXT_FIELDS = Object.freeze([
   'sweetness', 'finish', 'recommendation', 'description',
 ]);
 const IMAGE_LAYOUT_USAGES = Object.freeze(['thumbnail', 'detail']);
+const CATEGORY_SECTION_KEYS = Object.freeze(['drink', 'food', 'winter', 'seasonal']);
 
 function normalizeImageLayout(value, fieldName) {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) throw invalidWrite(`${fieldName} must be an object.`);
@@ -197,6 +199,30 @@ export function normalizeCatalogWriteRequest(request) {
   };
 }
 
+export function normalizeCategoryWriteRequest(request) {
+  if (request === null || typeof request !== 'object' || Array.isArray(request)) throw invalidWrite('Category write request must be an object.');
+  const categoryId = request.categoryId === undefined || request.categoryId === null || request.categoryId === ''
+    ? null : normalizeOpaqueId(request.categoryId, 'categoryId');
+  const expectedVersion = normalizeNonNegativeInteger(request.expectedVersion ?? 0, 'expectedVersion');
+  const name = normalizeText(request.name, 'name', 80, { empty: false });
+  const sectionKey = normalizeText(request.sectionKey, 'sectionKey', 20, { empty: false });
+  if (!CATEGORY_SECTION_KEYS.includes(sectionKey)) throw invalidWrite('sectionKey is not supported.');
+  const sortOrder = normalizeNonNegativeInteger(request.sortOrder ?? 0, 'sortOrder');
+  const isVisible = request.isVisible ?? false;
+  if (typeof isVisible !== 'boolean') throw invalidWrite('isVisible must be boolean.');
+  return { categoryId, expectedVersion, name, sectionKey, sortOrder, isVisible };
+}
+
+export function normalizeMenuOrderingRequest(request) {
+  if (request === null || typeof request !== 'object' || Array.isArray(request)) throw invalidWrite('Menu ordering request must be an object.');
+  const categoryId = normalizeOpaqueId(request.categoryId, 'categoryId');
+  const expectedVersion = normalizeNonNegativeInteger(request.expectedVersion ?? 0, 'expectedVersion');
+  if (!Array.isArray(request.menuItemIds) || request.menuItemIds.length > 500) throw invalidWrite('menuItemIds must be an array.');
+  const menuItemIds = request.menuItemIds.map((id, index) => normalizeOpaqueId(id, `menuItemIds[${index}]`));
+  if (new Set(menuItemIds).size !== menuItemIds.length) throw invalidWrite('menuItemIds must not contain duplicates.');
+  return { categoryId, expectedVersion, menuItemIds };
+}
+
 function deepFreeze(value) {
   if (value === null || typeof value !== 'object' || Object.isFrozen(value)) {
     return value;
@@ -281,6 +307,7 @@ function mapPublicCategory(row) {
     categoryId: row.category_id,
     name: row.name,
     sortOrder: row.sort_order,
+    sectionKey: row.section_key,
   };
 }
 
@@ -396,10 +423,23 @@ export function createCatalogRepository({ database, now = Date.now } = {}) {
         WHERE singleton_id = 1
       `),
       findWriteCategory: database.prepare(`
-        SELECT category_id
+        SELECT category_id, name, section_key, sort_order, is_visible, version
         FROM categories
         WHERE category_id = ?
       `),
+      findCategoryByNameAndSection: database.prepare('SELECT category_id FROM categories WHERE section_key = ? AND name = ?'),
+      insertCategory: database.prepare(`
+        INSERT INTO categories (category_id, name, section_key, sort_order, is_visible, version, created_at_ms, updated_at_ms)
+        VALUES (?, ?, ?, ?, ?, 1, ?, ?)
+      `),
+      updateCategory: database.prepare(`
+        UPDATE categories
+        SET name = ?, section_key = ?, sort_order = ?, is_visible = ?, version = version + 1, updated_at_ms = ?
+        WHERE category_id = ? AND version = ?
+      `),
+      findCategoryItems: database.prepare('SELECT menu_item_id, version, sort_order FROM menu_items WHERE category_id = ? ORDER BY sort_order, menu_item_id'),
+      updateMenuItemOrder: database.prepare('UPDATE menu_items SET sort_order = ?, version = version + 1, updated_at_ms = ? WHERE menu_item_id = ? AND category_id = ?'),
+      updateCategoryVersion: database.prepare('UPDATE categories SET version = version + 1, updated_at_ms = ? WHERE category_id = ? AND version = ?'),
       findWriteMenuItem: database.prepare(`
         SELECT menu_item_id, version
         FROM menu_items
@@ -499,7 +539,7 @@ export function createCatalogRepository({ database, now = Date.now } = {}) {
         ) VALUES (?, 'menu.updated', 'menu_item', ?, ?, ?, ?)
       `),
       findVisibleCategories: database.prepare(`
-        SELECT category_id, name, sort_order
+        SELECT category_id, name, section_key, sort_order
         FROM categories
         WHERE is_visible = 1
         ORDER BY sort_order, category_id
@@ -509,6 +549,7 @@ export function createCatalogRepository({ database, now = Date.now } = {}) {
           category_id,
           name,
           sort_order,
+          section_key,
           is_visible,
           version,
           updated_at_ms
@@ -1019,6 +1060,56 @@ export function createCatalogRepository({ database, now = Date.now } = {}) {
     });
   }
 
+  function writeCategory(principal, request) {
+    ensureOpen();
+    authorizeCatalogWriter(principal);
+    const normalized = normalizeCategoryWriteRequest(request);
+    return runWriteTransaction(() => {
+      const current = normalized.categoryId ? statements.findWriteCategory.get(normalized.categoryId) : undefined;
+      if (normalized.categoryId && !current) throw repositoryError(CATALOG_ERROR_CODES.CATEGORY_NOT_FOUND, 'The catalog category was not found.');
+      if (!current && normalized.expectedVersion !== 0) throw repositoryError(CATALOG_ERROR_CODES.VERSION_CONFLICT, 'The catalog category was created after the supplied version.');
+      if (current && current.version !== normalized.expectedVersion) throw repositoryError(CATALOG_ERROR_CODES.VERSION_CONFLICT, 'The catalog category has changed since it was read.');
+      const duplicate = statements.findCategoryByNameAndSection.get(normalized.sectionKey, normalized.name);
+      if (duplicate && duplicate.category_id !== normalized.categoryId) throw repositoryError(CATALOG_ERROR_CODES.ID_CONFLICT, '同じ所属先に同名のカテゴリーがあります。');
+      const timestamp = now();
+      const categoryId = normalized.categoryId ?? `category-${randomUUID()}`;
+      if (current) {
+        const update = statements.updateCategory.run(normalized.name, normalized.sectionKey, normalized.sortOrder, normalized.isVisible ? 1 : 0, timestamp, categoryId, normalized.expectedVersion);
+        if (Number(update.changes) !== 1) throw repositoryError(CATALOG_ERROR_CODES.VERSION_CONFLICT, 'The catalog category has changed since it was read.');
+      } else {
+        statements.insertCategory.run(categoryId, normalized.name, normalized.sectionKey, normalized.sortOrder, normalized.isVisible ? 1 : 0, timestamp, timestamp);
+      }
+      const systemState = statements.findSystemState.get();
+      const payloadJson = JSON.stringify({ categoryId, version: current ? current.version + 1 : 1, operation: current ? 'updated' : 'created' });
+      const event = statements.insertMenuEvent.run(systemState.event_epoch, `category:${categoryId}`, principal.deviceId, payloadJson, timestamp);
+      return { idempotencyResult: 'created', categoryId, version: current ? current.version + 1 : 1, event: { eventEpoch: systemState.event_epoch, eventId: Number(event.lastInsertRowid), eventType: 'menu.updated', payloadJson, createdAtMs: timestamp } };
+    });
+  }
+
+  function writeMenuOrdering(principal, request) {
+    ensureOpen();
+    authorizeCatalogWriter(principal);
+    const normalized = normalizeMenuOrderingRequest(request);
+    return runWriteTransaction(() => {
+      const category = statements.findWriteCategory.get(normalized.categoryId);
+      if (!category) throw repositoryError(CATALOG_ERROR_CODES.CATEGORY_NOT_FOUND, 'The catalog category was not found.');
+      if (category.version !== normalized.expectedVersion) throw repositoryError(CATALOG_ERROR_CODES.VERSION_CONFLICT, 'The catalog category has changed since it was read.');
+      const currentItems = statements.findCategoryItems.all(normalized.categoryId);
+      const expected = currentItems.map((item) => item.menu_item_id);
+      if (expected.length !== normalized.menuItemIds.length || expected.some((id) => !normalized.menuItemIds.includes(id))) {
+        throw repositoryError(CATALOG_ERROR_CODES.INVALID_WRITE_REQUEST, '商品一覧が現在のカテゴリー内容と一致しません。');
+      }
+      const timestamp = now();
+      normalized.menuItemIds.forEach((menuItemId, index) => statements.updateMenuItemOrder.run((index + 1) * 10, timestamp, menuItemId, normalized.categoryId));
+      const categoryUpdate = statements.updateCategoryVersion.run(timestamp, normalized.categoryId, normalized.expectedVersion);
+      if (Number(categoryUpdate.changes) !== 1) throw repositoryError(CATALOG_ERROR_CODES.VERSION_CONFLICT, 'The catalog category has changed since it was read.');
+      const systemState = statements.findSystemState.get();
+      const payloadJson = JSON.stringify({ categoryId: normalized.categoryId, menuItemIds: normalized.menuItemIds, version: category.version + 1, operation: 'reordered' });
+      const event = statements.insertMenuEvent.run(systemState.event_epoch, `category:${normalized.categoryId}`, principal.deviceId, payloadJson, timestamp);
+      return { idempotencyResult: 'created', categoryId: normalized.categoryId, version: category.version + 1, menuItemIds: normalized.menuItemIds, event: { eventEpoch: systemState.event_epoch, eventId: Number(event.lastInsertRowid), eventType: 'menu.updated', payloadJson, createdAtMs: timestamp } };
+    });
+  }
+
   function getDeviceSettings(principal) {
     ensureOpen();
     assertAuthenticPrincipal(principal);
@@ -1143,6 +1234,8 @@ export function createCatalogRepository({ database, now = Date.now } = {}) {
     getDeviceSettings,
     getMenuForPrincipal,
     writeMenuItem,
+    writeCategory,
+    writeMenuOrdering,
     writeImageLayouts,
     close() {
       closed = true;

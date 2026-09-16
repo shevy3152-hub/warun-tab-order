@@ -12,6 +12,8 @@ const DIAGNOSTIC_ROUTES = new Set([
   'POST /v1/admin/pairing-codes',
   'POST /v1/admin/devices/revoke',
   'PUT /v1/admin/catalog/menu-item',
+  'PUT /v1/admin/catalog/category',
+  'PUT /v1/admin/catalog/menu-order',
   'GET /v1/admin/pairing-preflight',
   'GET /v1/admin/order-history',
   'GET /v1/kitchen/order-history',

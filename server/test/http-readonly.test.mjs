@@ -265,7 +265,7 @@ test('01 health is public and returns 200', async () => {
     assert.equal(response.statusCode, 200);
     assert.equal(response.json.status, 'ready');
     assert.equal(response.json.db, 'ready');
-    assert.equal(response.json.schemaVersion, 6);
+    assert.equal(response.json.schemaVersion, 7);
   }, { now: () => 1_786_300_000_000 });
 });
 
@@ -755,7 +755,7 @@ test('50 response DTOs exactly match the role-scoped OpenAPI schemas', async () 
   await withFixture(async ({ port }) => {
     const configRequired = ['deviceId', 'role', 'deviceLabel', 'status', 'configVersion', 'eventEpoch', 'lastEventId'];
     const menuRequired = ['audience', 'eventEpoch', 'lastEventId', 'categories', 'items'];
-    const publicCategory = ['categoryId', 'name', 'sortOrder'];
+    const publicCategory = ['categoryId', 'name', 'sortOrder', 'sectionKey'];
     const adminCategory = [...publicCategory, 'isVisible', 'version', 'updatedAtMs'];
     const customerItem = [
       'menuItemId', 'categoryId', 'formalName', 'description', 'priceYen', 'isSoldOut',

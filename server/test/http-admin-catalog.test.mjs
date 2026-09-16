@@ -330,3 +330,20 @@ test('browser-shaped shochu catalog payload preserves canonical serving IDs and 
     assert.equal(item.detail.reading, 'くろきりしま');
   });
 });
+
+test('category and batch ordering endpoints enforce admin auth and optimistic versions', async () => {
+  await withFixture(async ({ port, database }) => {
+    const unauthenticated = await request({ port, path: '/v1/admin/catalog/category', body: { name: '揚げ物', sectionKey: 'food', sortOrder: 10 } });
+    assert.equal(unauthenticated.statusCode, 401);
+    const category = await request({ port, token: ADMIN_TOKEN, path: '/v1/admin/catalog/category', body: { categoryId: 'drink', name: 'ドリンク', sectionKey: 'drink', sortOrder: 1, isVisible: true, expectedVersion: 1 } });
+    assert.equal(category.statusCode, 200);
+    assert.equal(category.json.categoryId, 'drink');
+    const order = await request({ port, token: ADMIN_TOKEN, path: '/v1/admin/catalog/menu-order', body: { categoryId: 'drink', menuItemIds: ['sake'], expectedVersion: 2 } });
+    assert.equal(order.statusCode, 200);
+    assert.deepEqual(order.json.menuItemIds, ['sake']);
+    assert.equal(database.prepare('SELECT section_key FROM categories WHERE category_id = ?').get('drink').section_key, 'drink');
+    assert.equal(database.prepare('SELECT sort_order FROM menu_items WHERE menu_item_id = ?').get('sake').sort_order, 10);
+    const stale = await request({ port, token: ADMIN_TOKEN, path: '/v1/admin/catalog/menu-order', body: { categoryId: 'drink', menuItemIds: ['sake'], expectedVersion: 1 } });
+    assert.equal(stale.statusCode, 409);
+  });
+});

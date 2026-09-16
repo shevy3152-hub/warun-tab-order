@@ -5,7 +5,7 @@ import { DatabaseSync } from 'node:sqlite';
 
 export const LEGACY_SCHEMA_VERSION = 1;
 export const SESSION_SCHEMA_VERSION = 2;
-export const SCHEMA_VERSION = 6;
+export const SCHEMA_VERSION = 7;
 
 export const REQUIRED_TABLES = Object.freeze([
   'system_state',
@@ -29,6 +29,7 @@ export const REQUIRED_INDEXES = Object.freeze([
   'idx_devices_status_role',
   'idx_pairing_codes_expiry_unused',
   'idx_categories_visible_sort',
+  'uq_categories_section_name',
   'idx_menu_items_category_sort',
   'idx_menu_items_sold_out',
   'idx_orders_status_accepted',
@@ -97,6 +98,9 @@ export const DEFAULT_V5_MIGRATION_PATH = resolve(
 );
 export const DEFAULT_V6_MIGRATION_PATH = resolve(
   moduleDirectory, '..', '..', '..', 'docs', 'schema-v6-migration.sql',
+);
+export const DEFAULT_V7_MIGRATION_PATH = resolve(
+  moduleDirectory, '..', '..', '..', 'docs', 'schema-v7-migration.sql',
 );
 
 export class DatabaseInitializationError extends Error {
@@ -266,6 +270,7 @@ function validateLegacySchema(database) {
     'table_sessions', 'menu_item_details', 'menu_item_variants', 'menu_item_serving_options',
   ].includes(name));
   const legacyIndexes = REQUIRED_INDEXES.filter((name) => ![
+    'uq_categories_section_name',
     'idx_menu_item_image_layouts_item',
     'idx_table_sessions_table_opened',
     'uq_table_sessions_open_table',
@@ -306,6 +311,7 @@ function validateSchemaV2(database) {
     'menu_item_details', 'menu_item_variants', 'menu_item_serving_options',
   ].includes(name));
   const indexes = REQUIRED_INDEXES.filter((name) => ![
+    'uq_categories_section_name',
     'idx_menu_item_image_layouts_item',
     'idx_menu_item_variants_item_sort',
     'idx_menu_item_serving_options_item_sort',
@@ -367,6 +373,14 @@ function migrateSchemaV4ToV5(database, migrationPath) {
 function migrateSchemaV5ToV6(database, migrationPath) {
   try { database.exec(readFileSync(migrationPath, 'utf8')); }
   catch (error) { try { if (database.isTransaction) database.exec('ROLLBACK;'); } catch {} throw new DatabaseInitializationError('MIGRATION_FAILED', 'The image layout schema migration failed.', { cause: error }); }
+}
+
+function migrateSchemaV6ToV7(database, migrationPath) {
+  try { database.exec(readFileSync(migrationPath, 'utf8')); }
+  catch (error) {
+    try { if (database.isTransaction) database.exec('ROLLBACK;'); } catch {}
+    throw new DatabaseInitializationError('MIGRATION_FAILED', 'The category section schema migration failed.', { cause: error });
+  }
 }
 
 function migrateSchemaV1ToV2(database) {
@@ -559,6 +573,7 @@ function validateSchema(database) {
   assertRequiredNames(schemaObjectNames(database, 'table'), REQUIRED_TABLES, 'tables');
   assertRequiredNames(schemaObjectNames(database, 'index'), REQUIRED_INDEXES, 'indexes');
   assertRequiredNames(schemaObjectNames(database, 'trigger'), REQUIRED_TRIGGERS, 'triggers');
+  assertRequiredNames(tableColumns(database, 'categories'), ['section_key'], 'categories columns');
   assertRequiredNames(tableColumns(database, 'menu_item_variants'), ['temperature_options_json'], 'menu_item_variants columns');
   assertRequiredNames(tableColumns(database, 'order_items'), ['temperature_snapshot'], 'order_items columns');
 
@@ -639,6 +654,7 @@ export function initializeDatabase({
   v4MigrationPath = DEFAULT_V4_MIGRATION_PATH,
   v5MigrationPath = DEFAULT_V5_MIGRATION_PATH,
   v6MigrationPath = DEFAULT_V6_MIGRATION_PATH,
+  v7MigrationPath = DEFAULT_V7_MIGRATION_PATH,
 } = {}) {
   const resolvedDatabasePath = resolveFilePath(databasePath, 'databasePath');
   const resolvedSchemaPath = resolveFilePath(schemaPath, 'schemaPath');
@@ -646,6 +662,7 @@ export function initializeDatabase({
   const resolvedV4MigrationPath = resolveFilePath(v4MigrationPath, 'v4MigrationPath');
   const resolvedV5MigrationPath = resolveFilePath(v5MigrationPath, 'v5MigrationPath');
   const resolvedV6MigrationPath = resolveFilePath(v6MigrationPath, 'v6MigrationPath');
+  const resolvedV7MigrationPath = resolveFilePath(v7MigrationPath, 'v7MigrationPath');
 
   mkdirSync(dirname(resolvedDatabasePath), { recursive: true });
 
@@ -689,6 +706,11 @@ export function initializeDatabase({
     }
     if (currentVersion === 5) {
       migrateSchemaV5ToV6(database, resolvedV6MigrationPath);
+      enableWriteAheadLogging(database);
+      currentVersion = 6;
+    }
+    if (currentVersion === 6) {
+      migrateSchemaV6ToV7(database, resolvedV7MigrationPath);
       enableWriteAheadLogging(database);
       currentVersion = SCHEMA_VERSION;
     }

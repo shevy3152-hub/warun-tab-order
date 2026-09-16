@@ -277,6 +277,13 @@ test("major category selection collapses to a 78px rail and the rail reopens it"
   assert.match(styles, /\.customer-sidebar__collapsed-toggle \{/);
 });
 
+test("expanded customer rail uses a smaller wrapping subcategory label while collapsed stays at 20px", () => {
+  assert.match(styles, /\.customer-app:not\(\.customer-app--category-collapsed\) \.subcategory-nav button \{[\s\S]*padding-inline: 4px;[\s\S]*font-size: 18px;[\s\S]*line-height: 1\.18;[\s\S]*white-space: normal;/);
+  const subcategoryCss = styles.slice(styles.indexOf(".subcategory-nav button {"), styles.indexOf(".subcategory-nav button.is-active"));
+  assert.match(subcategoryCss, /font-size: 20px/);
+  assert.match(subcategoryCss, /min-height: 52px/);
+});
+
 test("all customer product lists use a shared compact header", () => {
   const menuHeaderCss = styles.slice(styles.indexOf(".menu-heading {"), styles.indexOf(".menu-list {"));
   assert.match(menuHeaderCss, /\.menu-heading \{[\s\S]*min-height: 44px[\s\S]*display: flex/);

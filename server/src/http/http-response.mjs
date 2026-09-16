@@ -39,7 +39,7 @@ const EVENT_TYPES_BY_ROLE = Object.freeze({
     'table.assignment_updated',
   ]),
 });
-const SUPPORTED_SCHEMA_VERSION = 6;
+const SUPPORTED_SCHEMA_VERSION = 7;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const OPAQUE_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
 
@@ -168,16 +168,18 @@ function mapServingOption(option, admin = false) {
 
 function mapPublicCategory(category) {
   requireObject(category);
-  return {
+  const response = {
     categoryId: requireOpaqueId(category.categoryId),
     name: requireString(category.name),
     sortOrder: requireInteger(category.sortOrder),
   };
+  if (Object.hasOwn(category, 'sectionKey')) response.sectionKey = requireOneOf(category.sectionKey, new Set(['drink', 'food', 'winter', 'seasonal']));
+  return response;
 }
 
 function mapAdminCategory(category) {
   requireObject(category);
-  return {
+  const response = {
     categoryId: requireOpaqueId(category.categoryId),
     name: requireString(category.name),
     sortOrder: requireInteger(category.sortOrder),
@@ -185,6 +187,8 @@ function mapAdminCategory(category) {
     version: requireInteger(category.version, 1),
     updatedAtMs: requireInteger(category.updatedAtMs),
   };
+  if (Object.hasOwn(category, 'sectionKey')) response.sectionKey = requireOneOf(category.sectionKey, new Set(['drink', 'food', 'winter', 'seasonal']));
+  return response;
 }
 
 function mapCustomerMenuItem(item) {
@@ -480,6 +484,27 @@ export function mapCatalogWriteResponse(result) {
   return {
     menuItemId: requireOpaqueId(result.menuItemId),
     version: requireInteger(result.version, 1),
+    eventEpoch: requireUuid(result.event?.eventEpoch),
+    eventId: requireInteger(result.event?.eventId, 1),
+  };
+}
+
+export function mapCategoryWriteResponse(result) {
+  requireObject(result);
+  return {
+    categoryId: requireOpaqueId(result.categoryId),
+    version: requireInteger(result.version, 1),
+    eventEpoch: requireUuid(result.event?.eventEpoch),
+    eventId: requireInteger(result.event?.eventId, 1),
+  };
+}
+
+export function mapMenuOrderingWriteResponse(result) {
+  requireObject(result);
+  return {
+    categoryId: requireOpaqueId(result.categoryId),
+    version: requireInteger(result.version, 1),
+    menuItemIds: requireArray(result.menuItemIds).map(requireOpaqueId),
     eventEpoch: requireUuid(result.event?.eventEpoch),
     eventId: requireInteger(result.event?.eventId, 1),
   };

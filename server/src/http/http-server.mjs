@@ -38,6 +38,8 @@ import {
   createEventHistoryUnavailableResponse,
   mapCustomerOrderHistoryResponse,
   mapCatalogWriteResponse,
+  mapCategoryWriteResponse,
+  mapMenuOrderingWriteResponse,
   mapDeviceConfigResponse,
   mapEventReplayResponse,
   mapHealthResponse,
@@ -76,6 +78,8 @@ const ROUTE_METHODS = new Map([
   ['/v1/admin/devices/revoke', 'POST'],
   ['/v1/admin/catalog/menu-item', 'PUT'],
   ['/v1/admin/catalog/menu-item/image-layouts', 'PUT'],
+  ['/v1/admin/catalog/category', 'PUT'],
+  ['/v1/admin/catalog/menu-order', 'PUT'],
 ]);
 const READ_ONLY_ROUTE_METHODS = new Map([
   ['/v1/health', 'GET'],
@@ -776,6 +780,8 @@ function createConfiguredHttpServer({
     && (
       typeof catalog.writeMenuItem !== 'function'
       || typeof catalog.writeImageLayouts !== 'function'
+      || typeof catalog.writeCategory !== 'function'
+      || typeof catalog.writeMenuOrdering !== 'function'
       || !orderRepository
       || typeof orderRepository.createOrder !== 'function'
       || typeof orderRepository.getCustomerHistory !== 'function'
@@ -1105,6 +1111,28 @@ function createConfiguredHttpServer({
         writeJsonResponse(response, {
           statusCode: 200,
           body: mapCatalogWriteResponse(result),
+          requestId,
+        });
+        return;
+      }
+
+      if (target.path === '/v1/admin/catalog/category' || target.path === '/v1/admin/catalog/menu-order') {
+        authorizeDeviceRole(principal, ['admin']);
+        const isCategoryWrite = target.path.endsWith('/category');
+        const writer = requireService(catalog, isCategoryWrite ? 'writeCategory' : 'writeMenuOrdering');
+        if (diagnosticContext) diagnosticContext.stage = 'body-read';
+        const body = await readJsonBody(request);
+        if (diagnosticContext) diagnosticContext.stage = 'mutation';
+        const result = isCategoryWrite
+          ? writer.writeCategory(principal, body)
+          : writer.writeMenuOrdering(principal, body);
+        if (diagnosticContext) diagnosticContext.stage = 'saved';
+        await notifyCommittedSafely(sseHub, result);
+        if (response.destroyed) return;
+        recordRequestDiagnostic(diagnosticRecorder, diagnosticContext, { requestId, status: 200, now });
+        writeJsonResponse(response, {
+          statusCode: 200,
+          body: isCategoryWrite ? mapCategoryWriteResponse(result) : mapMenuOrderingWriteResponse(result),
           requestId,
         });
         return;

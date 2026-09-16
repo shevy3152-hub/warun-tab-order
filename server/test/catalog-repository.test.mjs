@@ -595,7 +595,7 @@ test('customer menu returns only the identifiers and fields needed for ordering'
     assert.equal(menu.audience, 'customer');
     assert.equal(typeof menu.eventEpoch, 'string');
     assert.equal(menu.lastEventId, 1);
-    assert.deepEqual(Object.keys(menu.categories[0]).sort(), ['categoryId', 'name', 'sortOrder']);
+    assert.deepEqual(Object.keys(menu.categories[0]).sort(), ['categoryId', 'name', 'sectionKey', 'sortOrder']);
     const tamago = menu.items.find(({ menuItemId }) => menuItemId === 'tamago');
     assert.deepEqual(Object.keys(tamago).sort(), [
       'categoryId',
@@ -720,6 +720,7 @@ test('admin menu exposes sale, visibility, sort, version, and update state', asy
     assert.deepEqual(category, {
       categoryId: 'hidden',
       name: '非表示',
+      sectionKey: 'seasonal',
       sortOrder: 0,
       isVisible: false,
       version: 3,
@@ -911,5 +912,34 @@ test('authenticated principal flows through settings, menu, authorization, and o
     assert.equal(result.idempotencyResult, 'created');
     assert.equal(result.order.authenticatedDeviceId, CUSTOMER_DEVICE_ID);
     assert.equal(result.order.tableId, settings.tableId);
+  });
+});
+
+test('admin category writes validate ownership, uniqueness, and versions', async () => {
+  await withCatalogFixture(({ authenticator, catalog }) => {
+    const admin = authenticate(authenticator, ADMIN_TOKEN);
+    const created = catalog.writeCategory(admin, { name: '揚げ物', sectionKey: 'food', sortOrder: 50, isVisible: false, expectedVersion: 0 });
+    assert.match(created.categoryId, /^category-/);
+    assert.equal(created.version, 1);
+    const menu = catalog.getMenuForPrincipal(admin);
+    const category = menu.categories.find((item) => item.categoryId === created.categoryId);
+    assert.equal(category.sectionKey, 'food');
+    assert.equal(category.isVisible, false);
+    assertCatalogError(() => catalog.writeCategory(admin, { name: '揚げ物', sectionKey: 'food', sortOrder: 51, isVisible: false, expectedVersion: 0 }), CATALOG_ERROR_CODES.ID_CONFLICT);
+    assertCatalogError(() => catalog.writeCategory(admin, { categoryId: created.categoryId, name: '揚げ物2', sectionKey: 'food', sortOrder: 50, isVisible: true, expectedVersion: 0 }), CATALOG_ERROR_CODES.VERSION_CONFLICT);
+  });
+});
+
+test('admin menu ordering updates only the exact category item set', async () => {
+  await withCatalogFixture(({ authenticator, catalog }) => {
+    const admin = authenticate(authenticator, ADMIN_TOKEN);
+    const before = catalog.getMenuForPrincipal(admin);
+    const category = before.categories.find((item) => item.categoryId === 'drinks');
+    const ids = before.items.filter((item) => item.categoryId === category.categoryId).map((item) => item.menuItemId).reverse();
+    const result = catalog.writeMenuOrdering(admin, { categoryId: category.categoryId, menuItemIds: ids, expectedVersion: category.version });
+    assert.deepEqual(result.menuItemIds, ids);
+    assert.deepEqual(catalog.getMenuForPrincipal(admin).items.filter((item) => item.categoryId === 'drinks').map((item) => item.menuItemId), ids);
+    assertCatalogError(() => catalog.writeMenuOrdering(admin, { categoryId: category.categoryId, menuItemIds: [ids[0], ids[0]], expectedVersion: result.version }), CATALOG_ERROR_CODES.INVALID_WRITE_REQUEST);
+    assertCatalogError(() => catalog.writeMenuOrdering(admin, { categoryId: category.categoryId, menuItemIds: ids, expectedVersion: category.version }), CATALOG_ERROR_CODES.VERSION_CONFLICT);
   });
 });
