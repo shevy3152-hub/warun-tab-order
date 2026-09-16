@@ -537,10 +537,13 @@ h1, h2, h3, p { margin: 0; }
 .menu-editor__check input { width: 24px !important; height: 24px; }
 .menu-editor fieldset { grid-column: span 2; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; border: 1px solid var(--line); }
 .menu-editor .sake-variant-editor { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.menu-editor .food-variant-editor { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .menu-editor__actions { grid-column: 1 / -1; display: flex; justify-content: flex-end; gap: 10px; }
 .sake-variant-editor > div { display: grid; gap: 6px; padding: 6px; border: 1px dashed var(--line); }
 .sake-variant-editor > div > label:not(:first-child) { display: flex; align-items: center; gap: 6px; }
 .sake-variant-editor > div > label:not(:first-child) input { width: 20px; height: 20px; }
+.food-variant-editor > div { display: grid; gap: 6px; padding: 6px; border: 1px dashed var(--line); }
+.food-variant-editor > div > label { display: flex; flex-direction: column; gap: 4px; }
 .menu-editor legend { padding: 0 6px; font-weight: 900; }
 .inline-form label { display: grid; gap: 6px; font-size: 12px; font-weight: 800; }
 .inline-form input, .inline-form select { width: 100%; height: 43px; border: 1px solid var(--line); background: var(--paper); padding: 0 12px; }

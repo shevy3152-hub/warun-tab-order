@@ -250,8 +250,14 @@ test("admin menu editing is grouped, cancellable, and keeps edit ordering data",
   assert.match(appSource, /const menuGroups = \[/);
   assert.match(appSource, /menu-admin-group__heading/);
   assert.match(appSource, /const resetMenuEditor = \(\)/);
-  assert.match(appSource, /type="button" onClick=\{resetMenuEditor\}>キャンセル/);
-  assert.match(appSource, /sortOrder: editingMenu\?\.sortOrder/);
+  assert.match(appSource, /type="button" onClick=\{resetMenuEditor\} disabled=\{catalogState\.saving\}>キャンセル/);
+  assert.match(appSource, /name="sortOrder"/);
+  assert.match(appSource, /name="isSoldOut"/);
+  assert.match(appSource, /name="sortOrder"/);
+  assert.match(appSource, /foodVariantDefinitions\(editingMenu\)/);
+  assert.match(appSource, /const refreshedCatalog = await fetchAdminMenu/);
+  assert.match(appSource, /refreshedItem\.version !== result\.version/);
+  assert.match(appSource, /disabled=\{catalogState\.saving\}/);
   assert.match(styles, /\.menu-admin-group__heading \{/);
   assert.match(styles, /\.menu-editor__actions \{/);
 });

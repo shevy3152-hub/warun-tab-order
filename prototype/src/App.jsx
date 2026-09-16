@@ -216,6 +216,10 @@ const CUSTOMER_MAJOR_CATEGORIES = [
 ];
 
 const CUSTOMER_WINTER_CATEGORY_IDS = new Set(["winter-hotpot", "winter-shime"]);
+const FOOD_VARIANT_DEFINITIONS = {
+  "special-hine-black": ["小", "中", "大"],
+  "food-kushi-kushikatsu": ["塩レモン", "ソース", "おろしポン酢", "味噌"],
+};
 
 const CUSTOMER_DRINK_CATEGORY_IDS = new Set(CUSTOMER_DRINK_SUBCATEGORIES.flatMap((subcategory) => subcategory.categoryIds));
 const CUSTOMER_FEATURED_MENU_IDS = ["edamame", "dashimaki", "beer", "lemon", "karaage"];
@@ -357,6 +361,10 @@ function compareMenuItems(a, b) {
     if (sectionDifference !== 0) return sectionDifference;
   }
   return (Number(a?.sortOrder) || 0) - (Number(b?.sortOrder) || 0) || String(a?.id ?? "").localeCompare(String(b?.id ?? ""), "ja");
+}
+
+function foodVariantDefinitions(item) {
+  return (FOOD_VARIANT_DEFINITIONS[item?.id] ?? []).map((name, index) => ({ name, index }));
 }
 
 function expandCustomerMenuItems(items) {
@@ -1434,6 +1442,7 @@ function AdminScreen({ state, updateState, section = "menu" }) {
   const setCategory = (id, patch) => updateState((current) => ({ ...current, categories: current.categories.map((item) => item.id === id ? { ...item, ...patch } : item) }));
   const addMenu = async (event) => {
     event.preventDefault();
+    if (catalogState.saving) return;
     const form = new FormData(event.currentTarget);
     const name = form.get("name")?.toString().trim();
     const kitchenAlias = form.get("kitchenAlias")?.toString().trim();
@@ -1444,7 +1453,20 @@ function AdminScreen({ state, updateState, section = "menu" }) {
       ["徳利1合", "180ml", "tokuriPrice", "tokuri", "tokuriCold", "tokuriHot"],
       ["徳利2合", "360ml", "tokuri2Price", "tokuri2", "tokuri2Cold", "tokuri2Hot"],
     ];
-    const variants = variantDefinitions.map(([variantName, volumeLabel, priceField, suffix, coldField, hotField], index) => {
+    const foodVariants = foodVariantDefinitions(editingMenu).map(({ name: fallbackName, index }) => {
+      const existingVariant = editingMenu?.variants?.find((variant) => variant.name === fallbackName) ?? editingMenu?.variants?.[index];
+      const name = form.get(`foodVariantName${index}`)?.toString().trim() || fallbackName;
+      const priceYen = Number(form.get(`foodVariantPrice${index}`));
+      return Number.isSafeInteger(priceYen) && priceYen >= 0 ? {
+        variantId: existingVariant?.variantId ?? `${targetId}-variant-${index + 1}`,
+        name,
+        volumeLabel: existingVariant?.volumeLabel ?? "",
+        priceYen,
+        sortOrder: index + 1,
+        isActive: form.get(`foodVariantActive${index}`) === "on",
+      } : null;
+    }).filter(Boolean);
+    const variants = foodVariants.length ? foodVariants : variantDefinitions.map(([variantName, volumeLabel, priceField, suffix, coldField, hotField], index) => {
       const price = Number(form.get(priceField));
       if (!Number.isSafeInteger(price) || price <= 0) return null;
       const existingVariant = editingMenu?.variants?.find((variant) => variant.name === variantName);
@@ -1498,9 +1520,9 @@ function AdminScreen({ state, updateState, section = "menu" }) {
     const nextItem = editingMenuId ? {
       ...(editingMenu ?? {}),
       ...patch,
-      isSoldOut: editingMenu?.isSoldOut ?? false,
-      isActive: editingMenu?.isActive !== false,
-      sortOrder: editingMenu?.sortOrder ?? 0,
+      isSoldOut: form.get("isSoldOut") === "on",
+      isActive: form.get("isActive") === "on",
+      sortOrder: Number(form.get("sortOrder")) || editingMenu?.sortOrder || 1,
     } : {
       ...patch,
       isSoldOut: false,
@@ -1511,8 +1533,35 @@ function AdminScreen({ state, updateState, section = "menu" }) {
     if (adminApiMode) {
       try {
         const result = await saveAdminMenuItem({ env: window, item: nextItem, expectedVersion: editingMenu?.version ?? 0 });
-        patch.version = result.version;
+        const refreshedCatalog = await fetchAdminMenu({ env: window });
+        const refreshedItem = refreshedCatalog.items.find((item) => item.menuItemId === nextItem.id);
+        if (!refreshedItem || refreshedItem.version !== result.version) throw new Error("管理カタログの保存結果を再取得できませんでした。");
+        const refreshedPatch = {
+          id: refreshedItem.menuItemId,
+          categoryId: refreshedItem.categoryId,
+          name: refreshedItem.formalName,
+          kitchenAlias: refreshedItem.kitchenAlias,
+          description: refreshedItem.description,
+          price: refreshedItem.priceYen,
+          imageUri: refreshedItem.imageUri,
+          sectionKey: refreshedItem.sectionKey,
+          isSoldOut: refreshedItem.isSoldOut,
+          isActive: refreshedItem.isActive,
+          sortOrder: refreshedItem.sortOrder,
+          version: refreshedItem.version,
+          detail: refreshedItem.detail,
+          variants: refreshedItem.variants ?? [],
+          servingOptions: refreshedItem.servingOptions ?? [],
+          imageLayouts: refreshedItem.imageLayouts,
+        };
         setCatalogState({ loading: false, error: false, saving: false, message: "保存しました。" });
+        updateState((current) => editingMenuId ? ({
+          ...current,
+          menuItems: current.menuItems.map((item) => item.id === editingMenuId ? refreshedPatch : item),
+        }) : ({ ...current, menuItems: [...current.menuItems, refreshedPatch] }));
+        setShowAdd(false);
+        setEditingMenuId(null);
+        return;
       } catch (error) {
         const failureDetail = error?.status
           ? `HTTP ${error.status} / ${error.code || "UNKNOWN_ERROR"}${error.requestId ? ` / request ID ${error.requestId}` : ""}`
@@ -1656,11 +1705,14 @@ function AdminScreen({ state, updateState, section = "menu" }) {
             <label>カテゴリ<select name="categoryId" defaultValue={editingMenu?.categoryId}>{state.categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}</select></label>
             <label>税込マスター価格<input name="price" type="number" min="0" step="1" defaultValue={editingMenu?.price ?? 500} /></label>
             <label className="menu-editor__wide">短い説明<textarea name="description" defaultValue={editingMenu?.description ?? ""} /></label>
+            <label className="menu-editor__check"><input type="checkbox" name="isSoldOut" defaultChecked={editingMenu?.isSoldOut ?? false} /> 売り切れ</label>
+            <label className="menu-editor__check"><input type="checkbox" name="isActive" defaultChecked={editingMenu?.isActive !== false} /> 販売中</label>
+            <label>並び順<input name="sortOrder" type="number" min="0" step="1" defaultValue={editingMenu?.sortOrder ?? 1} /></label>
             <label>商品画像URI<input name="imageUri" defaultValue={editingMenu?.imageUri ?? ""} /></label>
             <label className="menu-editor__check"><input type="checkbox" name="showImageInList" defaultChecked={editingMenu?.detail?.showImageInList ?? editingMenu?.categoryId === "shochu"} /> 一覧に画像を表示（日本酒は常時表示）</label>
             <label>焼酎内の区分<select name="sectionKey" defaultValue={editingMenu?.sectionKey ?? ""}><option value="">なし</option><option value="芋">芋</option><option value="麦・その他">麦・その他</option></select></label>
             <label className="menu-editor__check"><input type="checkbox" name="shochuOptions" defaultChecked={Boolean(editingMenu?.servingOptions?.length)} /> 焼酎の標準4種の飲み方を使用</label>
-            <fieldset className="sake-variant-editor"><legend>日本酒variant（税込・提供温度）</legend><div><label>グラス 110ml<input name="glassPrice" type="number" min="0" defaultValue={editingMenu?.variants?.find((variant) => variant.name === "グラス")?.priceYen ?? ""} /></label><label><input type="checkbox" name="glassCold" defaultChecked={editingMenu?.variants?.find((variant) => variant.name === "グラス")?.temperatureOptions?.includes("冷酒") ?? true} /> 冷酒</label><label><input type="checkbox" name="glassHot" defaultChecked={editingMenu?.variants?.find((variant) => variant.name === "グラス")?.temperatureOptions?.includes("燗酒") ?? false} /> 燗酒</label></div><div><label>徳利1合 180ml<input name="tokuriPrice" type="number" min="0" defaultValue={editingMenu?.variants?.find((variant) => variant.name === "徳利1合")?.priceYen ?? ""} /></label><label><input type="checkbox" name="tokuriCold" defaultChecked={editingMenu?.variants?.find((variant) => variant.name === "徳利1合")?.temperatureOptions?.includes("冷酒") ?? true} /> 冷酒</label><label><input type="checkbox" name="tokuriHot" defaultChecked={editingMenu?.variants?.find((variant) => variant.name === "徳利1合")?.temperatureOptions?.includes("燗酒") ?? true} /> 燗酒</label></div><div><label>徳利2合 360ml<input name="tokuri2Price" type="number" min="0" defaultValue={editingMenu?.variants?.find((variant) => variant.name === "徳利2合")?.priceYen ?? ""} /></label><label><input type="checkbox" name="tokuri2Cold" defaultChecked={editingMenu?.variants?.find((variant) => variant.name === "徳利2合")?.temperatureOptions?.includes("冷酒") ?? true} /> 冷酒</label><label><input type="checkbox" name="tokuri2Hot" defaultChecked={editingMenu?.variants?.find((variant) => variant.name === "徳利2合")?.temperatureOptions?.includes("燗酒") ?? true} /> 燗酒</label></div></fieldset>
+            {editingMenu?.id && foodVariantDefinitions(editingMenu).length ? <fieldset className="food-variant-editor"><legend>variant（税込）</legend>{foodVariantDefinitions(editingMenu).map(({ name, index }) => <div key={name}><label>{name}<input name={`foodVariantName${index}`} defaultValue={editingMenu.variants?.[index]?.name ?? name} /></label><label>税込価格<input name={`foodVariantPrice${index}`} type="number" min="0" step="1" defaultValue={editingMenu.variants?.[index]?.priceYen ?? 0} /></label><label className="menu-editor__check"><input type="checkbox" name={`foodVariantActive${index}`} defaultChecked={editingMenu.variants?.[index]?.isActive !== false} /> 販売中</label></div>)}</fieldset> : editingMenu?.categoryId === "sake" ? <fieldset className="sake-variant-editor"><legend>日本酒variant（税込・提供温度）</legend><div><label>グラス 110ml<input name="glassPrice" type="number" min="0" defaultValue={editingMenu?.variants?.find((variant) => variant.name === "グラス")?.priceYen ?? ""} /></label><label><input type="checkbox" name="glassCold" defaultChecked={editingMenu?.variants?.find((variant) => variant.name === "グラス")?.temperatureOptions?.includes("冷酒") ?? true} /> 冷酒</label><label><input type="checkbox" name="glassHot" defaultChecked={editingMenu?.variants?.find((variant) => variant.name === "グラス")?.temperatureOptions?.includes("燗酒") ?? false} /> 燗酒</label></div><div><label>徳利1合 180ml<input name="tokuriPrice" type="number" min="0" defaultValue={editingMenu?.variants?.find((variant) => variant.name === "徳利1合")?.priceYen ?? ""} /></label><label><input type="checkbox" name="tokuriCold" defaultChecked={editingMenu?.variants?.find((variant) => variant.name === "徳利1合")?.temperatureOptions?.includes("冷酒") ?? true} /> 冷酒</label><label><input type="checkbox" name="tokuriHot" defaultChecked={editingMenu?.variants?.find((variant) => variant.name === "徳利1合")?.temperatureOptions?.includes("燗酒") ?? true} /> 燗酒</label></div><div><label>徳利2合 360ml<input name="tokuri2Price" type="number" min="0" defaultValue={editingMenu?.variants?.find((variant) => variant.name === "徳利2合")?.priceYen ?? ""} /></label><label><input type="checkbox" name="tokuri2Cold" defaultChecked={editingMenu?.variants?.find((variant) => variant.name === "徳利2合")?.temperatureOptions?.includes("冷酒") ?? true} /> 冷酒</label><label><input type="checkbox" name="tokuri2Hot" defaultChecked={editingMenu?.variants?.find((variant) => variant.name === "徳利2合")?.temperatureOptions?.includes("燗酒") ?? true} /> 燗酒</label></div></fieldset> : null}
             <label className="menu-editor__check"><input type="checkbox" name="detailEnabled" defaultChecked={editingMenu?.detail?.enabled ?? false} /> 詳細表示を有効にする</label>
             <label>詳細画像URI<input name="detailImageUri" defaultValue={editingMenu?.detail?.imageUri ?? ""} /></label>
             <label>ふりがな<input name="reading" defaultValue={editingMenu?.detail?.reading ?? ""} /></label>
@@ -1673,7 +1725,7 @@ function AdminScreen({ state, updateState, section = "menu" }) {
             <label>キレ<input name="finish" defaultValue={editingMenu?.detail?.finish ?? ""} /></label>
             <label className="menu-editor__wide">詳細説明<textarea name="detailDescription" defaultValue={editingMenu?.detail?.description ?? ""} /></label>
             <label className="menu-editor__wide">おすすめコメント<textarea name="recommendation" defaultValue={editingMenu?.detail?.recommendation ?? ""} /></label>
-             <div className="menu-editor__actions"><button className="button button--quiet" type="button" onClick={resetMenuEditor}>キャンセル</button><button className="button button--primary" type="submit">{editingMenu ? "変更を保存" : "追加する"}</button></div>
+             <div className="menu-editor__actions"><button className="button button--quiet" type="button" onClick={resetMenuEditor} disabled={catalogState.saving}>キャンセル</button><button className="button button--primary" type="submit" disabled={catalogState.saving}>{catalogState.saving ? "保存中" : editingMenu ? "変更を保存" : "追加する"}</button></div>
            </form> : null}
            <div className="menu-admin-list"><div className="admin-row admin-row--header"><span>画像</span><span>カテゴリー</span><span>正式名・通称</span><span>価格（税込）</span><span>販売状況</span><span>並び順</span><span>操作</span></div>{menuGroups.map(({ category, items }) => <section className="menu-admin-group" key={category.id}><h3 className="menu-admin-group__heading"><span>{category.name}</span><small>{items.length}品</small></h3>{items.map((item) => <div className={`admin-row ${item.isSoldOut ? "is-muted" : ""}`} key={item.id}><div className="image-placeholder">画像なし</div><span className="category-tag">{category.name}</span><div className="admin-row__name"><b>{item.name}</b><small>通称：{item.kitchenAlias ?? DEFAULT_KITCHEN_MENU_ALIASES[item.id] ?? item.name}</small></div><label className="price-input"><input type="number" value={item.price} min="0" step="10" onChange={(event) => setMenuItem(item.id, { price: Number(event.target.value) })} /><small>円</small></label><button className={`toggle ${item.isSoldOut ? "" : "is-on"}`} onClick={() => setMenuItem(item.id, { isSoldOut: !item.isSoldOut })}><i></i><span>{item.isSoldOut ? "売り切れ" : "販売中"}</span></button><input className="sort-order-input" value={item.sortOrder} aria-label={`${item.name}の並び順`} onChange={(event) => setMenuItem(item.id, { sortOrder: Number(event.target.value) || 1 })} /><div className="admin-row__actions"><button className="button button--quiet" onClick={() => { setEditingMenuId(item.id); setShowAdd(true); }}>編集</button><button className="button button--quiet" onClick={() => setImageLayoutItemId(item.id)}>画像を調整</button><button className="delete-button delete-button--icon" aria-label={`${item.name}を削除`} onClick={() => updateState((current) => ({ ...current, menuItems: current.menuItems.filter((menu) => menu.id !== item.id) }))}><X size={20} /></button></div></div>)}</section>)}</div>
         </> : null}
