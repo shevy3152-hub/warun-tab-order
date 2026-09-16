@@ -8,6 +8,7 @@ const MAX_ITEMS = 50;
 const MAX_QUANTITY = 99;
 const MAX_LINE_TOTAL_YEN = 100_000_000;
 const MAX_ORDER_TOTAL_YEN = 100_000_000;
+const MIN_QUANTITY_MENU_ITEM_IDS = new Set(['food-kushi-kushikatsu']);
 const TEMPERATURES = new Set(['冷酒', '燗酒']);
 const UUID_V4_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -725,6 +726,12 @@ export function createOrderRepository({ database, now = Date.now, idFactory = ra
         }
         if (activeVariantCount > 0 && activeServingOptionCount > 0) {
           throw repositoryError(ORDER_ERROR_CODES.DATABASE_FAILURE, `Menu item configuration is ambiguous: ${item.menuItemId}`);
+        }
+        if (MIN_QUANTITY_MENU_ITEM_IDS.has(item.menuItemId) && item.quantity < 2) {
+          throw repositoryError(
+            ORDER_ERROR_CODES.INVALID_ORDER_REQUEST,
+            '串カツは各種類2本からご注文いただけます',
+          );
         }
 
         const unitPriceYen = variant?.price_yen ?? menuItem.price_yen;

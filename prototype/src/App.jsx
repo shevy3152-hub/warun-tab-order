@@ -197,10 +197,25 @@ const CUSTOMER_DRINK_SUBCATEGORIES = [
 
 const CUSTOMER_MAJOR_CATEGORIES = [
   { id: "drink", name: "ドリンク", subcategories: CUSTOMER_DRINK_SUBCATEGORIES },
-  { id: "food", name: "フード", subcategories: [{ id: "food-snack", name: "おつまみ", categoryIds: [] }, { id: "food-grill", name: "焼き物", categoryIds: [] }] },
-  { id: "special", name: "名物", subcategories: [{ id: "special", name: "名物", categoryIds: [] }] },
-  { id: "seasonal", name: "季節・気まぐれ", subcategories: [{ id: "seasonal", name: "季節・気まぐれ", categoryIds: [] }] },
+  { id: "food", name: "フード", subcategories: [
+    { id: "food-ready", name: "とりあえず", categoryIds: ["food-ready"] },
+    { id: "food-chicken", name: "鶏料理", categoryIds: ["food-chicken"] },
+    { id: "food-kushi", name: "串カツ・揚げ物", categoryIds: ["food-kushi"] },
+    { id: "food-gifu", name: "岐阜の味", categoryIds: ["food-gifu"] },
+    { id: "food-teppan", name: "鉄板・一品", categoryIds: ["food-teppan"] },
+    { id: "special-hine", name: "名物", categoryIds: ["special-hine"] },
+    { id: "special-reservation", name: "予約限定", categoryIds: ["special-reservation"] },
+  ] },
+  { id: "winter", name: "冬季限定", subcategories: [
+    { id: "winter-hotpot", name: "鍋料理", categoryIds: ["winter-hotpot"] },
+    { id: "winter-shime", name: "追加・〆", categoryIds: ["winter-shime"] },
+  ] },
+  { id: "seasonal", name: "季節・気まぐれ", subcategories: [
+    { id: "seasonal", name: "季節・気まぐれ", categoryIds: [] },
+  ] },
 ];
+
+const CUSTOMER_WINTER_CATEGORY_IDS = new Set(["winter-hotpot", "winter-shime"]);
 
 const CUSTOMER_DRINK_CATEGORY_IDS = new Set(CUSTOMER_DRINK_SUBCATEGORIES.flatMap((subcategory) => subcategory.categoryIds));
 const CUSTOMER_FEATURED_MENU_IDS = ["edamame", "dashimaki", "beer", "lemon", "karaage"];
@@ -300,6 +315,8 @@ function selectionDisplayName(item, selection = {}) {
   return suffix ? `${item.name}（${suffix}）` : item.name;
 }
 
+const KUSHIKATSU_MENU_ITEM_ID = "food-kushi-kushikatsu";
+
 function PriceDisplay({ priceYen }) {
   return <span className="menu-price"><b>{yen(taxExcludedYen(priceYen))}</b><small>税込 {yen(priceYen)}</small></span>;
 }
@@ -340,6 +357,24 @@ function compareMenuItems(a, b) {
     if (sectionDifference !== 0) return sectionDifference;
   }
   return (Number(a?.sortOrder) || 0) - (Number(b?.sortOrder) || 0) || String(a?.id ?? "").localeCompare(String(b?.id ?? ""), "ja");
+}
+
+function expandCustomerMenuItems(items) {
+  return items.flatMap((item) => {
+    if (item.id !== KUSHIKATSU_MENU_ITEM_ID || !item.variants?.length) return [item];
+    return item.variants.map((variant) => ({
+      ...item,
+      id: `${item.id}::${variant.variantId}`,
+      menuItemId: item.id,
+      name: `${item.name} ${variant.name}`,
+      baseName: item.name,
+      price: variant.priceYen,
+      sortOrder: (Number(item.sortOrder) || 0) * 10 + (Number(variant.sortOrder) || 0),
+      variants: [variant],
+      isKushikatsuVirtual: true,
+      virtualVariantId: variant.variantId,
+    }));
+  });
 }
 
 const SAKE_COLD = "冷酒";
@@ -550,6 +585,8 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
   const [sakeSelection, setSakeSelection] = useState(null);
   const [sakeSelectionError, setSakeSelectionError] = useState("");
   const [shochuSelection, setShochuSelection] = useState(null);
+  const [kushikatsuSelection, setKushikatsuSelection] = useState(null);
+  const [kushikatsuSelectionError, setKushikatsuSelectionError] = useState("");
   const [notice, setNotice] = useState(null);
   const [isMenuHeaderHidden, setIsMenuHeaderHidden] = useState(false);
   const [apiOrders, setApiOrders] = useState([]);
@@ -580,7 +617,7 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
     .map((item) => item.menuItemId))];
   const currentItems = currentCategory?.id === "recommended"
     ? recentDrinkItemIds.map((itemId) => menuItems.find((item) => item.id === itemId)).filter(Boolean)
-    : menuItems.filter((item) => currentCategory?.categoryIds.includes(item.categoryId)).sort(compareMenuItems);
+    : expandCustomerMenuItems(menuItems.filter((item) => currentCategory?.categoryIds.includes(item.categoryId))).sort(compareMenuItems);
 
   useEffect(() => {
     if (!apiMode) return undefined;
@@ -676,11 +713,12 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
     if (!item || item.isSoldOut) return;
     const normalizedQuantity = Number.isInteger(quantity) && quantity > 0 ? quantity : 0;
     if (!normalizedQuantity) return;
-    const key = `${item.id}::${selection.variant?.variantId ?? ""}::${selection.servingOption?.servingOptionId ?? ""}::${selection.temperature ?? ""}`;
+    const menuItemId = item.menuItemId ?? item.id;
+    const key = `${menuItemId}::${selection.variant?.variantId ?? ""}::${selection.servingOption?.servingOptionId ?? ""}::${selection.temperature ?? ""}`;
     setCart((current) => ({
       ...current,
       [key]: {
-        menuItemId: item.id,
+        menuItemId,
         variant: selection.variant,
         temperature: selection.temperature,
         servingOption: selection.servingOption,
@@ -708,8 +746,8 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
     const now = new Date().toISOString();
     const items = cartRows.map((row) => ({
       id: makeId("item"),
-      menuItemId: row.item.id,
-      nameSnapshot: row.item.name,
+      menuItemId: row.item.menuItemId ?? row.item.id,
+      nameSnapshot: row.item.baseName ?? row.item.name,
       variantId: row.variant?.variantId,
       variantNameSnapshot: row.variant?.name,
       variantVolumeSnapshot: row.variant?.volumeLabel,
@@ -726,7 +764,7 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
       if (apiMode) {
         setNotice({ kind: "sending", message: "送信中です。注文を保存しています。" });
         const outboxRecord = await orderClient.enqueue({ items: cartRows.map((row) => ({
-          menuItemId: row.item.id,
+          menuItemId: row.item.menuItemId ?? row.item.id,
           quantity: row.quantity,
           ...(row.variant ? { variantId: row.variant.variantId } : {}),
           ...(row.temperature ? { temperature: row.temperature } : {}),
@@ -840,6 +878,8 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
   const shochuSelectionItem = shochuSelection ? menuItems.find((item) => item.id === shochuSelection.itemId) : null;
   const shochuSelectionOptions = orderedShochuServingOptions(shochuSelectionItem);
   const shochuSelectionTotal = Object.values(shochuSelection?.quantities ?? {}).reduce((sum, quantity) => sum + quantity, 0);
+  const kushikatsuSelectionItem = kushikatsuSelection ? menuItems.find((item) => item.id === kushikatsuSelection.itemId) : null;
+  const kushikatsuSelectionVariant = kushikatsuSelectionItem?.variants.find((variant) => variant.variantId === kushikatsuSelection?.variantId) ?? null;
   const openSakeSelection = (item) => {
     setSakeSelection({ itemId: item.id, variantId: null, temperature: null });
     setSakeSelectionError("");
@@ -863,6 +903,28 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
       itemId: item.id,
       quantities: Object.fromEntries(options.map((option) => [option.servingOptionId, 0])),
     });
+  };
+  const openKushikatsuSelection = (item) => {
+    const baseItem = item.isKushikatsuVirtual ? menuItems.find((candidate) => candidate.id === item.menuItemId) : item;
+    const variant = baseItem?.variants.find((candidate) => candidate.variantId === item.virtualVariantId && candidate.isActive !== false)
+      ?? baseItem?.variants.find((candidate) => candidate.isActive !== false)
+      ?? baseItem?.variants[0];
+    if (!variant) return;
+    setKushikatsuSelection({ itemId: baseItem.id, variantId: variant.variantId, quantity: 2 });
+    setKushikatsuSelectionError("");
+  };
+  const adjustKushikatsuQuantity = (delta) => {
+    setKushikatsuSelection((current) => current ? ({ ...current, quantity: Math.max(2, current.quantity + delta) }) : current);
+  };
+  const commitKushikatsuSelection = () => {
+    if (!kushikatsuSelection || !kushikatsuSelectionItem || !kushikatsuSelectionVariant) return;
+    if (kushikatsuSelection.quantity < 2) {
+      setKushikatsuSelectionError("串カツは各種類2本からご注文いただけます");
+      return;
+    }
+    addSelection(kushikatsuSelectionItem, { variant: kushikatsuSelectionVariant }, kushikatsuSelection.quantity);
+    setKushikatsuSelection(null);
+    setKushikatsuSelectionError("");
   };
   const chooseShochuFromDetail = (item) => {
     setDetailItem(null);
@@ -927,20 +989,22 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
                 const previous = currentItems[index - 1];
                 const isOtherStart = isShochu && item.sectionKey !== "芋" && (index === 0 || previous?.sectionKey === "芋");
                 const showListImage = listImageVisible(item);
+                const isKushikatsu = item.isKushikatsuVirtual === true;
+                const canOpenDetail = Boolean(item.detail?.imageUri || item.imageUri);
                 const row = isSake ? (
                   <article className={`menu-row sake-menu-row ${item.isSoldOut ? "is-sold-out" : ""}`} key={item.id}>
                     <div className="menu-row__index">{String(index + 1).padStart(2, "0")}</div>
-                    <button className="product-image-button" onClick={() => setDetailItem(item)} aria-label={`${item.name}の詳細を見る`} disabled={!item.imageUri && !item.detail?.enabled}>{item.imageUri ? <img src={item.imageUri} alt="" style={imageLayoutStyle(item, "thumbnail")} /> : <span>画像なし</span>}</button>
-                    <button className="menu-row__copy menu-row__copy--button" onClick={() => item.detail?.enabled ? setDetailItem(item) : undefined} disabled={!item.detail?.enabled} aria-label={item.name + "の詳細を見る"}>{item.detail?.reading ? <small className="menu-row__reading">{item.detail.reading}</small> : null}<h2>{item.name}</h2><small className="menu-row__detail-hint">タップで明細</small></button>
+                    <button className="product-image-button" onClick={() => canOpenDetail ? setDetailItem(item) : undefined} aria-label={`${item.name}の詳細を見る`} disabled={!canOpenDetail}>{item.imageUri ? <img src={item.imageUri} alt="" style={imageLayoutStyle(item, "thumbnail")} /> : <span>画像なし</span>}</button>
+                    <button className="menu-row__copy menu-row__copy--button" onClick={() => canOpenDetail ? setDetailItem(item) : undefined} disabled={!canOpenDetail} aria-label={item.name + "の詳細を見る"}>{item.detail?.reading ? <small className="menu-row__reading">{item.detail.reading}</small> : null}<h2>{item.name}</h2>{canOpenDetail ? <small className="menu-row__detail-hint">タップで明細</small> : null}</button>
                     <button className="sake-serve-button" onClick={() => openSakeSelection(item)} disabled={item.isSoldOut || !item.variants.length} aria-label={`${item.name}の提供方法を選ぶ`}><span>提供方法を選ぶ</span><small>グラス／徳利</small></button>
                   </article>
                 ) : (
                   <article className={`menu-row ${isShochu ? "shochu-menu-row" : ""} ${showListImage ? "" : "menu-row--no-image"} ${item.isSoldOut ? "is-sold-out" : ""}`} key={item.id} ref={isShochu && item.sectionKey === "芋" && !previous ? imoRef : null}>
                     <div className="menu-row__index">{String(index + 1).padStart(2, "0")}</div>
-                    {showListImage ? <button className="product-image-button" onClick={() => setDetailItem(item)} aria-label={`${item.name}の詳細を見る`} disabled={!item.imageUri && !item.detail?.enabled}>{item.imageUri ? <img src={isShochu ? shochuThumbUri(item.imageUri) : item.imageUri} alt="" style={imageLayoutStyle(item, "thumbnail")} /> : <span>画像なし</span>}</button> : null}
-                    <button className="menu-row__copy menu-row__copy--button" onClick={() => item.detail?.enabled ? setDetailItem(item) : undefined} aria-label={`${item.name}の詳細を見る`}>{item.detail?.reading ? <small className="menu-row__reading">{item.detail.reading}</small> : null}<h2>{item.name}</h2><small className="menu-row__detail-hint">タップで明細</small></button>
-                    <PriceDisplay priceYen={item.price} />
-                    {item.isSoldOut ? <div className="sold-out-label"><b>売り切れ</b><small>SOLD OUT</small></div> : item.servingOptions.length ? <button className="shochu-serving-button" onClick={() => openShochuSelection(item)} aria-label={`${item.name}の飲み方選択`}>飲み方選択</button> : <button className="add-button" onClick={() => addSelection(item)} aria-label={`${item.name}を追加`}><Plus size={36} weight="bold" /></button>}
+                    {showListImage ? <button className="product-image-button" onClick={() => canOpenDetail ? setDetailItem(item) : undefined} aria-label={`${item.name}の詳細を見る`} disabled={!canOpenDetail}>{item.imageUri ? <img src={isShochu ? shochuThumbUri(item.imageUri) : item.imageUri} alt="" style={imageLayoutStyle(item, "thumbnail")} /> : <span>画像なし</span>}</button> : null}
+                    <button className="menu-row__copy menu-row__copy--button" onClick={() => canOpenDetail ? setDetailItem(item) : undefined} aria-label={`${item.name}の詳細を見る`} disabled={!canOpenDetail}>{item.detail?.reading ? <small className="menu-row__reading">{item.detail.reading}</small> : null}<h2>{item.name}</h2>{canOpenDetail ? <small className="menu-row__detail-hint">タップで明細</small> : null}</button>
+                    {isKushikatsu ? <span className="menu-price kushikatsu-price"><b><span className="kushikatsu-serving-label">1本 </span>{yen(taxExcludedYen(item.price))}</b><small>税込 {yen(item.price)}</small><small className="kushikatsu-condition">各種2本から</small></span> : <PriceDisplay priceYen={item.price} />}
+                    {item.isSoldOut ? <div className="sold-out-label"><b>{CUSTOMER_WINTER_CATEGORY_IDS.has(item.categoryId) ? "冬季限定・現在注文できません" : "売り切れ"}</b><small>{CUSTOMER_WINTER_CATEGORY_IDS.has(item.categoryId) ? "SEASONAL PAUSED" : "SOLD OUT"}</small></div> : isKushikatsu ? <button className="add-button" onClick={() => openKushikatsuSelection(item)} aria-label={`${item.name}の本数を選ぶ`}><Plus size={36} weight="bold" /></button> : item.servingOptions.length ? <button className="shochu-serving-button" onClick={() => openShochuSelection(item)} aria-label={`${item.name}の飲み方選択`}>飲み方選択</button> : <button className="add-button" onClick={() => addSelection(item)} aria-label={`${item.name}を追加`}><Plus size={36} weight="bold" /></button>}
                   </article>
                 );
                 return (
@@ -981,6 +1045,14 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
           <div className="shochu-selection-footer">
             <div className="modal-actions"><button type="button" className="button button--quiet" onClick={() => setShochuSelection(null)}>キャンセル</button><button type="button" className="button button--primary button--large" disabled={!shochuSelectionTotal} onClick={commitShochuSelection}>{shochuSelectionTotal}点をカートに追加</button></div>
           </div>
+        </div>
+      </Modal> : null}
+      {kushikatsuSelection && kushikatsuSelectionItem ? <Modal title="串カツ" titleExtra={<span className="kushikatsu-modal-instruction">数量を選択してください</span>} onClose={() => setKushikatsuSelection(null)} className="modal--shochu modal--kushikatsu">
+        <div className="shochu-selection-modal kushikatsu-selection-modal">
+          <div className="kushikatsu-selected-flavor"><strong>{kushikatsuSelectionVariant?.name}</strong><div className="kushikatsu-unit-price"><span>1本 税込 {yen(kushikatsuSelectionVariant?.priceYen)}</span><span>各種2本から</span></div></div>
+          <div className="shochu-selection-row kushikatsu-quantity-row"><b>本数</b><div className="shochu-quantity-control" aria-label="串カツの本数"><button type="button" onClick={() => adjustKushikatsuQuantity(-1)} disabled={kushikatsuSelection.quantity <= 2} aria-label="串カツを1本減らす"><Minus size={22} weight="bold" /></button><b aria-live="polite">{kushikatsuSelection.quantity}</b><button type="button" onClick={() => adjustKushikatsuQuantity(1)} aria-label="串カツを1本増やす"><Plus size={22} weight="bold" /></button></div></div>
+          {kushikatsuSelectionError ? <p className="sake-selection-error" role="alert">{kushikatsuSelectionError}</p> : null}
+          <div className="shochu-selection-footer"><div className="modal-actions"><button type="button" className="button button--quiet" onClick={() => setKushikatsuSelection(null)}>キャンセル</button><button type="button" className="button button--primary button--large" onClick={commitKushikatsuSelection}>{kushikatsuSelection.quantity}本をカートに追加</button></div></div>
         </div>
       </Modal> : null}
       {sakeSelection && selectedSakeItem ? <Modal title="提供方法・温度を選ぶ" onClose={() => setSakeSelection(null)} wide className="modal--sake">

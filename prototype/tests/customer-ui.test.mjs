@@ -40,7 +40,16 @@ test("customer menu uses major category navigation with a collapsible rail", () 
   assert.match(appSource, /ドリンク/);
   assert.match(appSource, /フード/);
   assert.match(appSource, /名物/);
+  assert.match(appSource, /冬季限定/);
   assert.match(appSource, /季節・気まぐれ/);
+  assert.match(appSource, /とりあえず/);
+  assert.match(appSource, /串カツ・揚げ物/);
+  assert.match(appSource, /food-gifu/);
+  assert.match(appSource, /CUSTOMER_WINTER_CATEGORY_IDS/);
+  assert.match(customerScreen, /冬季限定・現在注文できません/);
+  assert.match(customerScreen, /<Modal title="串カツ"/);
+  assert.match(customerScreen, /各種2本から/);
+  assert.match(customerScreen, /Math\.max\(2/);
   assert.match(customerScreen, /majorNavOpen/);
   assert.match(customerScreen, /customer-app--category-collapsed/);
   assert.match(customerScreen, /大分類カテゴリー/);
@@ -93,7 +102,7 @@ test("tapping the central menu folds only the expanded major rail and keeps the 
   assert.match(customerScreen, /const collapseMajorNavOnMenuTap = \(\) => \{[\s\S]*if \(majorNavOpen\) setMajorNavOpen\(false\)/);
   assert.match(customerScreen, /const handleMenuClick = \(\) => \{[\s\S]*collapseMajorNavOnMenuTap\(\);[\s\S]*handleMenuInteraction\(\);/);
   assert.match(customerScreen, /<section className="menu-panel" onWheel=\{handleMenuInteraction\} onTouchMove=\{handleMenuInteraction\} onClick=\{handleMenuClick\}>/);
-  assert.match(customerScreen, /onClick=\{\(\) => setDetailItem\(item\)\}/);
+  assert.match(customerScreen, /onClick=\{\(\) => canOpenDetail \? setDetailItem\(item\) : undefined\}/);
   assert.match(customerScreen, /onClick=\{\(\) => selectSubcategory\(category\.id\)\}/);
   assert.match(customerScreen, /scrollIntoView\(\{ behavior: "smooth", block: "start" \}\)/);
   assert.doesNotMatch(customerScreen, /customer-content" onClick|cart-panel" onClick|customer-header" onClick|customer-footer" onClick/);
@@ -392,6 +401,48 @@ test("sake product details and order snapshots retain the shared selection model
   assert.match(customerScreen, /variantVolumeSnapshot/);
   assert.match(customerScreen, /temperatureSnapshot/);
   assert.match(customerScreen, /unitPriceSnapshot: row\.variant\?\.priceYen/);
+});
+
+test("串カツ keeps the selected variant visible without a second flavor picker", () => {
+  assert.match(appSource, /KUSHIKATSU_MENU_ITEM_ID/);
+  assert.match(appSource, /串カツは各種類2本からご注文いただけます/);
+  assert.match(appSource, /variant: kushikatsuSelectionVariant/);
+  assert.match(customerScreen, /<Modal title="串カツ"/);
+  assert.match(customerScreen, /titleExtra=\{<span className="kushikatsu-modal-instruction">数量を選択してください<\/span>\}/);
+  assert.doesNotMatch(customerScreen, /選択中の味/);
+  assert.match(customerScreen, /kushikatsuSelectionVariant\?\.name/);
+  assert.match(customerScreen, /1本 税込 \{yen\(kushikatsuSelectionVariant\?\.priceYen\)\}/);
+  assert.match(customerScreen, /className="kushikatsu-unit-price"/);
+  assert.match(styles, /\.kushikatsu-unit-price \{[\s\S]*display: flex[\s\S]*justify-content: space-between/);
+  assert.match(styles, /\.kushikatsu-quantity-row \{[\s\S]*width: 100%[\s\S]*display: flex[\s\S]*box-sizing: border-box/);
+  assert.match(styles, /\.kushikatsu-quantity-row > b \{[\s\S]*min-width: 0[\s\S]*flex: 1 1 auto/);
+  assert.match(styles, /\.kushikatsu-quantity-row \.shochu-quantity-control \{[\s\S]*flex: 0 0 220px[\s\S]*64px 92px 64px[\s\S]*min-height: 64px/);
+  assert.match(styles, /\.kushikatsu-quantity-row \.shochu-quantity-control > button \{[\s\S]*width: 64px[\s\S]*min-width: 64px[\s\S]*max-width: 64px[\s\S]*padding: 0[\s\S]*margin: 0/);
+  assert.match(styles, /\.kushikatsu-quantity-row \.shochu-quantity-control > b \{[\s\S]*width: 92px[\s\S]*min-width: 92px[\s\S]*max-width: 92px[\s\S]*height: 64px/);
+  assert.match(styles, /@media \(max-width: 600px\)[\s\S]*flex-basis: 200px[\s\S]*56px 88px 56px/);
+  assert.doesNotMatch(customerScreen, /kushikatsu-variant-list|味を1種類選び/);
+  assert.match(customerScreen, /className="add-button" onClick=\{\(\) => openKushikatsuSelection\(item\)\}/);
+  assert.match(customerScreen, /\{kushikatsuSelection\.quantity\}本をカートに追加/);
+  assert.doesNotMatch(customerScreen, /kushikatsuSelectionVariant\?\.name\} \{kushikatsuSelection\.quantity\}本をカートに追加/);
+  assert.match(customerScreen, /taxExcludedYen\(item\.price\)/);
+});
+
+test("customer expands only the menu model for individual kushikatsu rows", () => {
+  assert.match(appSource, /function expandCustomerMenuItems/);
+  assert.match(appSource, /isKushikatsuVirtual: true/);
+  assert.match(appSource, /menuItemId: item\.id/);
+  assert.match(customerScreen, /expandCustomerMenuItems\(menuItems\.filter/);
+  assert.match(customerScreen, /item\.isKushikatsuVirtual === true/);
+  assert.match(customerScreen, /本数を選ぶ/);
+  assert.doesNotMatch(appSource, /id: "special", name: "名物"/);
+  assert.match(appSource, /\{ id: "special-hine", name: "名物", categoryIds/);
+  assert.match(appSource, /\{ id: "special-reservation", name: "予約限定", categoryIds/);
+});
+
+test("customer detail affordance requires an actual image", () => {
+  assert.match(customerScreen, /const canOpenDetail = Boolean\(item\.detail\?\.imageUri \|\| item\.imageUri\)/);
+  assert.match(customerScreen, /\{canOpenDetail \? <small className="menu-row__detail-hint">タップで明細<\/small> : null\}/);
+  assert.match(customerScreen, /disabled=\{!canOpenDetail\}/);
 });
 
 test("image layout editor rotates only the inner image and preserves layout controls", () => {

@@ -170,11 +170,12 @@ h1, h2, h3, p { margin: 0; }
 .menu-heading__breadcrumb b { color: var(--red); font-size: 20px; }
 .menu-heading__breadcrumb strong { color: var(--ink); font-size: 2em; line-height: 1; }
 .subcategory-nav { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; padding: 6px 0 8px; border-bottom: 1px solid var(--red); }
-.subcategory-nav button { min-width: 0; min-height: 52px; padding: 0 10px; border: 1px solid var(--red); background: #fffaf3; color: var(--red); white-space: nowrap; font-size: 15px; font-weight: 900; }
+.subcategory-nav button { min-width: 0; min-height: 52px; padding: 0 10px; border: 1px solid var(--red); background: #fffaf3; color: var(--red); white-space: nowrap; font-size: 20px; font-weight: 900; }
 .subcategory-nav button.is-active { background: var(--red); color: #fff; }
 .menu-list { min-height: 0; overflow-y: auto; }
 .menu-row { min-height: 123px; display: grid; grid-template-columns: 68px 88px minmax(0, 1fr) 112px 176px; column-gap: 12px; align-items: center; border-bottom: 1px solid #c46e69; }
 .menu-row--no-image { grid-template-columns: 68px minmax(0, 1fr) 112px 176px; }
+.menu-row--no-image { min-height: 82px; }
 .menu-row__index { height: 72px; border-right: 1px solid var(--red); display: flex; align-items: center; font: 900 40px/1 var(--font-display); }
 .product-image-placeholder { width: 60px; height: 78px; border: 1px solid #b8afa2; background: #fffaf3; display: grid; place-items: center; color: var(--muted); text-align: center; }
 .product-image-placeholder span { font-size: 10px; font-weight: 800; writing-mode: vertical-rl; }
@@ -197,6 +198,8 @@ h1, h2, h3, p { margin: 0; }
 .menu-price { display: flex; flex-direction: column; align-items: flex-end; color: var(--red); white-space: nowrap; }
 .menu-price b { font: 900 30px/1.05 var(--font-ui); font-variant-numeric: tabular-nums; font-feature-settings: "tnum" 1; }
 .menu-price small { margin-top: 4px; color: var(--ink); font-family: var(--font-ui); font-size: 11px; line-height: 1.1; font-weight: 800; font-variant-numeric: tabular-nums; font-feature-settings: "tnum" 1; }
+.kushikatsu-price .kushikatsu-serving-label { font-size: 24px; }
+.kushikatsu-price .kushikatsu-condition { color: var(--ink); }
 .menu-row__copy--button { border: 0; background: transparent; text-align: left; align-self: stretch; display: flex; flex-direction: column; justify-content: center; }
 .menu-row__detail-hint { margin-top: 5px; color: var(--muted); font-size: 14px; line-height: 1.1; font-weight: 800; }
 .drink-jump-nav { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--red); }
@@ -336,6 +339,28 @@ h1, h2, h3, p { margin: 0; }
 .modal--shochu .modal-actions { width: 100%; margin-top: 0; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.6fr); gap: 8px; }
 .modal--shochu .modal-actions .button { min-width: 0; width: 100%; overflow-wrap: anywhere; }
 .modal--shochu .modal-actions .button--large { min-height: 52px; }
+.modal--kushikatsu { width: min(560px, 92vw); }
+.kushikatsu-modal-instruction { flex: 0 1 auto; color: var(--muted); font-size: 18px; font-weight: 800; letter-spacing: 0; white-space: nowrap; }
+.kushikatsu-selected-flavor { display: grid; gap: 4px; padding: 12px 14px; border-left: 6px solid var(--red); background: #fff1d8; }
+.kushikatsu-selected-flavor strong { color: var(--red); font-size: 30px; font-weight: 900; }
+.kushikatsu-unit-price { display: flex; align-items: baseline; justify-content: space-between; gap: 20px; color: var(--ink); font-size: 18px; font-weight: 800; }
+.kushikatsu-quantity-row { box-sizing: border-box; width: 100%; min-height: 88px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 12px 12px 14px; }
+.kushikatsu-quantity-row > b { min-width: 0; flex: 1 1 auto; font-size: 30px; }
+.kushikatsu-quantity-row .shochu-quantity-control { box-sizing: border-box; flex: 0 0 220px; width: 220px; grid-template-columns: 64px 92px 64px; min-height: 64px; }
+.kushikatsu-quantity-row .shochu-quantity-control > button { box-sizing: border-box; flex: none; width: 64px; min-width: 64px; max-width: 64px; height: 64px; min-height: 64px; max-height: 64px; padding: 0; margin: 0; }
+.kushikatsu-quantity-row .shochu-quantity-control > b { box-sizing: border-box; width: 92px; min-width: 92px; max-width: 92px; height: 64px; min-height: 64px; max-height: 64px; padding: 0; margin: 0; }
+.kushikatsu-quantity-row .shochu-quantity-control > b { font-size: 34px; }
+.kushikatsu-quantity-row .shochu-quantity-control button svg { width: 32px; height: 32px; }
+
+@media (max-width: 600px) {
+  .kushikatsu-quantity-row { gap: 8px; padding-inline: 10px; }
+  .kushikatsu-quantity-row .shochu-quantity-control { flex-basis: 200px; width: 200px; grid-template-columns: 56px 88px 56px; min-height: 56px; }
+  .kushikatsu-quantity-row .shochu-quantity-control > button { width: 56px; min-width: 56px; max-width: 56px; height: 56px; min-height: 56px; max-height: 56px; }
+  .kushikatsu-quantity-row .shochu-quantity-control > b { width: 88px; min-width: 88px; max-width: 88px; height: 56px; min-height: 56px; max-height: 56px; }
+  .kushikatsu-quantity-row .shochu-quantity-control > b { font-size: 32px; }
+  .kushikatsu-quantity-row .shochu-quantity-control button svg { width: 30px; height: 30px; }
+}
+.kushikatsu-quantity-row { grid-template-columns: minmax(0, 1fr) 218px; margin-top: 4px; }
 .confirm-list { display: grid; }
 .confirm-list > div { min-height: 55px; border-bottom: 1px dashed var(--line); display: flex; align-items: center; justify-content: space-between; font-size: 18px; }
 .price-hidden-note { margin-top: 18px; color: var(--muted); font-size: 13px; }
@@ -617,9 +642,10 @@ h1, h2, h3, p { margin: 0; }
   .menu-heading__breadcrumb { min-height: 18px; gap: 6px; font-size: 14px; }
   .menu-heading__breadcrumb b { font-size: 16px; }
   .subcategory-nav { padding-block: 5px 7px; }
-  .subcategory-nav button { min-height: 48px; padding-inline: 6px; font-size: 12px; }
+  .subcategory-nav button { min-height: 48px; padding-inline: 6px; font-size: 20px; }
   .menu-row { min-height: 98px; grid-template-columns: 48px 64px minmax(140px, 1fr) 86px 156px; column-gap: 16px; }
   .menu-row--no-image { grid-template-columns: 48px minmax(140px, 1fr) 86px 156px; }
+  .menu-row--no-image { min-height: 78px; }
   .menu-row__index { height: 56px; font-size: 30px; }
   .menu-row__copy { min-width: 140px; padding: 0 12px; }
   .menu-row__copy h2 { font-size: clamp(21px, 2.1vw, 29px); }
@@ -659,6 +685,8 @@ h1, h2, h3, p { margin: 0; }
   .sake-serve-button span { font-size: 13px; }
   .sake-serve-button small { font-size: 9px; }
   .shochu-serving-button { width: 138px; min-width: 138px; min-height: 56px; padding-inline: 6px; font-size: 13px; }
+  .kushikatsu-price { width: 86px; }
+  .kushikatsu-price .kushikatsu-serving-label { font-size: 16px; }
   .sake-serve-button { width: 156px; min-width: 156px; }
   .modal--sake { width: min(650px, 94vw); margin-top: 12px; max-height: calc(100vh - 24px); }
   .modal--sake .modal__body { padding: 12px 14px 14px; }

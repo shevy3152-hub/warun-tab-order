@@ -257,6 +257,45 @@ test('schemaVersion 3 validates sake temperatures and stores them as immutable s
   });
 });
 
+test('串カツ variants require at least two pieces per flavor and retain distinct snapshots', async () => {
+  await withFixture(({ database }) => {
+    database.prepare(`
+      INSERT INTO menu_items (
+        menu_item_id, category_id, formal_name, kitchen_alias, price_yen,
+        is_sold_out, is_active, sort_order, created_at_ms, updated_at_ms
+      ) VALUES ('food-kushi-kushikatsu', 'recommended', '串カツ', '串カツ', 180, 0, 1, 5, 1000, 1000)
+    `).run();
+    const insertVariant = database.prepare(`
+      INSERT INTO menu_item_variants (
+        variant_id, menu_item_id, name, volume_label, price_yen,
+        sort_order, created_at_ms, updated_at_ms
+      ) VALUES (?, 'food-kushi-kushikatsu', ?, '1本', ?, ?, 1000, 1000)
+    `);
+    insertVariant.run('food-kushi-kushikatsu-sauce', 'ソース', 180, 1);
+    insertVariant.run('food-kushi-kushikatsu-miso', '味噌', 190, 2);
+
+    const result = makeRepository(database).createOrder(orderRequest({
+      schemaVersion: 2,
+      items: [
+        { menuItemId: 'food-kushi-kushikatsu', variantId: 'food-kushi-kushikatsu-sauce', quantity: 2 },
+        { menuItemId: 'food-kushi-kushikatsu', variantId: 'food-kushi-kushikatsu-miso', quantity: 3 },
+      ],
+    }));
+    assert.deepEqual(result.order.items.map((item) => [item.variantNameSnapshot, item.unitPriceYenSnapshot, item.quantity]), [
+      ['味噌', 190, 3],
+      ['ソース', 180, 2],
+    ]);
+    assertOrderError(
+      () => makeRepository(database, { orderIds: [ORDER_C] }).createOrder(orderRequest({
+        clientOrderId: CLIENT_ORDER_B,
+        schemaVersion: 2,
+        items: [{ menuItemId: 'food-kushi-kushikatsu', variantId: 'food-kushi-kushikatsu-sauce', quantity: 1 }],
+      })),
+      ORDER_ERROR_CODES.INVALID_ORDER_REQUEST,
+    );
+  });
+});
+
 function issuePrincipal(database, deviceId, byte) {
   const token = Buffer.alloc(32, byte).toString('base64url');
   const tokenHash = createHash('sha256').update(token, 'utf8').digest('hex');
