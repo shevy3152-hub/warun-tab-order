@@ -1,5 +1,5 @@
 ## category: food-ready
-- name: すぐ出る・冷菜
+- name: とりあえず
 - sort_order: 10
 - is_visible: true
 
