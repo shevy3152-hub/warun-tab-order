@@ -1,5 +1,27 @@
 # 開発状態
 
+## 2026-09-18 商品単位予約限定・ドリンク一言コメント checkpoint
+
+実装commitは`6aa39aa`（`feat: add reservation-only ordering and drink comments`）。実装対象を確認し、schema v7→v8、商品単位の`ordering_mode`、管理APIの取得・保存・不正値拒否、予約限定商品の注文前422拒否、客席の注文操作非表示、カテゴリー名編集、名物fallback／初期データ、ドリンク一覧の一言コメントを反映した。
+
+- schema v8。既存商品は`normal`、半身焼き・ホールの2件だけ`reservation_only`。
+- 客席の予約限定表示は「予約限定」のみ。＋ボタン、数量選択、variant／飲み方選択は表示しない。
+- 直接注文は保存前に422で拒否し、文言は「この商品は予約限定のため注文できません」。
+- 管理画面のカテゴリー名編集は正式APIへ保存し、再取得後のstate更新と再読込保持を維持する。正式名称は「名物」。
+- ドリンク一覧は既存`description`を「商品説明／一言コメント」欄から表示する。detail画像がある場合は「タップで明細」と一言コメントを同一行に表示し、画像がない場合はコメントのみとする。長文はコメント側だけを1行省略し、詳細画面では全文を表示する。
+- safe-copyの焼酎画像layout混入イベント307–322は履歴を保持したまま、正式APIで対象11商品のlayoutを復旧した。復旧直後のlayoutは10行、event_log最新IDは333。その後、今回のcommit処理とは別の管理操作由来とみられる`menu.updated` 4件（334: 黒霧島、335: 黒霧島、336: W、337: 茶豆）がread-only確認で見つかり、現在のevent_log最新IDは337。layoutは10行のまま。
+- safe-copy最終確認: schema v8、menu_items 90、normal 88、reservation_only 2、orders 20、order_items 33、table_sessions 6、event_log 333、integrity_check `ok`、foreign key違反0件。PID 12752は稼働継続中。
+- 検証: prototype 101/101、server 379/379、Sites 4/4、Vite build、`git diff --check`。
+- A90は過去の客席レイアウト受入記録ではALL PASS。ただし今回の予約限定表示・ドリンク一言コメント追加後のA90実画面再読込は、この環境で操作対象ブラウザが取得できず未確認。今回の追加分をALL PASSとは記録しない。
+- production DB、pairing、注文送信、push/pull/merge/rebaseは未実施。`prototype/CONTEXT.md`、既存未追跡ファイル、safe-copy DB／WAL／SHM、DBバックアップ、runtime-state.json、QA画像、ログ、build生成物はcommit対象外とした。
+
+### 未完了タスク
+
+1. フード料理説明＋サムネイル対応レイアウト
+2. 半身焼きを名物へ移すか決定
+3. runtime-state.json権限エラー
+4. production環境の特定・反映
+
 ## 2026-09-18 客席下部レイアウト診断・最小修正 checkpoint（A90受入ALL PASS）
 
 実際のリポジトリ状態を優先して現況を整理した。branchは`feature/sqlite-foundation`、開始時HEADは`f1083b5d3f14daa94e0dbc4e40c5f9946d1c48bf`、実装commitは`42633a9`。開始時のtracked差分は`prototype/CONTEXT.md`のみで、既存未追跡ファイルは変更・整理していない。今回の実装差分は`prototype/src/App.jsx`、`prototype/src/styles.css`、および新しいgrid行を確認する`prototype/tests/customer-ui.test.mjs`である。

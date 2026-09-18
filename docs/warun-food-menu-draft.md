@@ -24,7 +24,7 @@
 - is_visible: true
 
 ## category: special-hine
-- name: ひね鶏
+- name: 名物
 - sort_order: 20
 - is_visible: true
 
