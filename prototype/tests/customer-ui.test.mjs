@@ -53,11 +53,16 @@ test("customer menu uses major category navigation with a collapsible rail", () 
   assert.match(customerScreen, /majorNavOpen/);
   assert.match(customerScreen, /customer-app--category-collapsed/);
   assert.match(customerScreen, /大分類カテゴリー/);
-  assert.match(customerScreen, /IZAKAYA WARUN[\s\S]*お品書き/);
+  assert.match(customerScreen, /IZAKAYA WARUN/);
+  assert.doesNotMatch(customerScreen, /IZAKAYA WARUN[\s\S]*お品書き/);
+  assert.match(appSource, /id: "drink", name: "飲み物"/);
+  assert.match(appSource, /id: "food", name: "お食事"/);
+  assert.match(appSource, /id: "seasonal", name: "", isPlaceholder: true/);
   assert.doesNotMatch(customerScreen, /customer-system-label|vertical-copy|IZAKAYA<br \/>ORDER<br \/>SYSTEM/);
   assert.match(styles, /\.customer-title--horizontal \{[\s\S]*transform: translateY\(-5px\)/);
+  assert.match(styles, /\.category-nav \{ margin-top: 18px; padding-top: 155px; display: grid; \}/);
   assert.match(styles, /\.customer-title--horizontal strong \{ font-size: clamp\(36px, 4vw, 44px\); \}/);
-  assert.match(customerScreen, /カテゴリーを変更/);
+  assert.match(customerScreen, /<span>現在<\/span>[\s\S]*メインカテゴリーに戻る/);
   assert.match(customerScreen, /setMajorNavOpen\(true\)/);
   assert.match(customerScreen, /setMajorNavOpen\(false\)/);
   assert.match(customerScreen, /subcategory-nav/);
@@ -273,6 +278,8 @@ test("major category selection collapses to a 78px rail and the rail reopens it"
   assert.match(customerScreen, /setMajorNavOpen\(false\)/);
   assert.match(customerScreen, /const selectSubcategory = \(nextCategoryId\) => \{[\s\S]*setMajorNavOpen\(false\)/);
   assert.match(customerScreen, /customer-sidebar__collapsed-toggle.*setMajorNavOpen\(true\)/s);
+  assert.match(customerScreen, /<span>現在<\/span>[\s\S]*メインカテゴリーに戻る/);
+  assert.match(customerScreen, /category-nav__placeholder/);
   assert.match(styles, /\.customer-app\.customer-app--category-collapsed \{ grid-template-columns: 78px/);
   assert.match(styles, /\.customer-sidebar__collapsed-toggle \{/);
 });

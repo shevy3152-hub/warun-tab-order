@@ -196,8 +196,8 @@ const CUSTOMER_DRINK_SUBCATEGORIES = [
 ];
 
 const CUSTOMER_MAJOR_CATEGORIES = [
-  { id: "drink", name: "ドリンク", subcategories: CUSTOMER_DRINK_SUBCATEGORIES },
-  { id: "food", name: "フード", subcategories: [
+  { id: "drink", name: "飲み物", subcategories: CUSTOMER_DRINK_SUBCATEGORIES },
+  { id: "food", name: "お食事", subcategories: [
     { id: "food-ready", name: "とりあえず", categoryIds: ["food-ready"] },
     { id: "food-chicken", name: "鶏料理", categoryIds: ["food-chicken"] },
     { id: "food-kushi", name: "串カツ・揚げ物", categoryIds: ["food-kushi"] },
@@ -210,9 +210,7 @@ const CUSTOMER_MAJOR_CATEGORIES = [
     { id: "winter-hotpot", name: "鍋料理", categoryIds: ["winter-hotpot"] },
     { id: "winter-shime", name: "追加・〆", categoryIds: ["winter-shime"] },
   ] },
-  { id: "seasonal", name: "季節・気まぐれ", subcategories: [
-    { id: "seasonal", name: "季節・気まぐれ", categoryIds: [] },
-  ] },
+  { id: "seasonal", name: "", isPlaceholder: true, subcategories: [] },
 ];
 
 const CUSTOMER_WINTER_CATEGORY_IDS = new Set(["winter-hotpot", "winter-shime"]);
@@ -227,21 +225,27 @@ const CUSTOMER_FEATURED_MENU_IDS = ["edamame", "dashimaki", "beer", "lemon", "ka
 function buildCustomerMajorCategories(categories) {
   if (!Array.isArray(categories) || categories.length === 0) return CUSTOMER_MAJOR_CATEGORIES;
   const rails = [
-    { id: "drink", name: "ドリンク" },
-    { id: "food", name: "フード" },
+    { id: "drink", name: "飲み物" },
+    { id: "food", name: "お食事" },
     { id: "winter", name: "冬季限定" },
     { id: "seasonal", name: "季節・気まぐれ" },
   ];
-  return rails.map((rail) => ({
-    ...rail,
-    subcategories: [
+  return rails.map((rail) => {
+    const subcategories = categories
+      .filter((category) => category.sectionKey === rail.id)
+      .sort((a, b) => a.sortOrder - b.sortOrder || a.categoryId.localeCompare(b.categoryId, "ja"))
+      .map((category) => ({ id: category.categoryId, name: category.name, categoryIds: [category.categoryId] }));
+    const isPlaceholder = rail.id === "seasonal" && subcategories.length === 0;
+    return {
+      ...rail,
+      name: isPlaceholder ? "" : rail.name,
+      isPlaceholder,
+      subcategories: [
       ...(rail.id === "drink" ? [{ id: "recommended", name: "おかわり！", categoryIds: [] }] : []),
-      ...categories
-        .filter((category) => category.sectionKey === rail.id)
-        .sort((a, b) => a.sortOrder - b.sortOrder || a.categoryId.localeCompare(b.categoryId, "ja"))
-        .map((category) => ({ id: category.categoryId, name: category.name, categoryIds: [category.categoryId] })),
-    ],
-  }));
+        ...subcategories,
+      ],
+    };
+  });
 }
 
 function mapAdminCatalogState(catalog) {
@@ -1003,10 +1007,10 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
   return (
     <div className={`customer-app ${majorNavOpen ? "" : "customer-app--category-collapsed"}`} data-customer-theme={customerTheme}>
       <aside className="customer-sidebar">
-        <div className="customer-title customer-title--horizontal"><span>IZAKAYA WARUN</span><strong>お品書き</strong></div>
+        <div className="customer-title customer-title--horizontal"><span>IZAKAYA WARUN</span></div>
         {majorNavOpen ? <nav className="category-nav" aria-label="大分類カテゴリー">
-          {customerMajorCategories.map((category, index) => <button key={category.id} className={category.id === majorCategoryId ? "is-active" : ""} onClick={() => selectMajorCategory(category.id)}><b>{String(index + 1).padStart(2, "0")}</b><span>{category.name}</span></button>)}
-        </nav> : <button className="customer-sidebar__collapsed-toggle" onClick={() => setMajorNavOpen(true)} aria-label="カテゴリーを変更"><span>現在のカテゴリー</span><strong>{currentMajorCategory.name}</strong><span>カテゴリーを変更</span></button>}
+          {customerMajorCategories.map((category, index) => category.isPlaceholder ? <span key={category.id} className="category-nav__placeholder" aria-hidden="true"><b>{String(index + 1).padStart(2, "0")}</b><span></span></span> : <button key={category.id} className={category.id === majorCategoryId ? "is-active" : ""} onClick={() => selectMajorCategory(category.id)}><b>{String(index + 1).padStart(2, "0")}</b><span>{category.name}</span></button>)}
+        </nav> : <button className="customer-sidebar__collapsed-toggle" onClick={() => setMajorNavOpen(true)} aria-label="メインカテゴリーに戻る"><span>現在</span><strong>{currentMajorCategory.name}</strong><span>メインカテゴリーに戻る</span></button>}
         <div className="customer-hours"><b>本日の営業時間</b><span>17:00 — 24:00</span><small>（ラストオーダー 23:30）</small></div>
       </aside>
 

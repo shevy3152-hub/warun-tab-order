@@ -136,11 +136,13 @@ h1, h2, h3, p { margin: 0; }
 .customer-title--horizontal { align-self: flex-start; margin: 0; transform: translateY(-5px); display: flex; flex-direction: column; align-items: flex-start; gap: 6px; font-weight: 900; line-height: 1; letter-spacing: .06em; }
 .customer-title--horizontal span { font-size: 20px; }
 .customer-title--horizontal strong { font-size: clamp(36px, 4vw, 44px); }
-.category-nav { margin-top: 18px; display: grid; }
+.category-nav { margin-top: 18px; padding-top: 155px; display: grid; }
 .category-nav button { min-height: 55px; border: 0; border-bottom: 1px solid rgb(255 255 255 / 45%); background: transparent; color: #fff; display: grid; grid-template-columns: 62px 1fr; align-items: center; padding: 0; text-align: left; font-size: 21px; font-weight: 800; }
 .category-nav button b { font: 700 20px/1 var(--font-display); text-align: center; }
 .category-nav button.is-active { background: #fffaf1; color: var(--red); }
 .category-nav button.is-active b { height: 100%; display: grid; place-items: center; background: var(--ink); color: #fff; }
+.category-nav__placeholder { min-height: 55px; border-bottom: 1px solid rgb(255 255 255 / 45%); display: grid; grid-template-columns: 62px 1fr; align-items: center; color: rgb(255 255 255 / 55%); }
+.category-nav__placeholder b { font: 700 20px/1 var(--font-display); text-align: center; }
 .customer-hours { margin: auto 14px 18px; display: flex; flex-direction: column; gap: 4px; color: #fff; }
 .customer-hours b { font-size: 12px; }
 .customer-hours span { font: 700 17px/1.2 monospace; letter-spacing: .08em; }
