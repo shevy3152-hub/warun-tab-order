@@ -1,5 +1,26 @@
 # 開発状態
 
+## 2026-09-18 safe-copy launcher runtime-state lifecycle checkpoint
+
+launcherのstale runtime-state処理を実装し、隔離E2Eとlive safe-copyの正式launcher受入を完了した。根本原因はACL・owner・属性の異常ではなく、停止後に古いruntime-stateを安全に整理するライフサイクル処理が不足していたことだった。ACL、owner、属性は変更していない。
+
+- `start`／`stop`／`status`を追加し、PID、command line、DB絶対パス、web root、Web/APIポート、health、safe-copy／production=falseを照合する。
+- stale stateは、ポート競合がない場合だけstate内容を安全に記録して削除し、無関係なPIDは停止しない。ポート競合、壊れたJSON、識別不一致、停止失敗時はstateを保持する。
+- runtime-stateは同一ディレクトリの一時ファイルからatomic replaceで書き込み、`instanceId`とPID・DB・ポート・起動時刻の再読込照合でraceを防止する。正常停止後にprocessとlistenerの消失を確認した場合だけstateを削除する。
+- 隔離E2Eで再利用、status、正常停止、state削除、再起動、再停止を確認した。隔離clone DBと一時runtime-rootは終了後に完全一致確認して削除した。
+- server 381/381、PowerShell構文、`git diff --check`をPASS。管理画面・客席shellはHTTP 200、healthはlocalhost／LANともHTTP 200。A90実機の今回の通常再読込は未実施で、既存の別受入記録を変更しない。
+- 最終safe-copy PIDは`8492`。schema v8、menu_items 90、normal 88、reservation_only 2、orders 20、order_items 33、table_sessions 6、layouts 10、event_log 339、integrity_check `ok`、foreign key違反0件、「名物」、茶豆「枝豆より甘め」を確認した。
+- 初回起動時に既存safe-copy launcherのkitchen provisioning表示があったが、pairingは行っていない。確認対象のメニュー・注文・layout・event_log件数は不変で、menu.updatedの追加は確認されなかった。
+- production DB、注文送信、pairing、A90実機操作、push/pull/merge/rebaseは未実施。production未反映。`prototype/CONTEXT.md`と既存未追跡ファイルは保全した。
+
+### 未完了タスク
+
+1. 左赤レールの名称・位置・閉じた状態の視認性
+2. 本日の営業時間編集
+3. 飲み物見出し下線と戻るボタン調整
+4. 半身焼きを名物へ移すか決定
+5. production環境の特定・反映
+
 ## 2026-09-18 フード料理説明＋サムネイル対応 checkpoint
 
 実装commitは`274a459`（`feat: show food descriptions in customer menu`）。フード商品名の直下へ既存`description`を料理説明として表示し、客席の商品行を画像有無に対応した構造へ整理した。管理画面の商品説明欄は、フードでは「料理説明」、ドリンクでは「商品説明／一言コメント」と表示する。
@@ -15,11 +36,10 @@
 
 ### 未完了タスク
 
-1. runtime-state.json権限エラー
-2. 左赤レールの名称・位置・折り畳み表示改善
-3. 本日の営業時間編集
-4. 半身焼きを名物へ移すか決定
-5. production環境の特定・反映
+1. 左赤レールの名称・位置・折り畳み表示改善
+2. 本日の営業時間編集
+3. 半身焼きを名物へ移すか決定
+4. production環境の特定・反映
 
 ## 2026-09-18 商品単位予約限定・ドリンク一言コメント checkpoint
 
@@ -40,8 +60,7 @@
 
 1. フード料理説明＋サムネイル対応レイアウト
 2. 半身焼きを名物へ移すか決定
-3. runtime-state.json権限エラー
-4. production環境の特定・反映
+3. production環境の特定・反映
 
 ## 2026-09-18 客席下部レイアウト診断・最小修正 checkpoint（A90受入ALL PASS）
 
