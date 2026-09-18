@@ -8,10 +8,10 @@ launcherのstale runtime-state処理を実装し、隔離E2Eとlive safe-copyの
 - stale stateは、ポート競合がない場合だけstate内容を安全に記録して削除し、無関係なPIDは停止しない。ポート競合、壊れたJSON、識別不一致、停止失敗時はstateを保持する。
 - runtime-stateは同一ディレクトリの一時ファイルからatomic replaceで書き込み、`instanceId`とPID・DB・ポート・起動時刻の再読込照合でraceを防止する。正常停止後にprocessとlistenerの消失を確認した場合だけstateを削除する。
 - 隔離E2Eで再利用、status、正常停止、state削除、再起動、再停止を確認した。隔離clone DBと一時runtime-rootは終了後に完全一致確認して削除した。
-- server 381/381、PowerShell構文、`git diff --check`をPASS。管理画面・客席shellはHTTP 200、healthはlocalhost／LANともHTTP 200。A90実機の今回の通常再読込は未実施で、既存の別受入記録を変更しない。
+- server 381/381、PowerShell構文、`git diff --check`をPASS。管理画面・客席shellはHTTP 200、healthはlocalhost／LANともHTTP 200。Codex環境からのA90直接操作は未実施だが、ユーザーがA90で通常再読込し、客席画面の正常表示を確認してPASSとした。
 - 最終safe-copy PIDは`8492`。schema v8、menu_items 90、normal 88、reservation_only 2、orders 20、order_items 33、table_sessions 6、layouts 10、event_log 339、integrity_check `ok`、foreign key違反0件、「名物」、茶豆「枝豆より甘め」を確認した。
 - 初回起動時に既存safe-copy launcherのkitchen provisioning表示があったが、pairingは行っていない。確認対象のメニュー・注文・layout・event_log件数は不変で、menu.updatedの追加は確認されなかった。
-- production DB、注文送信、pairing、A90実機操作、push/pull/merge/rebaseは未実施。production未反映。`prototype/CONTEXT.md`と既存未追跡ファイルは保全した。
+- pairing、注文、キャッシュ削除は未実施。production DB、push/pull/merge/rebaseも未実施で、production未反映。`prototype/CONTEXT.md`と既存未追跡ファイルは保全した。
 
 ### 未完了タスク
 
