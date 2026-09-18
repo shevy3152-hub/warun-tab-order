@@ -112,16 +112,16 @@ test("menu interaction stores the common action row offscreen and restores it af
   assert.match(customerScreen, /const \[isMenuHeaderHidden, setIsMenuHeaderHidden\] = useState\(false\)/);
   assert.match(customerScreen, /const handleMenuInteraction = \(\) => \{[\s\S]*setIsMenuHeaderHidden\(true\)[\s\S]*}, 5000\);/);
   assert.match(customerScreen, /<header className=\{`customer-header \$\{isMenuHeaderHidden \? "customer-header--menu-hidden" : ""\}`\}>/);
-  assert.match(customerScreen, /<section className=\{`customer-main \$\{isMenuHeaderHidden \? "customer-main--menu-active" : ""\}`\}>/);
+  assert.match(customerScreen, /<section className=\{`customer-main \$\{isMenuHeaderHidden \? "customer-main--menu-active" : ""\} \$\{notice \? "customer-main--has-notice" : ""\}`\}>/);
   assert.match(customerScreen, /<section className="menu-panel" onWheel=\{handleMenuInteraction\} onTouchMove=\{handleMenuInteraction\} onClick=\{handleMenuClick\}>/);
   assert.match(styles, /\.customer-header--menu-hidden \{ transform: translateY\(-100%\); pointer-events: none; opacity: 0/);
-  assert.match(styles, /\.customer-main--menu-active \{ grid-template-rows: 0 auto minmax\(0, 1fr\) 32px; \}/);
+  assert.match(styles, /\.customer-main--menu-active \{ grid-template-rows: 0 minmax\(0, 1fr\) auto; \}/);
   assert.match(styles, /\.customer-main--menu-active \.customer-header \{ min-height: 0; height: 0; padding-block: 0[\s\S]*visibility: hidden/);
 });
 
 test("customer common actions stay outside the independently scrolling content row", () => {
   assert.match(customerScreen, /<header className=\{`customer-header \$\{isMenuHeaderHidden \? "customer-header--menu-hidden" : ""\}`\}>[\s\S]*<div className="customer-content">/);
-  assert.match(styles, /\.customer-main \{[\s\S]*display: grid;[\s\S]*grid-template-rows: auto auto minmax\(0, 1fr\) 32px/);
+  assert.match(styles, /\.customer-main \{[\s\S]*display: grid;[\s\S]*grid-template-rows: auto minmax\(0, 1fr\) auto/);
   assert.match(styles, /\.customer-content \{[\s\S]*min-height: 0;[\s\S]*grid-template-columns/);
   assert.match(styles, /\.menu-list \{[\s\S]*overflow-y: auto/);
   assert.match(customerScreen, /注文履歴/);
@@ -171,7 +171,7 @@ test("customer route fits A90 and 1024x499 geometry without document overflow", 
   assert.match(styles, /@media \(min-width: 901px\) and \(max-height: 600px\)[\s\S]*\.cart-empty \{ min-height: 0; \}/);
   assert.match(styles, /@media \(min-width: 901px\) and \(max-height: 600px\)[\s\S]*\.confirm-button \{ width: calc\(100% - 28px\); box-sizing: border-box/);
   assert.match(styles, /\.customer-footer \{ width: 100%; height: 32px; min-width: 0/);
-  assert.match(styles, /\.customer-main \{ min-width: 0; min-height: 0; display: grid; grid-template-rows: auto auto minmax\(0, 1fr\) 32px; \}/);
+  assert.match(styles, /\.customer-main \{ min-width: 0; min-height: 0; display: grid; grid-template-rows: auto minmax\(0, 1fr\) auto; \}/);
   assert.match(styles, /\.customer-footer \{ width: 100%; height: 32px; min-width: 0; min-height: 32px; box-sizing: border-box;[\s\S]*line-height: 1;[\s\S]*white-space: nowrap; \}/);
   assert.match(styles, /\.customer-footer span \{ min-width: 0; white-space: nowrap; \}/);
 });

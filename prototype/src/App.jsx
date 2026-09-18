@@ -1007,7 +1007,7 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
         <div className="customer-hours"><b>本日の営業時間</b><span>17:00 — 24:00</span><small>（ラストオーダー 23:30）</small></div>
       </aside>
 
-      <section className={`customer-main ${isMenuHeaderHidden ? "customer-main--menu-active" : ""}`}>
+      <section className={`customer-main ${isMenuHeaderHidden ? "customer-main--menu-active" : ""} ${notice ? "customer-main--has-notice" : ""}`}>
         <header className={`customer-header ${isMenuHeaderHidden ? "customer-header--menu-hidden" : ""}`}>
           <IconButton icon={ClipboardText} onClick={() => setModal("history")}>注文履歴</IconButton>
           <IconButton icon={Bell} onClick={() => setModal("staff")}>スタッフを呼ぶ</IconButton>

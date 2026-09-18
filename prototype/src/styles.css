@@ -146,10 +146,12 @@ h1, h2, h3, p { margin: 0; }
 .customer-hours span { font: 700 17px/1.2 monospace; letter-spacing: .08em; }
 .customer-hours small { font-size: 11px; }
 .customer-sidebar .brand { margin-top: 0; }
-.customer-main { min-width: 0; min-height: 0; display: grid; grid-template-rows: auto auto minmax(0, 1fr) 32px; }
+.customer-main { min-width: 0; min-height: 0; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; }
+.customer-main--has-notice { grid-template-rows: auto auto minmax(0, 1fr) auto; }
 .customer-header { min-height: 114px; border-bottom: 1px solid var(--ink); display: flex; align-items: center; gap: 12px; padding: 18px 28px; }
 .customer-header--menu-hidden { transform: translateY(-100%); pointer-events: none; opacity: 0; transition: transform 180ms ease, opacity 180ms ease; }
-.customer-main--menu-active { grid-template-rows: 0 auto minmax(0, 1fr) 32px; }
+.customer-main--menu-active { grid-template-rows: 0 minmax(0, 1fr) auto; }
+.customer-main--menu-active.customer-main--has-notice { grid-template-rows: 0 auto minmax(0, 1fr) auto; }
 .customer-main--menu-active .customer-header { min-height: 0; height: 0; padding-block: 0; border-bottom: 0; visibility: hidden; }
 .header-action { position: relative; height: 70px; min-width: 0; flex: 1 1 0; padding: 0 18px; border: 1px solid var(--ink); background: transparent; display: flex; justify-content: center; align-items: center; gap: 10px; font-size: 16px; font-weight: 800; }
 .header-action:nth-child(2), .header-action:nth-child(4) { min-width: 245px; }
