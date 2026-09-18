@@ -468,8 +468,23 @@ test("drink list comments reuse description without changing detail behavior", (
   assert.match(styles, /\.menu-row__detail-hint__action, \.menu-row__detail-hint__separator \{[\s\S]*flex: 0 0 auto/);
   assert.match(styles, /\.menu-row__comment \{ min-width: 0;[\s\S]*text-overflow: ellipsis[\s\S]*white-space: nowrap/);
   assert.match(appSource, /detailItem\.detail\?\.description \|\| detailItem\.description/);
-  assert.match(appSource, /商品説明／一言コメント<textarea name="description"/);
+  assert.match(appSource, /descriptionFieldLabel = editingMenuIsFood \? "料理説明" : "商品説明／一言コメント"/);
   assert.match(customerScreen, /const canOpenDetail = Boolean\(item\.detail\?\.imageUri \|\| item\.imageUri\)/);
+});
+
+test("food rows show a clamped description and reserve the thumbnail column only for real images", () => {
+  assert.match(appSource, /const isFood = currentMajorCategory\.id === "food"/);
+  assert.match(customerScreen, /const showListImage = listImageVisible\(item\) && Boolean\(item\.imageUri\)/);
+  assert.match(customerScreen, /const foodDescription = isFood \? item\.description\?\.trim\(\) : ""/);
+  assert.match(customerScreen, /className=\{`menu-row \$\{isFood \? "food-menu-row" : ""\}/);
+  assert.match(customerScreen, /className="menu-row__food-description">\{foodDescription\}<\/small>/);
+  assert.match(styles, /\.food-menu-row \{[\s\S]*grid-template-columns: 60px 72px minmax\(0, 1fr\) 104px 160px[\s\S]*min-height: 112px/);
+  assert.match(styles, /\.food-menu-row\.menu-row--no-image \{ grid-template-columns: 60px minmax\(0, 1fr\) 104px 160px; \}/);
+  assert.match(styles, /\.food-menu-row \.product-image-button \{ width: 72px; height: 88px; \}/);
+  assert.match(styles, /\.menu-row__food-description \{[\s\S]*font-weight: 400[\s\S]*-webkit-line-clamp: 2/);
+  assert.match(styles, /@media \(max-width: 1350px\)[\s\S]*\.food-menu-row \{ min-height: 108px; grid-template-columns: 48px 72px minmax\(140px, 1fr\) 86px 156px/);
+  assert.match(appSource, /const descriptionFieldLabel = editingMenuIsFood \? "料理説明" : "商品説明／一言コメント"/);
+  assert.match(appSource, /\{descriptionFieldLabel\}<textarea name="description"/);
 });
 
 test("reservation-only customer rows show only the reservation label", () => {

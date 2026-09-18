@@ -644,6 +644,7 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
   const currentCategory = currentSubcategories.find((category) => category.id === categoryId) ?? currentSubcategories[0];
   const currentCategoryLabel = currentCategory?.id === "sake" ? "日本酒・地酒" : currentCategory?.name;
   const isDrink = currentMajorCategory.id === "drink";
+  const isFood = currentMajorCategory.id === "food";
   const isShochu = currentCategory?.id === "shochu";
   const isSake = currentCategory?.id === "sake";
   const cartRows = Object.entries(cart).map(([key, selection]) => ({
@@ -1031,10 +1032,11 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
               {apiMenuState.loading ? <div className="empty-state"><ListBullets size={42} /><p>メニューを読み込んでいます。</p></div> : apiMenuState.error ? <div className="empty-state"><ListBullets size={42} /><p>メニューを取得できません。</p></div> : currentItems.length ? currentItems.map((item, index) => {
                 const previous = currentItems[index - 1];
                 const isOtherStart = isShochu && item.sectionKey !== "芋" && (index === 0 || previous?.sectionKey === "芋");
-                const showListImage = listImageVisible(item);
+                const showListImage = listImageVisible(item) && Boolean(item.imageUri);
                 const isKushikatsu = item.isKushikatsuVirtual === true;
                 const canOpenDetail = Boolean(item.detail?.imageUri || item.imageUri);
                 const listComment = isDrink ? item.description?.trim() : "";
+                const foodDescription = isFood ? item.description?.trim() : "";
                 const row = isSake ? (
                   <article className={`menu-row sake-menu-row ${item.isSoldOut ? "is-sold-out" : ""}`} key={item.id}>
                     <div className="menu-row__index">{String(index + 1).padStart(2, "0")}</div>
@@ -1043,10 +1045,10 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
                     {item.orderingMode === "reservation_only" ? <div className="reservation-only-label"><b>予約限定</b></div> : <button className="sake-serve-button" onClick={() => openSakeSelection(item)} disabled={item.isSoldOut || !item.variants.length} aria-label={`${item.name}の提供方法を選ぶ`}><span>提供方法を選ぶ</span><small>グラス／徳利</small></button>}
                   </article>
                 ) : (
-                  <article className={`menu-row ${isShochu ? "shochu-menu-row" : ""} ${showListImage ? "" : "menu-row--no-image"} ${item.isSoldOut ? "is-sold-out" : ""}`} key={item.id} ref={isShochu && item.sectionKey === "芋" && !previous ? imoRef : null}>
+                  <article className={`menu-row ${isFood ? "food-menu-row" : ""} ${isShochu ? "shochu-menu-row" : ""} ${showListImage ? "" : "menu-row--no-image"} ${item.isSoldOut ? "is-sold-out" : ""}`} key={item.id} ref={isShochu && item.sectionKey === "芋" && !previous ? imoRef : null}>
                     <div className="menu-row__index">{String(index + 1).padStart(2, "0")}</div>
                     {showListImage ? <button className="product-image-button" onClick={() => canOpenDetail ? setDetailItem(item) : undefined} aria-label={`${item.name}の詳細を見る`} disabled={!canOpenDetail}>{item.imageUri ? <img src={isShochu ? shochuThumbUri(item.imageUri) : item.imageUri} alt="" style={imageLayoutStyle(item, "thumbnail")} /> : <span>画像なし</span>}</button> : null}
-                    <button className="menu-row__copy menu-row__copy--button" onClick={() => canOpenDetail ? setDetailItem(item) : undefined} aria-label={`${item.name}の詳細を見る`} disabled={!canOpenDetail}>{item.detail?.reading ? <small className="menu-row__reading">{item.detail.reading}</small> : null}<h2>{item.name}</h2>{canOpenDetail || listComment ? <small className="menu-row__detail-hint">{canOpenDetail ? <span className="menu-row__detail-hint__action">タップで明細</span> : null}{canOpenDetail && listComment ? <span className="menu-row__detail-hint__separator" aria-hidden="true">｜</span> : null}{listComment ? <span className="menu-row__comment">{listComment}</span> : null}</small> : null}</button>
+                    <button className="menu-row__copy menu-row__copy--button" onClick={() => canOpenDetail ? setDetailItem(item) : undefined} aria-label={`${item.name}の詳細を見る`} disabled={!canOpenDetail}>{item.detail?.reading ? <small className="menu-row__reading">{item.detail.reading}</small> : null}<h2>{item.name}</h2>{foodDescription ? <small className="menu-row__food-description">{foodDescription}</small> : null}{canOpenDetail || listComment ? <small className="menu-row__detail-hint">{canOpenDetail ? <span className="menu-row__detail-hint__action">タップで明細</span> : null}{canOpenDetail && listComment ? <span className="menu-row__detail-hint__separator" aria-hidden="true">｜</span> : null}{listComment ? <span className="menu-row__comment">{listComment}</span> : null}</small> : null}</button>
                     {isKushikatsu ? <span className="menu-price kushikatsu-price"><b><span className="kushikatsu-serving-label">1本 </span>{yen(taxExcludedYen(item.price))}</b><small>税込 {yen(item.price)}</small><small className="kushikatsu-condition">各種2本から</small></span> : <PriceDisplay priceYen={item.price} />}
                     {item.orderingMode === "reservation_only" ? <div className="reservation-only-label"><b>予約限定</b></div> : item.isSoldOut ? <div className="sold-out-label"><b>{CUSTOMER_WINTER_CATEGORY_IDS.has(item.categoryId) ? "冬季限定・現在注文できません" : "売り切れ"}</b><small>{CUSTOMER_WINTER_CATEGORY_IDS.has(item.categoryId) ? "SEASONAL PAUSED" : "SOLD OUT"}</small></div> : isKushikatsu ? <button className="add-button" onClick={() => openKushikatsuSelection(item)} aria-label={`${item.name}の本数を選ぶ`}><Plus size={36} weight="bold" /></button> : item.servingOptions.length ? <button className="shochu-serving-button" onClick={() => openShochuSelection(item)} aria-label={`${item.name}の飲み方選択`}>飲み方選択</button> : <button className="add-button" onClick={() => addSelection(item)} aria-label={`${item.name}を追加`}><Plus size={36} weight="bold" /></button>}
                   </article>
@@ -1456,6 +1458,9 @@ function AdminScreen({ state, updateState, section = "menu" }) {
   }, [section, adminApiMode, diagnosticRefreshKey]);
   const categoriesById = Object.fromEntries(state.categories.map((category) => [category.id, category]));
   const editingMenu = state.menuItems.find((item) => item.id === editingMenuId) ?? null;
+  const editingMenuCategory = state.categories.find((category) => category.id === editingMenu?.categoryId);
+  const editingMenuIsFood = editingMenuCategory?.sectionKey === "food" || /^(food-|special-)/.test(editingMenu?.categoryId ?? "");
+  const descriptionFieldLabel = editingMenuIsFood ? "料理説明" : "商品説明／一言コメント";
   const setMenuItem = (id, patch) => updateState((current) => ({ ...current, menuItems: current.menuItems.map((item) => item.id === id ? { ...item, ...patch } : item) }));
   const setCategory = (id, patch) => updateState((current) => ({ ...current, categories: current.categories.map((item) => item.id === id ? { ...item, ...patch } : item) }));
   const addMenu = async (event) => {
@@ -1799,7 +1804,7 @@ function AdminScreen({ state, updateState, section = "menu" }) {
             <label>厨房用の通称<input name="kitchenAlias" required placeholder="例：だし巻き" defaultValue={editingMenu?.kitchenAlias ?? DEFAULT_KITCHEN_MENU_ALIASES[editingMenu?.id] ?? ""} /></label>
             <label>カテゴリ<select name="categoryId" defaultValue={editingMenu?.categoryId}>{state.categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}</select></label>
             <label>税込マスター価格<input name="price" type="number" min="0" step="1" defaultValue={editingMenu?.price ?? 500} /></label>
-            <label className="menu-editor__wide">商品説明／一言コメント<textarea name="description" defaultValue={editingMenu?.description ?? ""} /></label>
+            <label className="menu-editor__wide">{descriptionFieldLabel}<textarea name="description" defaultValue={editingMenu?.description ?? ""} /></label>
             <label className="menu-editor__check"><input type="checkbox" name="isSoldOut" defaultChecked={editingMenu?.isSoldOut ?? false} /> 売り切れ</label>
             <fieldset className="menu-ordering-mode"><legend>注文方法</legend><label><input type="radio" name="orderingMode" value="normal" defaultChecked={(editingMenu?.orderingMode ?? "normal") === "normal"} /> 注文方法：通常注文</label><label><input type="radio" name="orderingMode" value="reservation_only" defaultChecked={editingMenu?.orderingMode === "reservation_only"} /> 注文方法：予約限定</label></fieldset>
             <label className="menu-editor__check"><input type="checkbox" name="isActive" defaultChecked={editingMenu?.isActive !== false} /> 販売中</label>
