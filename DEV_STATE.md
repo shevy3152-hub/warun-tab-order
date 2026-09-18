@@ -1,5 +1,26 @@
 # 開発状態
 
+## 2026-09-18 フード料理説明＋サムネイル対応 checkpoint
+
+実装commitは`274a459`（`feat: show food descriptions in customer menu`）。フード商品名の直下へ既存`description`を料理説明として表示し、客席の商品行を画像有無に対応した構造へ整理した。管理画面の商品説明欄は、フードでは「料理説明」、ドリンクでは「商品説明／一言コメント」と表示する。
+
+- フード料理説明は最大2行。空欄時は要素・余白を生成しない。
+- 画像がある商品だけサムネイル枠を表示し、画像なしでは文字領域を拡張する。
+- detail画像なしの商品は詳細を開かない。詳細画面のdescription全文表示は維持する。
+- ドリンクコメント、予約限定、串カツ、黒焼きvariantの回帰を確認した。
+- A90料理説明表示PASS。実画像付きフード商品のサムネイル目視は、画像登録時に確認する。
+- safe-copyはschema v8、event_log 339。DB、商品情報、注文データは不変。production未反映。
+- 検証: prototype 102/102、Sites 4/4、Vite build、`git diff --check`。server差分なしのため既存379/379を採用した。
+- production DB、pairing、注文送信、push/pull/merge/rebaseは未実施。`prototype/CONTEXT.md`と既存未追跡ファイルは保全した。
+
+### 未完了タスク
+
+1. runtime-state.json権限エラー
+2. 左赤レールの名称・位置・折り畳み表示改善
+3. 本日の営業時間編集
+4. 半身焼きを名物へ移すか決定
+5. production環境の特定・反映
+
 ## 2026-09-18 商品単位予約限定・ドリンク一言コメント checkpoint
 
 実装commitは`6aa39aa`（`feat: add reservation-only ordering and drink comments`）。実装対象を確認し、schema v7→v8、商品単位の`ordering_mode`、管理APIの取得・保存・不正値拒否、予約限定商品の注文前422拒否、客席の注文操作非表示、カテゴリー名編集、名物fallback／初期データ、ドリンク一覧の一言コメントを反映した。
