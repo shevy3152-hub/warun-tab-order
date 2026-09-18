@@ -82,6 +82,25 @@ launcherのstale runtime-state処理を実装し、隔離E2Eとlive safe-copyの
 最終更新: 2026-09-18
 対象: `C:\Users\user\Documents\ChatGPT\タブレットオーダーシステム`
 
+## 2026-09-18 左赤レール表示整理 checkpoint
+
+左赤レールの客席表示名と開いた状態のカテゴリー群位置を整理し、ユーザーによる微調整後PASSとして受入した。内部ID、`section_key`、DBカテゴリー名、IZAKAYA WARUN、背景画像、閉じたレールの位置は変更していない。
+
+- 「お品書き」を削除し、客席表示を`01 飲み物`、`02 お食事`、`03 冬季限定`、`04 空白`とした。
+- `04`は空白予約枠として`aria-hidden="true"`、`tabIndex=-1`、非操作を維持した。
+- 開いたレールの`.category-nav`最終`padding-top`は`155px`。01〜03の文字サイズ・高さは維持した。
+- 閉じた状態は「現在／カテゴリー名／メインカテゴリーに戻る」とした。
+- prototype 102/102 PASS、Vite build PASS、`git diff --check` PASS。
+- DB、API、schema、server、production、order、pairingは変更なし。
+- A90の厳密な自動計測ではなく、ユーザー目視受入PASSとして記録する。
+- `prototype/CONTEXT.md`と既存未追跡ファイルは保全した。
+
+### 次回タスク
+
+1. 本日の営業時間を管理画面で編集・客席表示
+2. 飲み物画面の見出し下線と戻るボタン調整
+3. 半身焼きを名物へ移すか決定
+
 ## 2026-09-16 カテゴリー管理・商品並び順 checkpoint
 
 schema v7 migration、カテゴリー管理、商品並び順保存、客席カテゴリー動的生成、および左レール開閉時のカテゴリー文字サイズ調整を実装した。実装commitは`304054a`（`feat: add category and menu ordering controls`）。
