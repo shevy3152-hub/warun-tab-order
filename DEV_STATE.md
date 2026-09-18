@@ -1,6 +1,23 @@
 # 開発状態
 
-最終更新: 2026-09-16
+## 2026-09-18 客席下部レイアウト診断・最小修正 checkpoint（A90受入ALL PASS）
+
+実際のリポジトリ状態を優先して現況を整理した。branchは`feature/sqlite-foundation`、開始時HEADは`f1083b5d3f14daa94e0dbc4e40c5f9946d1c48bf`、実装commitは`42633a9`。開始時のtracked差分は`prototype/CONTEXT.md`のみで、既存未追跡ファイルは変更・整理していない。今回の実装差分は`prototype/src/App.jsx`、`prototype/src/styles.css`、および新しいgrid行を確認する`prototype/tests/customer-ui.test.mjs`である。
+
+- 客席mainのgrid行を、通知なし時は`header / minmax(0, 1fr) / footer`、通知あり時だけ通知行を含む構成へ整理した。footerは実際の最小高さに追従する`auto`行とし、商品一覧と注文内容パネルの既存flex／`min-height: 0`／内部スクロールを維持した。
+- 1280×800の隔離pairing環境で、予約限定（2行）と焼酎（13行）、左レール開閉の4条件を修正後に確認した。全条件でfooterとINFORMATION上罫線はtop 760.007 / bottom 800.000付近、document/bodyはscrollHeight 800・scrollWidth 1280。長い一覧のみ`.menu-list`が内部スクロールし、焼酎はscrollHeight 1541、clientHeight 627（レール閉）/541（レール開）だった。
+- 修正後の注文内容パネルは、予約限定でtop 13.988 / bottom 748.016（レール閉）、top 99.988 / bottom 748.016（レール開）。焼酎でも同じ利用可能領域に伸び、確定ボタンはtop 675.236 / bottom 733.234に配置された。商品行の高さ・位置・間隔、商品・カテゴリー・予約限定仕様は変更していない。
+- INFORMATIONは画面下端へ配置し、注文内容パネルは利用可能高さまで拡張した。長い一覧は商品領域内だけをスクロールさせた。A90実機で客席レイアウトをALL PASSとして受入確認した。
+- 白画面の原因はsafe-copyサーバー停止であり、今回のUI修正が原因ではない。正式safe-copyをPID `11424`で復旧し、production DBへは反映していない。
+- 隔離DBは`server/var/safe-copies/isolated-layout-preview-20260918-155802/preview.sqlite3`へ物理複製し、正式管理画面のpairing／claimだけを実施した。pairing後は隔離DBのdevicesのみ11→12、categories 16、menu_items 88、orders 20、order_items 33、table_sessions 6、event_log 298、integrity_check `ok`、foreign_key違反0件。隔離サーバー・一時web root・ブラウザプロファイルは停止・削除済み。
+- live safe-copyは開始・終了でmain `AA57F8FE96170DAF5D8C6882FE614C67FE8D891266A52D6AEFD5A904035C7AE4`、WAL `7C2B66843809F3648EDA425AA13AAF2F80A3ADF681BFEF0B8D793055C2C808DC`、SHM `4A59806F5805BF7B2412C77467E8A86FD037173A20BCA4ED4D0EA167082C7123`が一致した。live件数はcategories 16、menu_items 88、orders 20、order_items 33、table_sessions 6、event_log 298、integrity_check `ok`、foreign_key違反0件で不変。live safe-copyのhealth待受は開始・終了とも確認していない。
+- 検証はSites 4/4、注文outbox 24/24、Vite build（4581 modules）、`git diff --check`、修正後console error/warning 0件。修正前後の予約限定・焼酎、左レール開閉のスクリーンショットを取得した。
+- 今回変更していない範囲: `prototype/CONTEXT.md`、既存未追跡ファイル、DB／API／schema、live safe-copy／production DB、商品・カテゴリー・並び順、半身焼き・ホールの予約限定仕様、pairing以外の注文処理、A90実装、push/pull/merge/rebase。
+- 次回タスク:
+  1. 半身焼き・ホールの商品単位の予約限定／注文不可
+  2. 半身焼きを名物へ移すか決定
+
+最終更新: 2026-09-18
 対象: `C:\Users\user\Documents\ChatGPT\タブレットオーダーシステム`
 
 ## 2026-09-16 カテゴリー管理・商品並び順 checkpoint
