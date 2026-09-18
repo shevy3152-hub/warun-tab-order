@@ -37,7 +37,11 @@ export function normalizeImageLayoutWriteRequest(request) {
   const menuItemId = normalizeOpaqueId(request.menuItemId, 'menuItemId');
   if (request.layouts === null || typeof request.layouts !== 'object' || Array.isArray(request.layouts)) throw invalidWrite('layouts must be an object.');
   const layouts = {};
-  for (const usage of IMAGE_LAYOUT_USAGES) layouts[usage] = normalizeImageLayout(request.layouts[usage], `layouts.${usage}`);
+  for (const usage of IMAGE_LAYOUT_USAGES) {
+    layouts[usage] = request.layouts[usage] === null
+      ? null
+      : normalizeImageLayout(request.layouts[usage], `layouts.${usage}`);
+  }
   return { expectedVersion, menuItemId, layouts };
 }
 
@@ -116,6 +120,10 @@ export function normalizeCatalogWriteRequest(request) {
   if (typeof isSoldOut !== 'boolean' || typeof isActive !== 'boolean') {
     throw invalidWrite('isSoldOut and isActive must be boolean values.');
   }
+  const orderingMode = request.orderingMode ?? 'normal';
+  if (orderingMode !== 'normal' && orderingMode !== 'reservation_only') {
+    throw invalidWrite('orderingMode must be normal or reservation_only.');
+  }
   const sortOrder = normalizeNonNegativeInteger(request.sortOrder ?? 0, 'sortOrder');
   const imageUri = normalizeOptionalImage(request.imageUri, 'imageUri');
   const sectionKey = request.sectionKey === undefined || request.sectionKey === null || request.sectionKey === ''
@@ -190,6 +198,7 @@ export function normalizeCatalogWriteRequest(request) {
     priceYen,
     isSoldOut,
     isActive,
+    orderingMode,
     sortOrder,
     imageUri,
     sectionKey,
@@ -328,6 +337,7 @@ function mapCustomerMenuItem(row) {
     description: row.description,
     priceYen: row.price_yen,
     isSoldOut: row.is_sold_out === 1,
+    orderingMode: row.ordering_mode ?? 'normal',
     sortOrder: row.sort_order,
     version: row.version,
   }, row.image_uri);
@@ -360,6 +370,7 @@ function mapAdminMenuItem(row) {
     description: row.description,
     priceYen: row.price_yen,
     isSoldOut: row.is_sold_out === 1,
+    orderingMode: row.ordering_mode ?? 'normal',
     isActive: row.is_active === 1,
     sortOrder: row.sort_order,
     version: row.version,
@@ -473,15 +484,15 @@ export function createCatalogRepository({ database, now = Date.now } = {}) {
       insertMenuItem: database.prepare(`
         INSERT INTO menu_items (
           menu_item_id, category_id, formal_name, kitchen_alias, description,
-          price_yen, is_sold_out, is_active, sort_order, image_uri, version,
+          price_yen, is_sold_out, is_active, sort_order, image_uri, ordering_mode, version,
           created_at_ms, updated_at_ms, section_key
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)
       `),
       updateMenuItem: database.prepare(`
         UPDATE menu_items
         SET category_id = ?, formal_name = ?, kitchen_alias = ?, description = ?,
             price_yen = ?, is_sold_out = ?, is_active = ?, sort_order = ?,
-            image_uri = ?, version = version + 1, updated_at_ms = ?, section_key = ?
+            image_uri = ?, ordering_mode = ?, version = version + 1, updated_at_ms = ?, section_key = ?
         WHERE menu_item_id = ? AND version = ?
       `),
       insertDetail: database.prepare(`
@@ -564,6 +575,7 @@ export function createCatalogRepository({ database, now = Date.now } = {}) {
           m.description,
           m.price_yen,
           m.is_sold_out,
+          m.ordering_mode,
           m.sort_order,
           m.image_uri,
           m.version,
@@ -616,6 +628,7 @@ export function createCatalogRepository({ database, now = Date.now } = {}) {
           m.description,
           m.price_yen,
           m.is_sold_out,
+          m.ordering_mode,
           m.is_active,
           m.sort_order,
           m.image_uri,
@@ -893,6 +906,7 @@ export function createCatalogRepository({ database, now = Date.now } = {}) {
           normalized.isActive ? 1 : 0,
           normalized.sortOrder,
           normalized.imageUri,
+          normalized.orderingMode,
           timestamp,
           timestamp,
           normalized.sectionKey,
@@ -908,6 +922,7 @@ export function createCatalogRepository({ database, now = Date.now } = {}) {
           normalized.isActive ? 1 : 0,
           normalized.sortOrder,
           normalized.imageUri,
+          normalized.orderingMode,
           timestamp,
           normalized.sectionKey,
           normalized.menuItemId,
@@ -1154,9 +1169,14 @@ export function createCatalogRepository({ database, now = Date.now } = {}) {
       const timestamp = now();
       const update = statements.updateImageLayoutVersion.run(timestamp, normalized.menuItemId, normalized.expectedVersion);
       if (Number(update.changes) !== 1) throw repositoryError(CATALOG_ERROR_CODES.VERSION_CONFLICT, 'The catalog item has changed since it was read.');
+      if (IMAGE_LAYOUT_USAGES.some((usage) => normalized.layouts[usage] === null)) {
+        statements.deleteImageLayouts.run(normalized.menuItemId);
+      }
       for (const usage of IMAGE_LAYOUT_USAGES) {
         const layout = normalized.layouts[usage];
-        statements.upsertImageLayout.run(normalized.menuItemId, usage, layout.scale, layout.positionX, layout.positionY, layout.rotation, layout.fit, timestamp);
+        if (layout !== null) {
+          statements.upsertImageLayout.run(normalized.menuItemId, usage, layout.scale, layout.positionX, layout.positionY, layout.rotation, layout.fit, timestamp);
+        }
       }
       const systemState = statements.findSystemState.get();
       const payloadJson = JSON.stringify({ menuItemId: normalized.menuItemId, version: current.version + 1, operation: 'image-layout-updated' });

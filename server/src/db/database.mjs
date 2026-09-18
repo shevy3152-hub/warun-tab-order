@@ -5,7 +5,7 @@ import { DatabaseSync } from 'node:sqlite';
 
 export const LEGACY_SCHEMA_VERSION = 1;
 export const SESSION_SCHEMA_VERSION = 2;
-export const SCHEMA_VERSION = 7;
+export const SCHEMA_VERSION = 8;
 
 export const REQUIRED_TABLES = Object.freeze([
   'system_state',
@@ -101,6 +101,9 @@ export const DEFAULT_V6_MIGRATION_PATH = resolve(
 );
 export const DEFAULT_V7_MIGRATION_PATH = resolve(
   moduleDirectory, '..', '..', '..', 'docs', 'schema-v7-migration.sql',
+);
+export const DEFAULT_V8_MIGRATION_PATH = resolve(
+  moduleDirectory, '..', '..', '..', 'docs', 'schema-v8-migration.sql',
 );
 
 export class DatabaseInitializationError extends Error {
@@ -383,6 +386,14 @@ function migrateSchemaV6ToV7(database, migrationPath) {
   }
 }
 
+function migrateSchemaV7ToV8(database, migrationPath) {
+  try { database.exec(readFileSync(migrationPath, 'utf8')); }
+  catch (error) {
+    try { if (database.isTransaction) database.exec('ROLLBACK;'); } catch {}
+    throw new DatabaseInitializationError('MIGRATION_FAILED', 'The item ordering mode schema migration failed.', { cause: error });
+  }
+}
+
 function migrateSchemaV1ToV2(database) {
   let transactionOpen = false;
   try {
@@ -574,6 +585,7 @@ function validateSchema(database) {
   assertRequiredNames(schemaObjectNames(database, 'index'), REQUIRED_INDEXES, 'indexes');
   assertRequiredNames(schemaObjectNames(database, 'trigger'), REQUIRED_TRIGGERS, 'triggers');
   assertRequiredNames(tableColumns(database, 'categories'), ['section_key'], 'categories columns');
+  assertRequiredNames(tableColumns(database, 'menu_items'), ['ordering_mode'], 'menu_items columns');
   assertRequiredNames(tableColumns(database, 'menu_item_variants'), ['temperature_options_json'], 'menu_item_variants columns');
   assertRequiredNames(tableColumns(database, 'order_items'), ['temperature_snapshot'], 'order_items columns');
 
@@ -655,6 +667,7 @@ export function initializeDatabase({
   v5MigrationPath = DEFAULT_V5_MIGRATION_PATH,
   v6MigrationPath = DEFAULT_V6_MIGRATION_PATH,
   v7MigrationPath = DEFAULT_V7_MIGRATION_PATH,
+  v8MigrationPath = DEFAULT_V8_MIGRATION_PATH,
 } = {}) {
   const resolvedDatabasePath = resolveFilePath(databasePath, 'databasePath');
   const resolvedSchemaPath = resolveFilePath(schemaPath, 'schemaPath');
@@ -663,6 +676,7 @@ export function initializeDatabase({
   const resolvedV5MigrationPath = resolveFilePath(v5MigrationPath, 'v5MigrationPath');
   const resolvedV6MigrationPath = resolveFilePath(v6MigrationPath, 'v6MigrationPath');
   const resolvedV7MigrationPath = resolveFilePath(v7MigrationPath, 'v7MigrationPath');
+  const resolvedV8MigrationPath = resolveFilePath(v8MigrationPath, 'v8MigrationPath');
 
   mkdirSync(dirname(resolvedDatabasePath), { recursive: true });
 
@@ -711,6 +725,11 @@ export function initializeDatabase({
     }
     if (currentVersion === 6) {
       migrateSchemaV6ToV7(database, resolvedV7MigrationPath);
+      enableWriteAheadLogging(database);
+      currentVersion = 7;
+    }
+    if (currentVersion === 7) {
+      migrateSchemaV7ToV8(database, resolvedV8MigrationPath);
       enableWriteAheadLogging(database);
       currentVersion = SCHEMA_VERSION;
     }

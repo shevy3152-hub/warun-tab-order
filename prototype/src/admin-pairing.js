@@ -192,6 +192,7 @@ export async function saveAdminMenuItem({ env = globalThis, item, expectedVersio
       description: item.description || "",
       priceYen: item.price,
       isSoldOut: Boolean(item.isSoldOut),
+      orderingMode: item.orderingMode === "reservation_only" ? "reservation_only" : "normal",
       isActive: item.isActive !== false,
       sortOrder: item.sortOrder ?? 0,
       imageUri: item.imageUri ?? null,

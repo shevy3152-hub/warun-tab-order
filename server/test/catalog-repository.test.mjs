@@ -604,6 +604,7 @@ test('customer menu returns only the identifiers and fields needed for ordering'
       'imageUri',
       'isSoldOut',
       'menuItemId',
+      'orderingMode',
       'priceYen',
       'servingOptions',
       'sortOrder',
@@ -732,6 +733,37 @@ test('admin menu exposes sale, visibility, sort, version, and update state', asy
     assert.equal(item.sortOrder, 3);
     assert.equal(item.version, 9);
     assert.equal(item.updatedAtMs, 5103);
+  });
+});
+
+test('admin menu ordering mode round-trips and rejects invalid values', async () => {
+  await withCatalogFixture(({ authenticator, catalog }) => {
+    const admin = authenticate(authenticator, ADMIN_TOKEN);
+    const before = catalog.getMenuForPrincipal(admin);
+    const tamago = before.items.find(({ menuItemId }) => menuItemId === 'tamago');
+    assert.equal(tamago.orderingMode, 'normal');
+    const request = {
+      expectedVersion: tamago.version,
+      menuItemId: tamago.menuItemId,
+      categoryId: tamago.categoryId,
+      formalName: tamago.formalName,
+      kitchenAlias: tamago.kitchenAlias,
+      description: tamago.description,
+      priceYen: tamago.priceYen,
+      isSoldOut: tamago.isSoldOut,
+      isActive: tamago.isActive,
+      orderingMode: 'reservation_only',
+      sortOrder: tamago.sortOrder,
+      imageUri: tamago.imageUri,
+      sectionKey: tamago.sectionKey,
+      detail: tamago.detail,
+      variants: tamago.variants,
+      servingOptions: tamago.servingOptions,
+    };
+    const saved = catalog.writeMenuItem(admin, request);
+    assert.equal(saved.version, tamago.version + 1);
+    assert.equal(catalog.getMenuForPrincipal(admin).items.find(({ menuItemId }) => menuItemId === tamago.menuItemId).orderingMode, 'reservation_only');
+    assertCatalogError(() => catalog.writeMenuItem(admin, { ...request, expectedVersion: saved.version, orderingMode: 'invalid' }), CATALOG_ERROR_CODES.INVALID_WRITE_REQUEST);
   });
 });
 
@@ -927,6 +959,61 @@ test('admin category writes validate ownership, uniqueness, and versions', async
     assert.equal(category.isVisible, false);
     assertCatalogError(() => catalog.writeCategory(admin, { name: '揚げ物', sectionKey: 'food', sortOrder: 51, isVisible: false, expectedVersion: 0 }), CATALOG_ERROR_CODES.ID_CONFLICT);
     assertCatalogError(() => catalog.writeCategory(admin, { categoryId: created.categoryId, name: '揚げ物2', sectionKey: 'food', sortOrder: 50, isVisible: true, expectedVersion: 0 }), CATALOG_ERROR_CODES.VERSION_CONFLICT);
+  });
+});
+
+test('admin category name edits trim, preserve ownership, and update only the category name', async () => {
+  await withCatalogFixture(({ database, authenticator, catalog }) => {
+    const admin = authenticate(authenticator, ADMIN_TOKEN);
+    const beforeCategory = database.prepare('SELECT category_id, name, section_key, sort_order, version FROM categories WHERE category_id = ?').get('drinks');
+    const beforeItems = database.prepare('SELECT menu_item_id, category_id, sort_order FROM menu_items WHERE category_id = ? ORDER BY sort_order, menu_item_id').all('drinks');
+    const beforeCounts = {
+      items: database.prepare('SELECT COUNT(*) AS count FROM menu_items').get().count,
+      orders: database.prepare('SELECT COUNT(*) AS count FROM orders').get().count,
+      events: database.prepare('SELECT COUNT(*) AS count FROM event_log').get().count,
+    };
+    const result = catalog.writeCategory(admin, {
+      categoryId: 'drinks', expectedVersion: beforeCategory.version, name: '  名物  ', sectionKey: beforeCategory.section_key,
+      sortOrder: beforeCategory.sort_order, isVisible: true,
+    });
+    assert.equal(result.categoryId, 'drinks');
+    assert.equal(database.prepare('SELECT name FROM categories WHERE category_id = ?').get('drinks').name, '名物');
+    assert.deepEqual(database.prepare('SELECT category_id, sort_order FROM menu_items WHERE category_id = ? ORDER BY sort_order, menu_item_id').all('drinks').map((row) => ({ ...row })), beforeItems.map(({ category_id, sort_order }) => ({ category_id, sort_order })));
+    assert.deepEqual({ ...database.prepare('SELECT category_id, section_key, sort_order FROM categories WHERE category_id = ?').get('drinks') }, { category_id: 'drinks', section_key: beforeCategory.section_key, sort_order: beforeCategory.sort_order });
+    assert.deepEqual({
+      items: database.prepare('SELECT COUNT(*) AS count FROM menu_items').get().count,
+      orders: database.prepare('SELECT COUNT(*) AS count FROM orders').get().count,
+      events: database.prepare('SELECT COUNT(*) AS count FROM event_log').get().count,
+    }, { ...beforeCounts, events: beforeCounts.events + 1 });
+    assert.equal(catalog.getMenuForPrincipal(admin).categories.find(({ categoryId }) => categoryId === 'drinks').name, '名物');
+    assertCatalogError(() => catalog.writeCategory(admin, { categoryId: 'drinks', expectedVersion: result.version, name: '   ', sectionKey: beforeCategory.section_key, sortOrder: beforeCategory.sort_order, isVisible: true }), CATALOG_ERROR_CODES.INVALID_WRITE_REQUEST);
+    assertCatalogError(() => catalog.writeCategory(admin, { categoryId: 'drinks', expectedVersion: result.version, name: ' 一品 ', sectionKey: beforeCategory.section_key, sortOrder: beforeCategory.sort_order, isVisible: true }), CATALOG_ERROR_CODES.ID_CONFLICT);
+  });
+});
+
+test('admin image layout writes can restore usage rows to an absent migration baseline', async () => {
+  await withCatalogFixture(({ database, authenticator, catalog }) => {
+    const admin = authenticate(authenticator, ADMIN_TOKEN);
+    const before = database.prepare('SELECT version FROM menu_items WHERE menu_item_id = ?').get('edamame');
+    assert.equal(database.prepare('SELECT COUNT(*) AS count FROM menu_item_image_layouts WHERE menu_item_id = ?').get('edamame').count, 0);
+
+    const saved = catalog.writeImageLayouts(admin, {
+      menuItemId: 'edamame',
+      expectedVersion: before.version,
+      layouts: {
+        thumbnail: { scale: 1.2, positionX: 0.1, positionY: -0.1, rotation: 2, fit: 'contain' },
+        detail: { scale: 1, positionX: 0, positionY: 0, rotation: 0, fit: 'contain' },
+      },
+    });
+    assert.equal(database.prepare('SELECT COUNT(*) AS count FROM menu_item_image_layouts WHERE menu_item_id = ?').get('edamame').count, 2);
+
+    const reset = catalog.writeImageLayouts(admin, {
+      menuItemId: 'edamame',
+      expectedVersion: saved.version,
+      layouts: { thumbnail: null, detail: null },
+    });
+    assert.equal(reset.version, saved.version + 1);
+    assert.equal(database.prepare('SELECT COUNT(*) AS count FROM menu_item_image_layouts WHERE menu_item_id = ?').get('edamame').count, 0);
   });
 });
 

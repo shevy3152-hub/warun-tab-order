@@ -709,6 +709,28 @@ test('sold-out menu item is rejected', async () => {
   });
 });
 
+test('reservation-only menu item is rejected before order persistence', async () => {
+  await withFixture(({ database }) => {
+    database.prepare("UPDATE menu_items SET ordering_mode = 'reservation_only' WHERE menu_item_id = 'edamame'").run();
+    const before = {
+      orders: database.prepare('SELECT COUNT(*) AS count FROM orders').get().count,
+      orderItems: database.prepare('SELECT COUNT(*) AS count FROM order_items').get().count,
+      events: database.prepare('SELECT COUNT(*) AS count FROM event_log').get().count,
+    };
+    assertOrderError(
+      () => makeRepository(database).createOrder(orderRequest({
+        items: [{ menuItemId: 'edamame', quantity: 1 }],
+      })),
+      ORDER_ERROR_CODES.MENU_ITEM_RESERVATION_ONLY,
+    );
+    assert.deepEqual({
+      orders: database.prepare('SELECT COUNT(*) AS count FROM orders').get().count,
+      orderItems: database.prepare('SELECT COUNT(*) AS count FROM order_items').get().count,
+      events: database.prepare('SELECT COUNT(*) AS count FROM event_log').get().count,
+    }, before);
+  });
+});
+
 test('zero, negative, fractional, and over-limit quantities are rejected', async () => {
   await withFixture(({ database }) => {
     for (const quantity of [0, -1, 1.5, 100]) {

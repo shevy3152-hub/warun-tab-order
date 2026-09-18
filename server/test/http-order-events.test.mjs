@@ -251,10 +251,11 @@ function closeSession(port, token, body) {
   });
 }
 
-function assertError(response, statusCode, code) {
+function assertError(response, statusCode, code, message = undefined) {
   assert.equal(response.statusCode, statusCode);
   assert.equal(response.json.error.code, code);
   assert.equal(typeof response.json.error.message, 'string');
+  if (message !== undefined) assert.equal(response.json.error.message, message);
   assert.equal(typeof response.json.requestId, 'string');
   assert.doesNotMatch(response.rawBody, /token_hash|request_fingerprint|canonical_request|SQLITE|SELECT /i);
 }
@@ -711,7 +712,7 @@ test('same intent replays without rows or notification; changed quantity or item
 });
 
 test('business validation, authentication, revocation, and customer-only authorization are enforced', async () => {
-  await withFixture(async ({ port }) => {
+  await withFixture(async ({ port, database }) => {
     assertError(
       await postOrder(port, CUSTOMER_A_TOKEN, orderBody(uuid(1_010), [
         { menuItemId: 'soldout', quantity: 1 },
@@ -719,6 +720,11 @@ test('business validation, authentication, revocation, and customer-only authori
       422,
       'MENU_ITEM_SOLD_OUT',
     );
+    database.prepare("UPDATE menu_items SET ordering_mode = 'reservation_only' WHERE menu_item_id = 'edamame'").run();
+    const reservationOnly = await postOrder(port, CUSTOMER_A_TOKEN, orderBody(uuid(1_012), [
+      { menuItemId: 'edamame', quantity: 1 },
+    ]));
+    assertError(reservationOnly, 422, 'MENU_ITEM_RESERVATION_ONLY', 'この商品は予約限定のため注文できません');
     assertError(
       await postOrder(port, CUSTOMER_A_TOKEN, orderBody(uuid(1_011), [
         { menuItemId: 'missing', quantity: 1 },

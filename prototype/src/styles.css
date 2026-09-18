@@ -197,13 +197,17 @@ h1, h2, h3, p { margin: 0; }
 .sold-out-label { min-width: 100px; display: flex; flex-direction: column; align-items: flex-end; }
 .sold-out-label b { font-size: 18px; }
 .sold-out-label small { font-size: 10px; letter-spacing: .12em; }
+.reservation-only-label { min-width: 150px; display: flex; flex-direction: column; align-items: flex-end; color: var(--red); text-align: right; }
+.reservation-only-label b { font-size: 18px; }
 .menu-price { display: flex; flex-direction: column; align-items: flex-end; color: var(--red); white-space: nowrap; }
 .menu-price b { font: 900 30px/1.05 var(--font-ui); font-variant-numeric: tabular-nums; font-feature-settings: "tnum" 1; }
 .menu-price small { margin-top: 4px; color: var(--ink); font-family: var(--font-ui); font-size: 11px; line-height: 1.1; font-weight: 800; font-variant-numeric: tabular-nums; font-feature-settings: "tnum" 1; }
 .kushikatsu-price .kushikatsu-serving-label { font-size: 24px; }
 .kushikatsu-price .kushikatsu-condition { color: var(--ink); }
 .menu-row__copy--button { border: 0; background: transparent; text-align: left; align-self: stretch; display: flex; flex-direction: column; justify-content: center; }
-.menu-row__detail-hint { margin-top: 5px; color: var(--muted); font-size: 14px; line-height: 1.1; font-weight: 800; }
+.menu-row__detail-hint { min-width: 0; display: flex; align-items: baseline; gap: 6px; margin-top: 5px; color: var(--muted); font-size: 14px; line-height: 1.1; font-weight: 800; white-space: nowrap; overflow: hidden; }
+.menu-row__detail-hint__action, .menu-row__detail-hint__separator { flex: 0 0 auto; white-space: nowrap; }
+.menu-row__comment { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .drink-jump-nav { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--red); }
 .drink-jump-nav button { min-height: 50px; border: 1px solid var(--red); background: #fffaf3; color: var(--red); font-weight: 900; }
 .category-return-button { display: block; width: 100%; min-height: 44px; border: 1px solid var(--red); background: #fffaf3; color: var(--red); font-size: 12px; font-weight: 900; letter-spacing: .08em; }
@@ -230,7 +234,7 @@ h1, h2, h3, p { margin: 0; }
 .product-image-button span { font-size: 12px; color: var(--muted); }
 .sake-menu-row .menu-row__copy { padding: 0 8px; }
 .sake-menu-row .menu-row__copy h2 { font-size: clamp(22px, 1.8vw, 30px); }
-.sake-menu-row .menu-row__copy > small { display: block; margin-top: 2px; color: var(--muted); }
+.sake-menu-row .menu-row__copy > small:not(.menu-row__detail-hint) { display: block; margin-top: 2px; color: var(--muted); }
 .menu-row__reading { display: block; margin-top: 3px; color: var(--muted); font-size: clamp(12px, 1.15vw, 16px); line-height: 1.2; font-weight: 800; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .sake-type { display: inline-block; margin-top: 7px; padding: 2px 7px; background: #9b7745; color: #fff; font-size: 11px; }
 .sake-serve-button { justify-self: center; width: 176px; min-width: 176px; min-height: 58px; align-self: center; padding: 10px 14px; border: 2px solid var(--red); background: #fffaf3; color: var(--red); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; font-weight: 900; }
@@ -548,6 +552,9 @@ h1, h2, h3, p { margin: 0; }
 .menu-editor__check { min-height: 54px; display: flex !important; flex-direction: row; align-items: center; gap: 10px !important; }
 .menu-editor__check input { width: 24px !important; height: 24px; }
 .menu-editor fieldset { grid-column: span 2; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; border: 1px solid var(--line); }
+.menu-ordering-mode { min-height: 54px; align-items: center; }
+.menu-ordering-mode label { display: flex; align-items: center; gap: 8px; font-weight: 800; }
+.menu-ordering-mode input { width: 20px; height: 20px; }
 .menu-editor .sake-variant-editor { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .menu-editor .food-variant-editor { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .menu-editor__actions { grid-column: 1 / -1; display: flex; justify-content: flex-end; gap: 10px; }
@@ -675,6 +682,8 @@ h1, h2, h3, p { margin: 0; }
   .sold-out-label { min-width: 66px; }
   .sold-out-label b { font-size: 13px; }
   .sold-out-label small { font-size: 8px; }
+  .reservation-only-label { min-width: 148px; }
+  .reservation-only-label b { font-size: 13px; }
   .cart-panel > header { min-height: 58px; padding: 8px 12px; gap: 8px; }
   .cart-panel > header svg { width: 28px; height: 28px; }
   .cart-panel > header h2 { font-size: 16px; }

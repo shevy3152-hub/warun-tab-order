@@ -39,7 +39,7 @@ const EVENT_TYPES_BY_ROLE = Object.freeze({
     'table.assignment_updated',
   ]),
 });
-const SUPPORTED_SCHEMA_VERSION = 7;
+const SUPPORTED_SCHEMA_VERSION = 8;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const OPAQUE_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
 
@@ -200,6 +200,7 @@ function mapCustomerMenuItem(item) {
     description: requireString(item.description),
     priceYen: requireInteger(item.priceYen),
     isSoldOut: requireBoolean(item.isSoldOut),
+    orderingMode: requireOneOf(item.orderingMode ?? 'normal', new Set(['normal', 'reservation_only'])),
     sortOrder: requireInteger(item.sortOrder),
     version: requireInteger(item.version, 1),
     variants: requireArray(item.variants).map((variant) => mapMenuVariant(variant)),
@@ -235,6 +236,7 @@ function mapAdminMenuItem(item) {
     description: requireString(item.description),
     priceYen: requireInteger(item.priceYen),
     isSoldOut: requireBoolean(item.isSoldOut),
+    orderingMode: requireOneOf(item.orderingMode ?? 'normal', new Set(['normal', 'reservation_only'])),
     isActive: requireBoolean(item.isActive),
     sortOrder: requireInteger(item.sortOrder),
     version: requireInteger(item.version, 1),

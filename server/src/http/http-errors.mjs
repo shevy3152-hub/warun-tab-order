@@ -15,6 +15,7 @@ export const HTTP_ERROR_CODES = Object.freeze({
   MENU_ITEM_NOT_FOUND: 'MENU_ITEM_NOT_FOUND',
   CATALOG_ITEM_NOT_FOUND: 'CATALOG_ITEM_NOT_FOUND',
   MENU_ITEM_SOLD_OUT: 'MENU_ITEM_SOLD_OUT',
+  MENU_ITEM_RESERVATION_ONLY: 'MENU_ITEM_RESERVATION_ONLY',
   EVENT_HISTORY_UNAVAILABLE: 'EVENT_HISTORY_UNAVAILABLE',
   NOT_FOUND: 'NOT_FOUND',
   METHOD_NOT_ALLOWED: 'METHOD_NOT_ALLOWED',
@@ -92,6 +93,10 @@ const DEFINITIONS = Object.freeze({
   [HTTP_ERROR_CODES.MENU_ITEM_SOLD_OUT]: Object.freeze({
     statusCode: 422,
     message: 'A requested menu item is sold out.',
+  }),
+  [HTTP_ERROR_CODES.MENU_ITEM_RESERVATION_ONLY]: Object.freeze({
+    statusCode: 422,
+    message: 'この商品は予約限定のため注文できません',
   }),
   [HTTP_ERROR_CODES.EVENT_HISTORY_UNAVAILABLE]: Object.freeze({
     statusCode: 410,

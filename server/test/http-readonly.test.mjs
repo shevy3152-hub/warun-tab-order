@@ -265,7 +265,7 @@ test('01 health is public and returns 200', async () => {
     assert.equal(response.statusCode, 200);
     assert.equal(response.json.status, 'ready');
     assert.equal(response.json.db, 'ready');
-    assert.equal(response.json.schemaVersion, 7);
+    assert.equal(response.json.schemaVersion, 8);
   }, { now: () => 1_786_300_000_000 });
 });
 
@@ -758,13 +758,13 @@ test('50 response DTOs exactly match the role-scoped OpenAPI schemas', async () 
     const publicCategory = ['categoryId', 'name', 'sortOrder', 'sectionKey'];
     const adminCategory = [...publicCategory, 'isVisible', 'version', 'updatedAtMs'];
     const customerItem = [
-      'menuItemId', 'categoryId', 'formalName', 'description', 'priceYen', 'isSoldOut',
+      'menuItemId', 'categoryId', 'formalName', 'description', 'priceYen', 'isSoldOut', 'orderingMode',
       'sortOrder', 'version', 'variants', 'servingOptions',
     ];
     const kitchenItem = ['menuItemId', 'categoryId', 'formalName', 'kitchenAlias', 'isSoldOut', 'sortOrder', 'version'];
     const adminItem = [
       'menuItemId', 'categoryId', 'formalName', 'kitchenAlias', 'description', 'priceYen',
-      'isSoldOut', 'isActive', 'sortOrder', 'version', 'updatedAtMs', 'detail',
+      'isSoldOut', 'orderingMode', 'isActive', 'sortOrder', 'version', 'updatedAtMs', 'detail',
       'variants', 'servingOptions',
     ];
     for (const [token, role] of [[CUSTOMER_TOKEN, 'customer'], [KITCHEN_TOKEN, 'kitchen'], [ADMIN_TOKEN, 'admin']]) {

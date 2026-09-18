@@ -218,6 +218,7 @@ test('new HTTP error codes have stable status and public messages', () => {
     ['ORDER_CONFLICT', 409, 'Order conflicts with an existing request.'],
     ['MENU_ITEM_NOT_FOUND', 422, 'A requested menu item is unavailable.'],
     ['MENU_ITEM_SOLD_OUT', 422, 'A requested menu item is sold out.'],
+    ['MENU_ITEM_RESERVATION_ONLY', 422, 'この商品は予約限定のため注文できません'],
     ['EVENT_HISTORY_UNAVAILABLE', 410, 'Event history is unavailable.'],
   ];
   for (const [code, statusCode, message] of expected) {

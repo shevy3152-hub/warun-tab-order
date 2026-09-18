@@ -467,6 +467,7 @@ export function createOrderRepository({ database, now = Date.now, idFactory = ra
           kitchen_alias,
           price_yen,
           is_sold_out,
+          ordering_mode,
           is_active
         FROM menu_items
         WHERE menu_item_id = ?
@@ -688,6 +689,12 @@ export function createOrderRepository({ database, now = Date.now, idFactory = ra
           throw repositoryError(
             ORDER_ERROR_CODES.MENU_ITEM_SOLD_OUT,
             `Menu item is sold out: ${item.menuItemId}`,
+          );
+        }
+        if (menuItem.ordering_mode === 'reservation_only') {
+          throw repositoryError(
+            ORDER_ERROR_CODES.MENU_ITEM_RESERVATION_ONLY,
+            'この商品は予約限定のため注文できません',
           );
         }
 

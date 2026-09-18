@@ -541,6 +541,9 @@ function mapApplicationError(error) {
     if (error.code === ORDER_ERROR_CODES.MENU_ITEM_SOLD_OUT) {
       return createHttpError(HTTP_ERROR_CODES.MENU_ITEM_SOLD_OUT);
     }
+    if (error.code === ORDER_ERROR_CODES.MENU_ITEM_RESERVATION_ONLY) {
+      return createHttpError(HTTP_ERROR_CODES.MENU_ITEM_RESERVATION_ONLY);
+    }
     if (error.code === ORDER_ERROR_CODES.ORDER_CONFLICT) {
       return createHttpError(HTTP_ERROR_CODES.ORDER_CONFLICT);
     }

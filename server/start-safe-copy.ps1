@@ -233,7 +233,7 @@ if ($existingPids.Count -gt 0 -and (Test-Path -LiteralPath $StatePath -PathType 
 }
 if ($existingPids.Count -gt 0 -and $existingMenuDiagnosticEnabled -ne [bool]$EnableMenuDiagnostics) {
   $healthBodyBeforeRestart = $health.Content | ConvertFrom-Json
-  if ($health.StatusCode -ne 200 -or $healthBodyBeforeRestart.status -ne 'ready' -or $healthBodyBeforeRestart.db -ne 'ready' -or $healthBodyBeforeRestart.schemaVersion -ne 7) {
+  if ($health.StatusCode -ne 200 -or $healthBodyBeforeRestart.status -ne 'ready' -or $healthBodyBeforeRestart.db -ne 'ready' -or $healthBodyBeforeRestart.schemaVersion -ne 8) {
     throw 'safe-copy health/schema check failed before diagnostic-mode restart.'
   }
   Stop-Process -Id $processId -Force
@@ -303,7 +303,7 @@ if ($existingPids.Count -eq 0) {
 
 $health = Get-Health "http://127.0.0.1:$ApiPort/v1/health"
 $healthBody = $health.Content | ConvertFrom-Json
-if ($health.StatusCode -ne 200 -or $healthBody.status -ne 'ready' -or $healthBody.db -ne 'ready' -or $healthBody.schemaVersion -ne 7) {
+if ($health.StatusCode -ne 200 -or $healthBody.status -ne 'ready' -or $healthBody.db -ne 'ready' -or $healthBody.schemaVersion -ne 8) {
   throw 'safe-copy health/schema check failed.'
 }
 if ($health.Headers['X-Warun-Environment'] -ne 'safe-copy' -or $health.Headers['X-Warun-Database-Target'] -ne 'safe-copy' -or $health.Headers['X-Warun-Database-Identity'] -ne (Get-DatabaseIdentity $DatabasePath)) {

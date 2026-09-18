@@ -12,6 +12,7 @@ const DETAIL_FIELDS = Object.freeze([
 const ITEM_FIELDS = new Set([
   'id', 'category_id', 'formal_name', 'kitchen_alias', 'description',
   'price_yen', 'is_sold_out', 'is_active', 'sort_order', 'section_key',
+  'ordering_mode',
 ]);
 const DETAIL_INPUT_FIELDS = new Set(['enabled', 'image_uri', 'show_image_in_list', ...DETAIL_FIELDS]);
 
@@ -286,6 +287,7 @@ function parseCatalogMarkdown(markdown) {
       priceYen: item.price_yen,
       isSoldOut: item.is_sold_out ?? false,
       isActive: item.is_active ?? true,
+      orderingMode: item.ordering_mode ?? 'normal',
       sortOrder: item.sort_order,
       sectionKey: item.section_key ?? null,
       detail: {
@@ -355,7 +357,7 @@ function readDatabaseState(database) {
   `).all();
   const items = database.prepare(`
     SELECT menu_item_id, category_id, formal_name, kitchen_alias, description,
-           price_yen, is_sold_out, is_active, sort_order, image_uri, version,
+           price_yen, is_sold_out, is_active, sort_order, image_uri, ordering_mode, version,
            section_key, updated_at_ms
     FROM menu_items
   `).all();
@@ -472,6 +474,7 @@ function sameItem(desired, current, state) {
     && (current.is_active === 1) === desired.isActive
     && current.sort_order === desired.sortOrder
     && (current.image_uri ?? null) === desired.imageUri
+    && (current.ordering_mode ?? 'normal') === desired.orderingMode
     && (current.section_key ?? null) === desired.sectionKey;
   return fieldsSame
     && sameDetail(desired.detail, state.details.get(desired.menuItemId))
@@ -545,18 +548,18 @@ function applyItem(database, change, timestamp) {
     database.prepare(`
       INSERT INTO menu_items (
         menu_item_id, category_id, formal_name, kitchen_alias, description,
-        price_yen, is_sold_out, is_active, sort_order, image_uri, version,
-        created_at_ms, updated_at_ms, section_key
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)
-    `).run(item.menuItemId, item.categoryId, item.formalName, item.kitchenAlias, item.description, item.priceYen, item.isSoldOut ? 1 : 0, item.isActive ? 1 : 0, item.sortOrder, item.imageUri, timestamp, timestamp, item.sectionKey);
+           price_yen, is_sold_out, is_active, sort_order, image_uri, ordering_mode, version,
+           created_at_ms, updated_at_ms, section_key
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)
+    `).run(item.menuItemId, item.categoryId, item.formalName, item.kitchenAlias, item.description, item.priceYen, item.isSoldOut ? 1 : 0, item.isActive ? 1 : 0, item.sortOrder, item.imageUri, item.orderingMode, timestamp, timestamp, item.sectionKey);
   } else {
     const updated = database.prepare(`
       UPDATE menu_items
       SET category_id = ?, formal_name = ?, kitchen_alias = ?, description = ?, price_yen = ?,
-          is_sold_out = ?, is_active = ?, sort_order = ?, image_uri = ?,
+          is_sold_out = ?, is_active = ?, sort_order = ?, image_uri = ?, ordering_mode = ?,
           version = version + 1, updated_at_ms = ?, section_key = ?
       WHERE menu_item_id = ? AND version = ?
-    `).run(item.categoryId, item.formalName, item.kitchenAlias, item.description, item.priceYen, item.isSoldOut ? 1 : 0, item.isActive ? 1 : 0, item.sortOrder, item.imageUri, timestamp, item.sectionKey, item.menuItemId, change.expectedVersion);
+    `).run(item.categoryId, item.formalName, item.kitchenAlias, item.description, item.priceYen, item.isSoldOut ? 1 : 0, item.isActive ? 1 : 0, item.sortOrder, item.imageUri, item.orderingMode, timestamp, item.sectionKey, item.menuItemId, change.expectedVersion);
     if (Number(updated.changes) !== 1) throw importError('CONCURRENT_MODIFICATION', `item:${change.id} changed during import.`);
   }
 

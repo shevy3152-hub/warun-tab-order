@@ -454,8 +454,27 @@ test("customer expands only the menu model for individual kushikatsu rows", () =
 
 test("customer detail affordance requires an actual image", () => {
   assert.match(customerScreen, /const canOpenDetail = Boolean\(item\.detail\?\.imageUri \|\| item\.imageUri\)/);
-  assert.match(customerScreen, /\{canOpenDetail \? <small className="menu-row__detail-hint">タップで明細<\/small> : null\}/);
+  assert.match(customerScreen, /className="menu-row__detail-hint__action">タップで明細<\/span>/);
   assert.match(customerScreen, /disabled=\{!canOpenDetail\}/);
+});
+
+test("drink list comments reuse description without changing detail behavior", () => {
+  assert.match(appSource, /const isDrink = currentMajorCategory\.id === "drink"/);
+  assert.match(customerScreen, /const listComment = isDrink \? item\.description\?\.trim\(\) : ""/);
+  assert.match(customerScreen, /className="menu-row__detail-hint__action">タップで明細<\/span>/);
+  assert.match(customerScreen, /className="menu-row__detail-hint__separator" aria-hidden="true">｜<\/span>/);
+  assert.match(customerScreen, /className="menu-row__comment">\{listComment\}<\/span>/);
+  assert.match(styles, /\.menu-row__detail-hint \{[\s\S]*display: flex[\s\S]*min-width: 0/);
+  assert.match(styles, /\.menu-row__detail-hint__action, \.menu-row__detail-hint__separator \{[\s\S]*flex: 0 0 auto/);
+  assert.match(styles, /\.menu-row__comment \{ min-width: 0;[\s\S]*text-overflow: ellipsis[\s\S]*white-space: nowrap/);
+  assert.match(appSource, /detailItem\.detail\?\.description \|\| detailItem\.description/);
+  assert.match(appSource, /商品説明／一言コメント<textarea name="description"/);
+  assert.match(customerScreen, /const canOpenDetail = Boolean\(item\.detail\?\.imageUri \|\| item\.imageUri\)/);
+});
+
+test("reservation-only customer rows show only the reservation label", () => {
+  assert.match(customerScreen, /className="reservation-only-label"><b>予約限定<\/b><\/div>/);
+  assert.doesNotMatch(customerScreen, /スタッフへお声がけください/);
 });
 
 test("image layout editor rotates only the inner image and preserves layout controls", () => {
