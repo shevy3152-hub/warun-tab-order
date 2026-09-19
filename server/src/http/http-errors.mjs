@@ -8,6 +8,7 @@ export const HTTP_ERROR_CODES = Object.freeze({
   UNSUPPORTED_MEDIA_TYPE: 'UNSUPPORTED_MEDIA_TYPE',
   ORDER_CONFLICT: 'ORDER_CONFLICT',
   CATALOG_CONFLICT: 'CATALOG_CONFLICT',
+  BUSINESS_HOURS_CONFLICT: 'BUSINESS_HOURS_CONFLICT',
   ORDER_NOT_FOUND: 'ORDER_NOT_FOUND',
   SESSION_NOT_FOUND: 'SESSION_NOT_FOUND',
   SESSION_CONFLICT: 'SESSION_CONFLICT',
@@ -65,6 +66,10 @@ const DEFINITIONS = Object.freeze({
   [HTTP_ERROR_CODES.CATALOG_CONFLICT]: Object.freeze({
     statusCode: 409,
     message: 'Catalog conflicts with a newer version.',
+  }),
+  [HTTP_ERROR_CODES.BUSINESS_HOURS_CONFLICT]: Object.freeze({
+    statusCode: 409,
+    message: 'Business hours conflict with a newer version.',
   }),
   [HTTP_ERROR_CODES.ORDER_NOT_FOUND]: Object.freeze({
     statusCode: 404,

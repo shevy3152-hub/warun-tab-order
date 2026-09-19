@@ -63,6 +63,7 @@ function eventResource(eventType) {
   if (eventType.startsWith('device.') || eventType === 'table.assignment_updated') {
     return 'deviceConfig';
   }
+  if (eventType === 'business_hours.updated') return 'businessHours';
   throw repositoryError(
     EVENT_ERROR_CODES.DATABASE_FAILURE,
     'The stored event type is unsupported.',
@@ -96,6 +97,7 @@ function canSeeEvent(row, device) {
 function publicAggregateId(row, resource) {
   if (resource === 'orders' || resource === 'staffCalls') return row.aggregate_id;
   if (resource === 'menu') return 'menu';
+  if (resource === 'businessHours') return 'business-hours';
   return 'device-config';
 }
 

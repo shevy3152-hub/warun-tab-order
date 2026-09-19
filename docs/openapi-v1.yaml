@@ -41,6 +41,62 @@ paths:
         '503':
           $ref: '#/components/responses/ReadOnlyServiceUnavailable'
 
+  /v1/business-hours:
+    get:
+      tags: [System]
+      summary: 客席表示用の本日の営業時間を取得する
+      operationId: getPublicBusinessHours
+      security: []
+      responses:
+        '200':
+          description: 営業時間表示設定
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PublicBusinessHours'
+
+  /v1/admin/business-hours:
+    get:
+      tags: [Admin]
+      summary: 営業時間設定を取得する
+      operationId: getAdminBusinessHours
+      responses:
+        '200':
+          description: versionを含む営業時間設定
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminBusinessHours'
+        '401':
+          $ref: '#/components/responses/AuthenticationFailed'
+        '403':
+          $ref: '#/components/responses/PermissionDenied'
+    put:
+      tags: [Admin]
+      summary: 営業時間設定を更新する
+      operationId: updateAdminBusinessHours
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateBusinessHoursRequest'
+      responses:
+        '200':
+          description: 更新後の営業時間設定
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminBusinessHours'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/AuthenticationFailed'
+        '403':
+          $ref: '#/components/responses/PermissionDenied'
+        '409':
+          $ref: '#/components/responses/VersionConflict'
+
   /v1/admin/pairing-codes:
     post:
       tags: [Admin, Pairing]
@@ -972,6 +1028,53 @@ components:
             $ref: '#/components/schemas/Problem'
 
   schemas:
+    PublicBusinessHours:
+      type: object
+      additionalProperties: false
+      required: [openTime, closeTime, lastOrderTime, isVisible, displayText]
+      properties:
+        openTime:
+          $ref: '#/components/schemas/BusinessHourTime'
+        closeTime:
+          $ref: '#/components/schemas/BusinessHourTime'
+        lastOrderTime:
+          $ref: '#/components/schemas/BusinessHourTime'
+        isVisible:
+          type: boolean
+        displayText:
+          type: string
+          nullable: true
+    AdminBusinessHours:
+      allOf:
+        - $ref: '#/components/schemas/PublicBusinessHours'
+        - type: object
+          required: [version, updatedAtMs]
+          properties:
+            version:
+              type: integer
+              minimum: 0
+            updatedAtMs:
+              $ref: '#/components/schemas/TimestampMs'
+    UpdateBusinessHoursRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion, openTime, closeTime, lastOrderTime, isVisible]
+      properties:
+        expectedVersion:
+          type: integer
+          minimum: 0
+        openTime:
+          $ref: '#/components/schemas/BusinessHourTime'
+        closeTime:
+          $ref: '#/components/schemas/BusinessHourTime'
+        lastOrderTime:
+          $ref: '#/components/schemas/BusinessHourTime'
+        isVisible:
+          type: boolean
+    BusinessHourTime:
+      type: string
+      pattern: '^(?:[01][0-9]|2[0-9]):[0-5][0-9]$'
+      description: HH:mm。開始時刻は00:00-23:59、終了・LOは29:59まで。
     Uuid:
       type: string
       format: uuid

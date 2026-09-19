@@ -1,3 +1,5 @@
+import { normalizeBusinessHours } from "./business-hours.js";
+
 export function configuredAdminToken(env) {
   if (typeof env?.WARUN_ADMIN_API_TOKEN === "string") return env.WARUN_ADMIN_API_TOKEN.trim();
   if (typeof env?.WARUN_RUNTIME_CONFIG?.adminToken === "string") return env.WARUN_RUNTIME_CONFIG.adminToken.trim();
@@ -43,16 +45,16 @@ function apiBase(env) {
 
 function errorCodeForStatus(status, fallback = "PAIRING_REQUEST_FAILED") {
   if (status === 401) return "AUTH_TOKEN_MISMATCH";
-  if (status === 409) return "TABLE_CONFLICT";
+  if (status === 409) return fallback || "TABLE_CONFLICT";
   if (status === 503) return "API_UNAVAILABLE";
   return fallback;
 }
 
-async function responseError(response, fallbackMessage = "管理APIの応答を確認できませんでした。") {
+async function responseError(response, fallbackMessage = "管理APIの応答を確認できませんでした。", fallbackCode = "") {
   let body;
   try { body = await response.json(); } catch { /* Keep the status-based error. */ }
   const serverCode = body?.error?.code;
-  const code = errorCodeForStatus(response.status, serverCode || undefined);
+  const code = errorCodeForStatus(response.status, serverCode || fallbackCode);
   const requestId = response.headers?.get?.("x-request-id") || body?.error?.requestId || "";
   throw new AdminPairingError(fallbackMessage, { status: response.status, code, requestId });
 }
@@ -174,6 +176,54 @@ export async function fetchAdminMenu({ env = globalThis, fetchImpl = env.fetch }
     throw new Error("Admin catalog response was invalid.");
   }
   return body;
+}
+
+export async function fetchAdminBusinessHours({ env = globalThis, fetchImpl = env.fetch } = {}) {
+  const token = configuredAdminToken(env);
+  const base = apiBase(env);
+  if (!token || !base || typeof fetchImpl !== "function") throw new AdminPairingError("管理APIへ接続できません。", { status: 503, code: "API_UNAVAILABLE" });
+  let response;
+  try {
+    response = await fetchImpl(`${base}/admin/business-hours`, {
+      headers: { Accept: "application/json", Authorization: `Bearer ${token}` },
+    });
+  } catch {
+    throw new AdminPairingError("営業時間設定を取得できません。", { status: 503, code: "API_UNAVAILABLE" });
+  }
+  if (!response.ok) await responseError(response, "営業時間設定を取得できません。", "BUSINESS_HOURS_REQUEST_FAILED");
+  try {
+    return normalizeBusinessHours(await response.json(), { includeVersion: true });
+  } catch {
+    throw new AdminPairingError("営業時間設定の応答が不正です。", { status: 503, code: "API_UNAVAILABLE" });
+  }
+}
+
+export async function saveAdminBusinessHours({ env = globalThis, settings, expectedVersion = settings?.version, fetchImpl = env.fetch } = {}) {
+  const token = configuredAdminToken(env);
+  const base = apiBase(env);
+  if (!token || !base || typeof fetchImpl !== "function") throw new AdminPairingError("管理APIへ接続できません。", { status: 503, code: "API_UNAVAILABLE" });
+  let response;
+  try {
+    response = await fetchImpl(`${base}/admin/business-hours`, {
+      method: "PUT",
+      headers: { Accept: "application/json", "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({
+        expectedVersion,
+        openTime: settings.openTime,
+        closeTime: settings.closeTime,
+        lastOrderTime: settings.lastOrderTime,
+        isVisible: settings.isVisible,
+      }),
+    });
+  } catch {
+    throw new AdminPairingError("営業時間設定を保存できません。", { status: 503, code: "API_UNAVAILABLE" });
+  }
+  if (!response.ok) await responseError(response, "営業時間設定を保存できません。", response.status === 409 ? "BUSINESS_HOURS_CONFLICT" : "BUSINESS_HOURS_REQUEST_FAILED");
+  try {
+    return normalizeBusinessHours(await response.json(), { includeVersion: true });
+  } catch {
+    throw new AdminPairingError("営業時間設定の保存応答が不正です。", { status: 503, code: "API_UNAVAILABLE" });
+  }
 }
 
 export async function saveAdminMenuItem({ env = globalThis, item, expectedVersion = item?.version ?? 0, fetchImpl = env.fetch } = {}) {

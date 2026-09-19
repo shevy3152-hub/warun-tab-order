@@ -8,6 +8,10 @@ import {
 } from '../auth/auth-errors.mjs';
 import { authorizeDeviceRole } from '../auth/device-auth.mjs';
 import {
+  BUSINESS_HOURS_ERROR_CODES,
+  isBusinessHoursRepositoryError,
+} from '../business-hours/business-hours-errors.mjs';
+import {
   CATALOG_ERROR_CODES,
   isCatalogRepositoryError,
 } from '../catalog/catalog-errors.mjs';
@@ -38,6 +42,7 @@ import {
   createEventHistoryUnavailableResponse,
   mapCustomerOrderHistoryResponse,
   mapCatalogWriteResponse,
+  mapBusinessHoursResponse,
   mapCategoryWriteResponse,
   mapMenuOrderingWriteResponse,
   mapDeviceConfigResponse,
@@ -60,6 +65,7 @@ import {
 
 const ROUTE_METHODS = new Map([
   ['/v1/health', 'GET'],
+  ['/v1/business-hours', 'GET'],
   ['/v1/device/config', 'GET'],
   ['/v1/menu', 'GET'],
   ['/v1/orders', 'POST'],
@@ -80,6 +86,7 @@ const ROUTE_METHODS = new Map([
   ['/v1/admin/catalog/menu-item/image-layouts', 'PUT'],
   ['/v1/admin/catalog/category', 'PUT'],
   ['/v1/admin/catalog/menu-order', 'PUT'],
+  ['/v1/admin/business-hours', new Set(['GET', 'PUT'])],
 ]);
 const READ_ONLY_ROUTE_METHODS = new Map([
   ['/v1/health', 'GET'],
@@ -523,6 +530,19 @@ function mapApplicationError(error) {
     return createHttpError(HTTP_ERROR_CODES.INTERNAL_ERROR);
   }
 
+  if (isBusinessHoursRepositoryError(error)) {
+    if (error.code === BUSINESS_HOURS_ERROR_CODES.INVALID_WRITE_REQUEST) {
+      return createHttpError(HTTP_ERROR_CODES.BAD_REQUEST);
+    }
+    if (error.code === BUSINESS_HOURS_ERROR_CODES.VERSION_CONFLICT) {
+      return createHttpError(HTTP_ERROR_CODES.BUSINESS_HOURS_CONFLICT);
+    }
+    if (error.code === BUSINESS_HOURS_ERROR_CODES.DATABASE_FAILURE && hasBusyCause(error)) {
+      return createHttpError(HTTP_ERROR_CODES.SERVICE_UNAVAILABLE);
+    }
+    return createHttpError(HTTP_ERROR_CODES.INTERNAL_ERROR);
+  }
+
   if (isOrderRepositoryError(error)) {
     if (error.code === ORDER_ERROR_CODES.DEVICE_NOT_REGISTERED) return authenticationFailed();
     if (
@@ -766,6 +786,7 @@ function createConfiguredHttpServer({
   pairingDiagnosticLogger = undefined,
   diagnosticRecorder = undefined,
   menuDiagnosticRecorder = undefined,
+  businessHours = undefined,
 } = {}, { integrated }) {
   if (
     !authenticator
@@ -821,12 +842,14 @@ function createConfiguredHttpServer({
 
     const handle = async () => {
       const target = requestTarget(request.url);
-      allowedMethod = routeMethods.get(target.path);
-      if (!allowedMethod) {
+      const configuredMethods = routeMethods.get(target.path);
+      if (!configuredMethods) {
         drainRequest(request);
         throw createHttpError(HTTP_ERROR_CODES.NOT_FOUND);
       }
-      if (request.method !== allowedMethod) {
+      const allowedMethods = configuredMethods instanceof Set ? configuredMethods : new Set([configuredMethods]);
+      allowedMethod = [...allowedMethods].join(', ');
+      if (!allowedMethods.has(request.method)) {
         drainRequest(request);
         throw createHttpError(HTTP_ERROR_CODES.METHOD_NOT_ALLOWED);
       }
@@ -853,6 +876,17 @@ function createConfiguredHttpServer({
           throw createHttpError(HTTP_ERROR_CODES.SERVICE_UNAVAILABLE);
         }
         writeJsonResponse(response, { statusCode: 200, body, requestId, headers: runtimeHealthHeaders(runtimeInfo) });
+        return;
+      }
+
+      if (target.path === '/v1/business-hours') {
+        drainRequest(request);
+        const settings = requireService(businessHours, 'getBusinessHours').getBusinessHours();
+        writeJsonResponse(response, {
+          statusCode: 200,
+          body: mapBusinessHoursResponse(settings),
+          requestId,
+        });
         return;
       }
 
@@ -934,6 +968,30 @@ function createConfiguredHttpServer({
         });
         recordRequestDiagnostic(diagnosticRecorder, diagnosticContext, { requestId, status: 200, resultCount: body.tables.available.length + body.tables.assigned.length, now });
         writeJsonResponse(response, { statusCode: 200, body, requestId });
+        return;
+      }
+
+      if (target.path === '/v1/admin/business-hours') {
+        authorizeDeviceRole(principal, ['admin']);
+        const settingsRepository = requireService(businessHours, request.method === 'GET' ? 'getBusinessHours' : 'writeBusinessHours');
+        if (request.method === 'GET') {
+          drainRequest(request);
+          writeJsonResponse(response, {
+            statusCode: 200,
+            body: mapBusinessHoursResponse(settingsRepository.getBusinessHours(), { includeVersion: true }),
+            requestId,
+          });
+          return;
+        }
+        const body = await readJsonBody(request);
+        const result = settingsRepository.writeBusinessHours(principal, body);
+        await notifyCommittedSafely(sseHub, result);
+        if (response.destroyed) return;
+        writeJsonResponse(response, {
+          statusCode: 200,
+          body: mapBusinessHoursResponse(result, { includeVersion: true }),
+          requestId,
+        });
         return;
       }
 

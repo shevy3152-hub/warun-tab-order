@@ -11,6 +11,7 @@ import { initializeDatabase } from '../src/db/database.mjs';
 
 const EXPECTED_TABLES = [
   'system_state',
+  'business_hours',
   'devices',
   'tables',
   'pairing_codes',
@@ -160,19 +161,19 @@ function legacySchemaSql() {
   return schema;
 }
 
-test('new database creates its parent directory and applies schema v8', async () => {
+test('new database creates its parent directory and applies schema v9', async () => {
   await withTemporaryDatabase(({ databasePath }) => {
     const connection = initializeDatabase({ databasePath });
     assert.equal(existsSync(databasePath), true);
-    assert.equal(connection.schemaVersion, 8);
+    assert.equal(connection.schemaVersion, 9);
     connection.close();
   });
 });
 
-test('new database records PRAGMA user_version = 8', async () => {
+test('new database records PRAGMA user_version = 9', async () => {
   await withTemporaryDatabase(({ databasePath }) => {
     const connection = initializeDatabase({ databasePath });
-    assert.equal(pragmaValue(connection.database, 'user_version'), 8);
+    assert.equal(pragmaValue(connection.database, 'user_version'), 9);
     connection.close();
   });
 });
@@ -205,9 +206,9 @@ test('schema v7 migrates to v8 with every existing menu item in normal mode', as
     raw.close();
 
     const connection = initializeDatabase({ databasePath });
-    assert.equal(connection.schemaVersion, 8);
-    assert.equal(pragmaValue(connection.database, 'user_version'), 8);
-    assert.equal(connection.database.prepare('SELECT schema_version FROM system_state').get().schema_version, 8);
+    assert.equal(connection.schemaVersion, 9);
+    assert.equal(pragmaValue(connection.database, 'user_version'), 9);
+    assert.equal(connection.database.prepare('SELECT schema_version FROM system_state').get().schema_version, 9);
     assert.equal(connection.database.prepare("SELECT COUNT(*) AS count FROM menu_items WHERE ordering_mode = 'normal'").get().count, 1);
     assert.equal(connection.database.prepare('SELECT COUNT(*) AS count FROM menu_items').get().count, 1);
     assert.equal(connection.database.prepare('PRAGMA integrity_check').get().integrity_check, 'ok');
@@ -229,6 +230,30 @@ test('schema contains every required trigger', async () => {
     const connection = initializeDatabase({ databasePath });
     const names = schemaNames(connection.database, 'trigger');
     for (const name of EXPECTED_TRIGGERS) assert.equal(names.has(name), true, name);
+    connection.close();
+  });
+});
+
+test('v8 clone migrates to v9 and rerunning the v9 migration is safe', async () => {
+  await withTemporaryDatabase(({ databasePath }) => {
+    mkdirSync(dirname(databasePath), { recursive: true });
+    const raw = new DatabaseSync(databasePath);
+    raw.exec(readFileSync(new URL('../../docs/schema-v2.sql', import.meta.url), 'utf8'));
+    raw.exec(readFileSync(new URL('../../docs/schema-v3-migration.sql', import.meta.url), 'utf8'));
+    raw.exec(readFileSync(new URL('../../docs/schema-v4-migration.sql', import.meta.url), 'utf8'));
+    raw.exec(readFileSync(new URL('../../docs/schema-v5-migration.sql', import.meta.url), 'utf8'));
+    raw.exec(readFileSync(new URL('../../docs/schema-v6-migration.sql', import.meta.url), 'utf8'));
+    raw.exec(readFileSync(new URL('../../docs/schema-v7-migration.sql', import.meta.url), 'utf8'));
+    raw.exec(readFileSync(new URL('../../docs/schema-v8-migration.sql', import.meta.url), 'utf8'));
+    raw.close();
+
+    const connection = initializeDatabase({ databasePath });
+    const before = connection.database.prepare('SELECT * FROM business_hours WHERE singleton_id = 1').get();
+    connection.database.exec(readFileSync(new URL('../../docs/schema-v9-migration.sql', import.meta.url), 'utf8'));
+    assert.equal(pragmaValue(connection.database, 'user_version'), 9);
+    assert.deepEqual(connection.database.prepare('SELECT * FROM business_hours WHERE singleton_id = 1').get(), before);
+    assert.equal(connection.database.prepare('SELECT schema_version FROM system_state').get().schema_version, 9);
+    assert.equal(connection.database.prepare('PRAGMA integrity_check').get().integrity_check, 'ok');
     connection.close();
   });
 });
@@ -265,16 +290,16 @@ test('synchronous mode is FULL', async () => {
   });
 });
 
-test('a valid schema v8 database can be closed and reopened', async () => {
+test('a valid schema v9 database can be closed and reopened', async () => {
   await withTemporaryDatabase(({ databasePath }) => {
     initializeDatabase({ databasePath }).close();
     const reopened = initializeDatabase({ databasePath });
-    assert.equal(reopened.schemaVersion, 8);
+    assert.equal(reopened.schemaVersion, 9);
     reopened.close();
   });
 });
 
-test('reopening schema v8 preserves existing data', async () => {
+test('reopening schema v9 preserves existing data', async () => {
   await withTemporaryDatabase(({ databasePath }) => {
     const first = initializeDatabase({ databasePath });
     first.database.exec(`
@@ -295,7 +320,7 @@ test('reopening schema v8 preserves existing data', async () => {
   });
 });
 
-test('schema v8 repairs the legacy unique pairing-device constraint for revoked re-registration', async () => {
+test('schema v9 repairs the legacy unique pairing-device constraint for revoked re-registration', async () => {
   await withTemporaryDatabase(({ databasePath }) => {
     const databaseModuleUrl = new URL('../src/db/database.mjs', import.meta.url).href;
     const pairingModuleUrl = new URL('../src/pairing/pairing-service.mjs', import.meta.url).href;
@@ -365,7 +390,7 @@ test('schema v8 repairs the legacy unique pairing-device constraint for revoked 
   });
 });
 
-test('legacy schema v1 migrates through schema v8 and assigns existing orders to one open table session', async () => {
+test('legacy schema v1 migrates through schema v9 and assigns existing orders to one open table session', async () => {
   await withTemporaryDatabase(({ directory }) => {
     const legacyPath = join(directory, 'legacy.sqlite3');
     const legacy = new DatabaseSync(legacyPath);
@@ -405,9 +430,9 @@ test('legacy schema v1 migrates through schema v8 and assigns existing orders to
       WHERE order_id = ?
     `).get(ORDER_ID);
 
-    assert.equal(connection.schemaVersion, 8);
-    assert.equal(pragmaValue(connection.database, 'user_version'), 8);
-    assert.equal(connection.database.prepare('SELECT schema_version FROM system_state').get().schema_version, 8);
+    assert.equal(connection.schemaVersion, 9);
+    assert.equal(pragmaValue(connection.database, 'user_version'), 9);
+    assert.equal(connection.database.prepare('SELECT schema_version FROM system_state').get().schema_version, 9);
     assert.deepEqual({
       orders: connection.database.prepare('SELECT COUNT(*) AS count FROM orders').get().count,
       orderItems: connection.database.prepare('SELECT COUNT(*) AS count FROM order_items').get().count,
@@ -479,8 +504,8 @@ test('schema v4 fixture migrates through the formal v7 path while preserving cat
 
     const connection = initializeDatabase({ databasePath: v4Path });
     const database = connection.database;
-    assert.equal(connection.schemaVersion, 8);
-    assert.equal(pragmaValue(database, 'user_version'), 8);
+    assert.equal(connection.schemaVersion, 9);
+    assert.equal(pragmaValue(database, 'user_version'), 9);
     assert.equal(database.prepare('PRAGMA integrity_check').get().integrity_check, 'ok');
     assert.deepEqual({
       orders: database.prepare('SELECT COUNT(*) AS count FROM orders').get().count,
@@ -557,11 +582,11 @@ test('invalid item quantities are rejected by CHECK constraints', async () => {
   });
 });
 
-test('schema versions newer than v8 are rejected without migration', async () => {
+test('schema versions newer than v9 are rejected without migration', async () => {
   await withTemporaryDatabase(({ directory }) => {
     const databasePath = join(directory, 'version-5.sqlite3');
     const raw = new DatabaseSync(databasePath);
-    raw.exec('PRAGMA user_version = 9;');
+    raw.exec('PRAGMA user_version = 10;');
     raw.close();
 
     assert.throws(

@@ -542,6 +542,22 @@ h1, h2, h3, p { margin: 0; }
 .admin-tabs button.is-active { color: var(--red); border-color: var(--red); background: #fffaf2; }
 .admin-toolbar { min-height: 110px; display: flex; justify-content: space-between; align-items: center; gap: 24px; }
 .admin-toolbar__actions { display: flex; align-items: center; gap: 12px; }
+.business-hours-editor { margin: 0 0 24px; border: 1px solid var(--red); background: #fffaf2; padding: 18px 20px 16px; }
+.business-hours-editor__heading { display: flex; justify-content: space-between; align-items: start; gap: 18px; }
+.business-hours-editor__heading h2 { margin: 4px 0 0; font-size: 24px; }
+.business-hours-editor__heading p { margin: 5px 0 0; color: var(--muted); font-size: 13px; font-weight: 700; }
+.business-hours-editor__version { color: var(--muted); font-size: 12px; font-weight: 800; }
+.business-hours-editor__fields { display: grid; grid-template-columns: repeat(4, minmax(170px, 1fr)); gap: 12px; margin-top: 16px; }
+.business-hours-time { min-width: 0; border: 1px solid var(--line); background: var(--paper); padding: 9px 10px 10px; display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: center; gap: 6px; }
+.business-hours-time legend { padding: 0 4px; font-size: 12px; font-weight: 900; }
+.business-hours-time select { width: 100%; height: 42px; border: 1px solid var(--line); background: #fff; padding: 0 7px; font-weight: 800; }
+.business-hours-time small { grid-column: 1 / -1; color: var(--red); font-size: 11px; font-weight: 900; }
+.business-hours-visible { min-height: 64px; display: flex; align-items: center; gap: 10px; font-weight: 900; }
+.business-hours-visible input { width: 24px; height: 24px; }
+.business-hours-editor__status, .business-hours-editor__message { margin: 12px 0 0; color: var(--muted); font-size: 13px; font-weight: 800; }
+.business-hours-editor__message.is-error { color: var(--red); }
+.business-hours-editor__message.is-success { color: var(--green); }
+.business-hours-editor__actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 14px; }
 .menu-reorder-toolbar { display: flex; align-items: end; gap: 14px; padding: 14px 0; border-bottom: 1px solid var(--line); }
 .menu-reorder-toolbar label { display: grid; gap: 6px; font-size: 12px; font-weight: 800; }
 .menu-reorder-toolbar select { min-width: 280px; height: 48px; border: 1px solid var(--line); background: var(--paper); padding: 0 12px; }

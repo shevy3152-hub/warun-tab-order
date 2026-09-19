@@ -5,10 +5,11 @@ import { DatabaseSync } from 'node:sqlite';
 
 export const LEGACY_SCHEMA_VERSION = 1;
 export const SESSION_SCHEMA_VERSION = 2;
-export const SCHEMA_VERSION = 8;
+export const SCHEMA_VERSION = 9;
 
 export const REQUIRED_TABLES = Object.freeze([
   'system_state',
+  'business_hours',
   'devices',
   'tables',
   'table_sessions',
@@ -104,6 +105,9 @@ export const DEFAULT_V7_MIGRATION_PATH = resolve(
 );
 export const DEFAULT_V8_MIGRATION_PATH = resolve(
   moduleDirectory, '..', '..', '..', 'docs', 'schema-v8-migration.sql',
+);
+export const DEFAULT_V9_MIGRATION_PATH = resolve(
+  moduleDirectory, '..', '..', '..', 'docs', 'schema-v9-migration.sql',
 );
 
 export class DatabaseInitializationError extends Error {
@@ -269,6 +273,7 @@ function hasSessionExtension(database) {
 
 function validateLegacySchema(database) {
   const legacyTables = REQUIRED_TABLES.filter((name) => ![
+    'business_hours',
     'menu_item_image_layouts',
     'table_sessions', 'menu_item_details', 'menu_item_variants', 'menu_item_serving_options',
   ].includes(name));
@@ -310,6 +315,7 @@ function validateLegacySchema(database) {
 
 function validateSchemaV2(database) {
   const tables = REQUIRED_TABLES.filter((name) => ![
+    'business_hours',
     'menu_item_image_layouts',
     'menu_item_details', 'menu_item_variants', 'menu_item_serving_options',
   ].includes(name));
@@ -391,6 +397,14 @@ function migrateSchemaV7ToV8(database, migrationPath) {
   catch (error) {
     try { if (database.isTransaction) database.exec('ROLLBACK;'); } catch {}
     throw new DatabaseInitializationError('MIGRATION_FAILED', 'The item ordering mode schema migration failed.', { cause: error });
+  }
+}
+
+function migrateSchemaV8ToV9(database, migrationPath) {
+  try { database.exec(readFileSync(migrationPath, 'utf8')); }
+  catch (error) {
+    try { if (database.isTransaction) database.exec('ROLLBACK;'); } catch {}
+    throw new DatabaseInitializationError('MIGRATION_FAILED', 'The business-hours schema migration failed.', { cause: error });
   }
 }
 
@@ -588,6 +602,11 @@ function validateSchema(database) {
   assertRequiredNames(tableColumns(database, 'menu_items'), ['ordering_mode'], 'menu_items columns');
   assertRequiredNames(tableColumns(database, 'menu_item_variants'), ['temperature_options_json'], 'menu_item_variants columns');
   assertRequiredNames(tableColumns(database, 'order_items'), ['temperature_snapshot'], 'order_items columns');
+  assertRequiredNames(
+    tableColumns(database, 'business_hours'),
+    ['open_minutes', 'close_minutes', 'last_order_minutes', 'is_visible', 'version', 'updated_at_ms'],
+    'business_hours columns',
+  );
 
   const state = database
     .prepare(`
@@ -668,6 +687,7 @@ export function initializeDatabase({
   v6MigrationPath = DEFAULT_V6_MIGRATION_PATH,
   v7MigrationPath = DEFAULT_V7_MIGRATION_PATH,
   v8MigrationPath = DEFAULT_V8_MIGRATION_PATH,
+  v9MigrationPath = DEFAULT_V9_MIGRATION_PATH,
 } = {}) {
   const resolvedDatabasePath = resolveFilePath(databasePath, 'databasePath');
   const resolvedSchemaPath = resolveFilePath(schemaPath, 'schemaPath');
@@ -677,6 +697,7 @@ export function initializeDatabase({
   const resolvedV6MigrationPath = resolveFilePath(v6MigrationPath, 'v6MigrationPath');
   const resolvedV7MigrationPath = resolveFilePath(v7MigrationPath, 'v7MigrationPath');
   const resolvedV8MigrationPath = resolveFilePath(v8MigrationPath, 'v8MigrationPath');
+  const resolvedV9MigrationPath = resolveFilePath(v9MigrationPath, 'v9MigrationPath');
 
   mkdirSync(dirname(resolvedDatabasePath), { recursive: true });
 
@@ -730,6 +751,11 @@ export function initializeDatabase({
     }
     if (currentVersion === 7) {
       migrateSchemaV7ToV8(database, resolvedV8MigrationPath);
+      enableWriteAheadLogging(database);
+      currentVersion = 8;
+    }
+    if (currentVersion === 8) {
+      migrateSchemaV8ToV9(database, resolvedV9MigrationPath);
       enableWriteAheadLogging(database);
       currentVersion = SCHEMA_VERSION;
     }

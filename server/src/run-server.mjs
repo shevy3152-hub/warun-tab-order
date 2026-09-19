@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 
 import { createDeviceAuthenticator } from "./auth/device-auth.mjs";
 import { createCatalogRepository } from "./catalog/catalog-repository.mjs";
+import { createBusinessHoursRepository } from "./business-hours/business-hours-repository.mjs";
 import { initializeDatabase } from "./db/database.mjs";
 import { createDiagnosticRecorder } from "./diagnostics/diagnostic-recorder.mjs";
 import { createMenuRequestDiagnosticRecorder } from "./diagnostics/menu-request-recorder.mjs";
@@ -105,6 +106,7 @@ export function createWarunServer({ databasePath, runtimeInfo = undefined, now =
   const { database } = connection;
   const authenticator = createDeviceAuthenticator({ database });
   const catalog = createCatalogRepository({ database });
+  const businessHours = createBusinessHoursRepository({ database, now });
   const eventRepository = createEventRepository({ database });
   const orderRepository = createOrderRepository({ database, now });
   const pairingService = createPairingService({ database, now });
@@ -137,12 +139,14 @@ export function createWarunServer({ databasePath, runtimeInfo = undefined, now =
     pairingDiagnosticLogger,
     diagnosticRecorder,
     menuDiagnosticRecorder,
+    businessHours,
   });
 
   const closeDependencies = () => {
     sseHub.close();
     authenticator.close();
     catalog.close();
+    businessHours.close();
     eventRepository.close();
     orderRepository.close();
     snapshotService.close?.();

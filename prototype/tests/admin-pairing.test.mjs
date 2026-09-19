@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { saveAdminCategory, saveAdminMenuItem, saveAdminMenuOrdering } from '../src/admin-pairing.js';
+import { fetchAdminBusinessHours, saveAdminBusinessHours, saveAdminCategory, saveAdminMenuItem, saveAdminMenuOrdering } from '../src/admin-pairing.js';
 
 const env = {
   WARUN_ADMIN_API_TOKEN: 'admin-token-for-test',
@@ -84,4 +84,32 @@ test('admin category and ordering writes keep the authenticated batch contracts'
   assert.equal(requests[0].body.expectedVersion, 2);
   assert.equal(requests[1].url, 'http://127.0.0.1:8787/v1/admin/catalog/menu-order');
   assert.deepEqual(requests[1].body.menuItemIds, ['a', 'b']);
+});
+
+test('business-hours admin client uses GET/PUT with optimistic versioning', async () => {
+  const requests = [];
+  const responseBody = { openTime: '17:00', closeTime: '29:59', lastOrderTime: '29:30', isVisible: true, version: 8, updatedAtMs: 1234, displayText: '17:00－29:59（ラストオーダー29:30）' };
+  const fetchImpl = async (url, options = {}) => {
+    requests.push({ url, options, body: options.body ? JSON.parse(options.body) : null });
+    return { ok: true, json: async () => responseBody };
+  };
+  const loaded = await fetchAdminBusinessHours({ env, fetchImpl });
+  const saved = await saveAdminBusinessHours({ env, settings: loaded, expectedVersion: 7, fetchImpl });
+  assert.equal(requests[0].url, 'http://127.0.0.1:8787/v1/admin/business-hours');
+  assert.equal(requests[0].options.headers.Authorization, 'Bearer admin-token-for-test');
+  assert.equal(requests[1].options.method, 'PUT');
+  assert.equal(requests[1].body.expectedVersion, 7);
+  assert.equal(requests[1].body.closeTime, '29:59');
+  assert.equal(saved.version, 8);
+});
+
+test('business-hours admin client preserves 409 conflict and does not report success', async () => {
+  await assert.rejects(
+    () => saveAdminBusinessHours({
+      env,
+      settings: { openTime: '17:00', closeTime: '24:00', lastOrderTime: '23:30', isVisible: true, version: 2 },
+      fetchImpl: async () => ({ ok: false, status: 409, json: async () => ({ error: { code: 'BUSINESS_HOURS_CONFLICT' } }) }),
+    }),
+    (error) => error.code === 'BUSINESS_HOURS_CONFLICT' && error.status === 409,
+  );
 });

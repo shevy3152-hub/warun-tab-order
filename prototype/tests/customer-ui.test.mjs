@@ -291,6 +291,22 @@ test("major category selection collapses to a 78px rail and the rail reopens it"
   assert.match(styles, /\.customer-sidebar__collapsed-toggle \{/);
 });
 
+test("business-hours settings use the management API and shared public display", () => {
+  assert.match(appSource, /fetchAdminBusinessHours/);
+  assert.match(appSource, /saveAdminBusinessHours/);
+  assert.match(appSource, /expectedVersion: businessHoursState\.formal\.version/);
+  assert.match(appSource, /BusinessHoursText settings={businessHours} className="customer-hours"/);
+  assert.match(appSource, /BusinessHoursText settings={businessHours} className="hours"/);
+  assert.match(appSource, /BusinessHoursTimeFields label="営業開始"/);
+  assert.match(appSource, /BusinessHoursTimeFields label="営業終了"/);
+  assert.match(appSource, /BusinessHoursTimeFields label="ラストオーダー"/);
+  assert.match(appSource, /客席画面に表示する/);
+  assert.match(appSource, /保存しました（version/);
+  assert.match(styles, /\.business-hours-editor__/);
+  assert.doesNotMatch(appSource, /<div className="customer-hours"><b>本日の営業時間<\/b><span>17:00/);
+  assert.doesNotMatch(appSource, /<div className="hours"><b>本日の営業時間<\/b><span>17:00/);
+});
+
 test("expanded customer rail uses a smaller wrapping subcategory label while collapsed stays at 20px", () => {
   assert.match(styles, /\.customer-app:not\(\.customer-app--category-collapsed\) \.subcategory-nav button \{[\s\S]*padding-inline: 4px;[\s\S]*font-size: 18px;[\s\S]*line-height: 1\.18;[\s\S]*white-space: normal;/);
   const subcategoryCss = styles.slice(styles.indexOf(".subcategory-nav button {"), styles.indexOf(".subcategory-nav button.is-active"));

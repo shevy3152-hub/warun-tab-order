@@ -23,12 +23,13 @@ import {
 import { createCustomerOrderClient, resolveOrderApiConfig } from "./order-outbox.js";
 import { claimCustomerDevice, createIndexedDbCredentialStore, loadOrCreateCustomerDevice, pairingClaimErrorMessage, runtimeForCustomerCredentials } from "./device-credentials.js";
 import { customerOrderErrorCategory, customerOrderNoticeFromOutboxEvent } from "./customer-order-notice.js";
-import { AdminPairingError, configuredAdminToken, fetchAdminDiagnostics, fetchAdminMenu, fetchAdminOrderHistory, fetchAdminPairingPreflight, issueCustomerPairingCode, revokeAdminDevice, saveAdminMenuItem, saveAdminImageLayouts, saveAdminCategory, saveAdminMenuOrdering } from "./admin-pairing.js";
+import { AdminPairingError, configuredAdminToken, fetchAdminBusinessHours, fetchAdminDiagnostics, fetchAdminMenu, fetchAdminOrderHistory, fetchAdminPairingPreflight, issueCustomerPairingCode, revokeAdminDevice, saveAdminBusinessHours, saveAdminMenuItem, saveAdminImageLayouts, saveAdminCategory, saveAdminMenuOrdering } from "./admin-pairing.js";
 import { closeKitchenTableSession, fetchKitchenOrderHistory, fetchKitchenSnapshot, kitchenApiConfigured, markKitchenItemServed } from "./kitchen-api.js";
 import { bootstrapCustomerOrderClient } from "./customer-bootstrap.js";
 import { taxExcludedYen } from "./pricing.js";
 import { pairingCodeQrSvg } from "./qr-code.js";
 import { CUSTOMER_TEST_THEME, normalizeCustomerTheme } from "./customer-theme.js";
+import { DEFAULT_BUSINESS_HOURS, businessHoursDisplay, businessHoursHourLabel, combineBusinessHoursTime, fetchPublicBusinessHours, splitBusinessHoursTime } from "./business-hours.js";
 
 const STORAGE_KEY = "izakaya-order-prototype-v3";
 
@@ -493,6 +494,25 @@ function ConnectionBadge({ online = true, compact = false }) {
   );
 }
 
+function usePublicBusinessHours(enabled = true) {
+  const [settings, setSettings] = useState(DEFAULT_BUSINESS_HOURS);
+  useEffect(() => {
+    if (!enabled) return undefined;
+    let cancelled = false;
+    void fetchPublicBusinessHours({ env: window }).then((next) => {
+      if (!cancelled) setSettings(next);
+    });
+    return () => { cancelled = true; };
+  }, [enabled]);
+  return settings;
+}
+
+function BusinessHoursText({ settings, className }) {
+  if (!settings?.isVisible) return null;
+  const display = businessHoursDisplay(settings);
+  return <div className={className}><b>本日の営業時間</b><span>{display.range}</span><small>{display.lastOrder}</small></div>;
+}
+
 function IconButton({ icon: Icon, children, badge, onClick, className = "" }) {
   return (
     <button className={`header-action ${className}`} onClick={onClick} type="button">
@@ -592,6 +612,7 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
   const customerTheme = normalizeCustomerTheme(theme);
   const localDevice = state.devices.find((item) => item.deviceId === deviceId) ?? state.devices[0];
   const apiMode = orderClient.mode === "api";
+  const businessHours = usePublicBusinessHours(apiMode);
   const assignedTableId = apiMode && Number.isSafeInteger(customerDeviceConfig?.tableId) ? String(customerDeviceConfig.tableId) : null;
   const device = assignedTableId
     ? { ...localDevice, tableId: assignedTableId, label: customerDeviceConfig.tableLabel || localDevice.label }
@@ -1011,7 +1032,7 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
         {majorNavOpen ? <nav className="category-nav" aria-label="大分類カテゴリー">
           {customerMajorCategories.map((category, index) => category.isPlaceholder ? <span key={category.id} className="category-nav__placeholder" aria-hidden="true"><b>{String(index + 1).padStart(2, "0")}</b><span></span></span> : <button key={category.id} className={category.id === majorCategoryId ? "is-active" : ""} onClick={() => selectMajorCategory(category.id)}><b>{String(index + 1).padStart(2, "0")}</b><span>{category.name}</span></button>)}
         </nav> : <button className="customer-sidebar__collapsed-toggle" onClick={() => setMajorNavOpen(true)} aria-label="メインカテゴリーに戻る"><span>現在</span><strong>{currentMajorCategory.name}</strong><span>メインカテゴリーに戻る</span></button>}
-        <div className="customer-hours"><b>本日の営業時間</b><span>17:00 — 24:00</span><small>（ラストオーダー 23:30）</small></div>
+        <BusinessHoursText settings={businessHours} className="customer-hours" />
       </aside>
 
       <section className={`customer-main ${isMenuHeaderHidden ? "customer-main--menu-active" : ""} ${notice ? "customer-main--has-notice" : ""}`}>
@@ -1147,13 +1168,14 @@ const adminNavItems = [
 function StaffShell({ route, title, subtitle, state, children, right, newOrderCount = 0 }) {
   const isKitchen = route === "/kitchen";
   const isAdmin = route.startsWith("/admin");
+  const businessHours = usePublicBusinessHours(true);
   const navItems = isAdmin ? adminNavItems : staffNavItems;
   return (
     <div className={`staff-app ${isKitchen ? "staff-app--kitchen" : ""} ${isAdmin ? "staff-app--admin" : ""}`}>
       <aside className="staff-sidebar">
         <Brand />
         <nav>{navItems.map((item) => <button key={item.route} className={route.startsWith(item.route) ? "is-active" : ""} onClick={() => navigate(item.route)}><item.icon size={30} weight="bold" /><span>{item.label}</span>{item.route === "/kitchen" && newOrderCount ? <b className="badge">{newOrderCount}</b> : null}</button>)}</nav>
-        <div className="hours"><b>本日の営業時間</b><span>17:00 — 24:00</span><small>ラストオーダー 23:30</small></div>
+        <BusinessHoursText settings={businessHours} className="hours" />
       </aside>
       <main className="staff-main">
         {isKitchen ? <>
@@ -1306,6 +1328,38 @@ const adminTabs = [
   { id: "devices", label: "端末割り当て", icon: Monitor },
 ];
 
+function BusinessHoursTimeFields({ label, value, maxHour, disabled, onChange }) {
+  const selected = splitBusinessHoursTime(value);
+  return <fieldset className="business-hours-time" disabled={disabled}>
+    <legend>{label}</legend>
+    <select aria-label={`${label} 時`} value={selected.hour} onChange={(event) => onChange(combineBusinessHoursTime(event.target.value, selected.minute))}>
+      {Array.from({ length: maxHour + 1 }, (_, hour) => <option key={hour} value={String(hour).padStart(2, "0")}>{businessHoursHourLabel(hour)}</option>)}
+    </select>
+    <span>：</span>
+    <select aria-label={`${label} 分`} value={selected.minute} onChange={(event) => onChange(combineBusinessHoursTime(selected.hour, event.target.value))}>
+      {Array.from({ length: 60 }, (_, minute) => <option key={minute} value={String(minute).padStart(2, "0")}>{String(minute).padStart(2, "0")}分</option>)}
+    </select>
+    {Number(selected.hour) >= 24 ? <small>翌日</small> : null}
+  </fieldset>;
+}
+
+function BusinessHoursEditor({ state, adminApiMode, onChange, onSave, onDiscard, onReload }) {
+  const draft = state.draft ?? DEFAULT_BUSINESS_HOURS;
+  return <section className="business-hours-editor" aria-label="本日の営業時間設定">
+    <div className="business-hours-editor__heading"><div><span className="section-kicker">TODAY&apos;S HOURS</span><h2>本日の営業時間</h2><p>客席レールとスタッフ画面に表示する営業時間を設定します。</p></div><span className="business-hours-editor__version">正式version {state.formal?.version ?? "—"}</span></div>
+    {state.loading ? <p className="business-hours-editor__status">正式値を読み込み中です。</p> : null}
+    {!adminApiMode ? <p className="business-hours-editor__status">管理API接続時に編集できます。</p> : null}
+    <div className="business-hours-editor__fields">
+      <BusinessHoursTimeFields label="営業開始" value={draft.openTime} maxHour={23} disabled={!adminApiMode || state.loading || state.saving} onChange={(openTime) => onChange({ openTime })} />
+      <BusinessHoursTimeFields label="営業終了" value={draft.closeTime} maxHour={29} disabled={!adminApiMode || state.loading || state.saving} onChange={(closeTime) => onChange({ closeTime })} />
+      <BusinessHoursTimeFields label="ラストオーダー" value={draft.lastOrderTime} maxHour={29} disabled={!adminApiMode || state.loading || state.saving} onChange={(lastOrderTime) => onChange({ lastOrderTime })} />
+      <label className="business-hours-visible"><input type="checkbox" checked={draft.isVisible} disabled={!adminApiMode || state.loading || state.saving} onChange={(event) => onChange({ isVisible: event.target.checked })} /> 客席画面に表示する</label>
+    </div>
+    {state.message ? <p className={`business-hours-editor__message ${state.messageKind === "error" ? "is-error" : state.messageKind === "success" ? "is-success" : ""}`} role={state.messageKind === "error" ? "alert" : "status"}>{state.message}</p> : null}
+    <div className="business-hours-editor__actions"><button type="button" className="button button--quiet" onClick={onDiscard} disabled={state.saving || !state.formal}>変更を破棄</button><button type="button" className="button button--outline" onClick={onReload} disabled={state.loading || state.saving || !adminApiMode}>再読込</button><button type="button" className="button button--primary" onClick={onSave} disabled={!adminApiMode || state.loading || state.saving || !state.formal}>{state.saving ? "保存中" : "営業時間を保存"}</button></div>
+  </section>;
+}
+
 const DEFAULT_IMAGE_LAYOUT = Object.freeze({ scale: 1, positionX: 0, positionY: 0, rotation: 0, fit: "contain" });
 
 function ImageLayoutEditor({ item, onClose, onSaved }) {
@@ -1378,6 +1432,7 @@ function ImageLayoutEditor({ item, onClose, onSaved }) {
 }
 
 function AdminScreen({ state, updateState, section = "menu" }) {
+  const adminApiMode = Boolean(configuredAdminToken(window));
   const [showAdd, setShowAdd] = useState(false);
   const [editingMenuId, setEditingMenuId] = useState(null);
   const [pairingTableId, setPairingTableId] = useState("1");
@@ -1397,7 +1452,7 @@ function AdminScreen({ state, updateState, section = "menu" }) {
   const [reorderBaseIds, setReorderBaseIds] = useState([]);
   const [draggedMenuId, setDraggedMenuId] = useState(null);
   const [categoryEditorId, setCategoryEditorId] = useState(null);
-  const adminApiMode = Boolean(configuredAdminToken(window));
+  const [businessHoursState, setBusinessHoursState] = useState({ loading: adminApiMode && section === "menu", saving: false, error: false, message: "", messageKind: "", formal: null, draft: DEFAULT_BUSINESS_HOURS });
   useEffect(() => {
     if (!adminApiMode || !["menu", "categories"].includes(section)) return undefined;
     let cancelled = false;
@@ -1417,6 +1472,49 @@ function AdminScreen({ state, updateState, section = "menu" }) {
     void load();
     return () => { cancelled = true; };
   }, [adminApiMode, section]);
+  const loadBusinessHours = async () => {
+    if (!adminApiMode) return null;
+    setBusinessHoursState((current) => ({ ...current, loading: true, error: false, message: "", messageKind: "" }));
+    try {
+      const formal = await fetchAdminBusinessHours({ env: window });
+      setBusinessHoursState({ loading: false, saving: false, error: false, message: "", messageKind: "", formal, draft: formal });
+      return formal;
+    } catch (error) {
+      const message = error?.code === "AUTH_TOKEN_MISMATCH" || error?.status === 401
+        ? "401：管理者tokenを確認してください。"
+        : error?.code === "API_UNAVAILABLE" || error?.status === 503
+          ? "営業時間設定を取得できません。管理APIを確認してください。"
+          : "営業時間設定を取得できません。";
+      setBusinessHoursState((current) => ({ ...current, loading: false, error: true, message, messageKind: "error" }));
+      return null;
+    }
+  };
+  useEffect(() => {
+    if (!adminApiMode || section !== "menu") {
+      setBusinessHoursState({ loading: false, saving: false, error: false, message: "", messageKind: "", formal: null, draft: DEFAULT_BUSINESS_HOURS });
+      return undefined;
+    }
+    void loadBusinessHours();
+    return undefined;
+  }, [adminApiMode, section]);
+  const updateBusinessHoursDraft = (patch) => setBusinessHoursState((current) => ({ ...current, draft: { ...current.draft, ...patch }, message: "", messageKind: "" }));
+  const discardBusinessHours = () => setBusinessHoursState((current) => current.formal ? ({ ...current, draft: current.formal, message: "", messageKind: "" }) : current);
+  const saveBusinessHours = async () => {
+    if (!adminApiMode || businessHoursState.saving || !businessHoursState.formal) return;
+    setBusinessHoursState((current) => ({ ...current, saving: true, error: false, message: "", messageKind: "" }));
+    try {
+      await saveAdminBusinessHours({ env: window, settings: businessHoursState.draft, expectedVersion: businessHoursState.formal.version });
+      const formal = await fetchAdminBusinessHours({ env: window });
+      setBusinessHoursState({ loading: false, saving: false, error: false, message: `保存しました（version ${formal.version}）。`, messageKind: "success", formal, draft: formal });
+    } catch (error) {
+      const message = error?.code === "BUSINESS_HOURS_CONFLICT" || error?.status === 409
+        ? "409：別の管理端末で更新されています。再読込してから保存してください。"
+        : error?.code === "AUTH_TOKEN_MISMATCH" || error?.status === 401
+          ? "401：管理者tokenを確認してください。"
+          : "営業時間を保存できませんでした。正式値は変更していません。";
+      setBusinessHoursState((current) => ({ ...current, saving: false, error: true, message, messageKind: "error" }));
+    }
+  };
   useEffect(() => {
     if (section !== "devices") {
       setPairingPreflight({ loading: false, data: null, error: null });
@@ -1802,6 +1900,7 @@ function AdminScreen({ state, updateState, section = "menu" }) {
 
         {section === "menu" ? <>
            <div className="admin-toolbar"><div className="admin-metrics"><span>登録数 <b>{state.menuItems.length}</b> 品</span><span>売り切れ <b>{Math.max(2, state.menuItems.filter((item) => item.isSoldOut).length)}</b> 品</span></div><div className="admin-toolbar__actions"><button className="button button--outline" type="button" onClick={() => reorderMode ? cancelReorder() : beginReorder()}>{reorderMode ? "通常編集へ戻る" : "並び替えモード"}</button><button className="button button--outline button--large" onClick={() => showAdd ? resetMenuEditor() : (setEditingMenuId(null), setShowAdd(true))}><Plus size={28} weight="bold" /> {showAdd ? "編集を閉じる" : "新しいメニューを追加"}</button></div></div>
+           <BusinessHoursEditor state={businessHoursState} adminApiMode={adminApiMode} onChange={updateBusinessHoursDraft} onSave={saveBusinessHours} onDiscard={discardBusinessHours} onReload={loadBusinessHours} />
            {reorderMode ? <div className="menu-reorder-toolbar"><label>対象カテゴリー<select value={reorderCategoryId} onChange={(event) => { const next = menuGroups.find((group) => group.category.id === event.target.value); setReorderCategoryId(event.target.value); setReorderDraftIds(next?.items.map((item) => item.id) ?? []); setReorderBaseIds(next?.items.map((item) => item.id) ?? []); }} disabled={catalogState.saving}>{menuGroups.map((group) => <option key={group.category.id} value={group.category.id}>{group.category.name}</option>)}</select></label><button className="button button--quiet" type="button" onClick={cancelReorder} disabled={catalogState.saving}>キャンセル</button><button className="button button--primary" type="button" onClick={saveReorder} disabled={catalogState.saving}>{catalogState.saving ? "保存中" : "並び順を保存"}</button></div> : null}
           {showAdd ? <form className="inline-form inline-form--menu menu-editor" key={editingMenuId ?? "new-menu"} onSubmit={addMenu}>
             <label>正式名<input name="name" required placeholder="例：だし巻き玉子" defaultValue={editingMenu?.name ?? ""} /></label>
