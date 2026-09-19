@@ -1,5 +1,17 @@
 # 開発状態
 
+## 2026-09-19 飲み物画面視認性改善 checkpoint
+
+飲み物画面の戻るボタン文言・サイズと見出し下赤ラインを整理し、焼酎画面だけで発生していた戻るボタンと赤ラインの重なりを修正した。A90アプリアイコンから起動した画面をユーザーが目視確認し、受入PASSとした。
+
+- 戻るボタンを「飲み物一覧に戻る」へ変更し、文字サイズ18px、最小高さ52px、左右padding 12pxとした。
+- 飲み物見出し下の赤ライン位置を調整し、焼酎画面では見出し、戻るボタン、赤ラインを専用指定で調整した。他7カテゴリー、左赤レール、注文処理は維持した。
+- prototype 102/102 PASS、Vite build PASS、`git diff --check` PASS。
+- A90アプリアイコンからのユーザー目視確認PASS。戻るボタンと赤ラインの重なりは解消し、左赤レール開閉後も正常だった。
+- safe-copy復旧後、再pairing不要で客席画面が表示された。safe-copy PID `7060`は停止していない。
+- production DB、pairing、注文は未操作。safe-copy自動起動と管理画面起動ショートカットはOS設定でありcommit対象外とした。
+- `prototype/CONTEXT.md`、dist生成物、DB／WAL／SHM、ログ、バックアップ、QA画像、既存未追跡ファイル、秘密情報はcommit対象外とした。
+
 ## 2026-09-18 safe-copy launcher runtime-state lifecycle checkpoint
 
 launcherのstale runtime-state処理を実装し、隔離E2Eとlive safe-copyの正式launcher受入を完了した。根本原因はACL・owner・属性の異常ではなく、停止後に古いruntime-stateを安全に整理するライフサイクル処理が不足していたことだった。ACL、owner、属性は変更していない。
