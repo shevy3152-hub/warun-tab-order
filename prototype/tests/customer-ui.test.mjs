@@ -221,7 +221,7 @@ test("customer cards show only stored readings and keep the detail hint separate
 
 test("product details keep stored readings conditional and let shochu continue to serving selection", () => {
   assert.match(appSource, /function Modal\(\{ title, titleExtra = null, children, footer = null, onClose/);
-  assert.match(appSource, /className="modal__title-group"><h2>\{title\}<\/h2>\{titleExtra\}/);
+  assert.match(appSource, /className="modal__title-group"><h2 id=\{titleId\}>\{title\}<\/h2>\{titleExtra\}/);
   assert.match(appSource, /\{footer \? <div className="modal__footer">\{footer\}<\/div> : null\}/);
   assert.match(appSource, /className="modal--product-detail" footer=\{<div className="modal-actions product-detail__actions">/);
   assert.match(appSource, /titleExtra=\{detailItem\.detail\?\.reading \? <span className="modal__title-reading">\{detailItem\.detail\.reading\}<\/span> : null\}/);
@@ -294,8 +294,11 @@ test("major category selection collapses to a 78px rail and the rail reopens it"
 test("business-hours settings use the management API and shared public display", () => {
   assert.match(appSource, /fetchAdminBusinessHours/);
   assert.match(appSource, /saveAdminBusinessHours/);
+  assert.match(appSource, /fetchPublicBusinessHoursWithNotice/);
+  assert.match(appSource, /formal\.noticeText === requested\.noticeText/);
+  assert.match(appSource, /formal\.noticeEnabled === requested\.noticeEnabled/);
   assert.match(appSource, /expectedVersion: businessHoursState\.formal\.version/);
-  assert.match(appSource, /BusinessHoursText settings={businessHours} className="customer-hours"/);
+  assert.match(appSource, /CustomerBusinessHours settings={businessHours}/);
   assert.match(appSource, /BusinessHoursText settings={businessHours} className="hours"/);
   assert.match(appSource, /BusinessHoursTimeFields label="営業開始"/);
   assert.match(appSource, /BusinessHoursTimeFields label="営業終了"/);

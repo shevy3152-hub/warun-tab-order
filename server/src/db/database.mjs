@@ -5,7 +5,7 @@ import { DatabaseSync } from 'node:sqlite';
 
 export const LEGACY_SCHEMA_VERSION = 1;
 export const SESSION_SCHEMA_VERSION = 2;
-export const SCHEMA_VERSION = 9;
+export const SCHEMA_VERSION = 10;
 
 export const REQUIRED_TABLES = Object.freeze([
   'system_state',
@@ -108,6 +108,9 @@ export const DEFAULT_V8_MIGRATION_PATH = resolve(
 );
 export const DEFAULT_V9_MIGRATION_PATH = resolve(
   moduleDirectory, '..', '..', '..', 'docs', 'schema-v9-migration.sql',
+);
+export const DEFAULT_V10_MIGRATION_PATH = resolve(
+  moduleDirectory, '..', '..', '..', 'docs', 'schema-v10-migration.sql',
 );
 
 export class DatabaseInitializationError extends Error {
@@ -408,6 +411,14 @@ function migrateSchemaV8ToV9(database, migrationPath) {
   }
 }
 
+function migrateSchemaV9ToV10(database, migrationPath) {
+  try { database.exec(readFileSync(migrationPath, 'utf8')); }
+  catch (error) {
+    try { if (database.isTransaction) database.exec('ROLLBACK;'); } catch {}
+    throw new DatabaseInitializationError('MIGRATION_FAILED', 'The business-hours notice schema migration failed.', { cause: error });
+  }
+}
+
 function migrateSchemaV1ToV2(database) {
   let transactionOpen = false;
   try {
@@ -607,6 +618,11 @@ function validateSchema(database) {
     ['open_minutes', 'close_minutes', 'last_order_minutes', 'is_visible', 'version', 'updated_at_ms'],
     'business_hours columns',
   );
+  assertRequiredNames(
+    tableColumns(database, 'business_hours'),
+    ['notice_text', 'notice_enabled'],
+    'business_hours notice columns',
+  );
 
   const state = database
     .prepare(`
@@ -688,6 +704,7 @@ export function initializeDatabase({
   v7MigrationPath = DEFAULT_V7_MIGRATION_PATH,
   v8MigrationPath = DEFAULT_V8_MIGRATION_PATH,
   v9MigrationPath = DEFAULT_V9_MIGRATION_PATH,
+  v10MigrationPath = DEFAULT_V10_MIGRATION_PATH,
 } = {}) {
   const resolvedDatabasePath = resolveFilePath(databasePath, 'databasePath');
   const resolvedSchemaPath = resolveFilePath(schemaPath, 'schemaPath');
@@ -698,6 +715,7 @@ export function initializeDatabase({
   const resolvedV7MigrationPath = resolveFilePath(v7MigrationPath, 'v7MigrationPath');
   const resolvedV8MigrationPath = resolveFilePath(v8MigrationPath, 'v8MigrationPath');
   const resolvedV9MigrationPath = resolveFilePath(v9MigrationPath, 'v9MigrationPath');
+  const resolvedV10MigrationPath = resolveFilePath(v10MigrationPath, 'v10MigrationPath');
 
   mkdirSync(dirname(resolvedDatabasePath), { recursive: true });
 
@@ -756,6 +774,11 @@ export function initializeDatabase({
     }
     if (currentVersion === 8) {
       migrateSchemaV8ToV9(database, resolvedV9MigrationPath);
+      enableWriteAheadLogging(database);
+      currentVersion = 9;
+    }
+    if (currentVersion === 9) {
+      migrateSchemaV9ToV10(database, resolvedV10MigrationPath);
       enableWriteAheadLogging(database);
       currentVersion = SCHEMA_VERSION;
     }

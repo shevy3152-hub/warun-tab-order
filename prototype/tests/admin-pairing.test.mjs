@@ -88,7 +88,7 @@ test('admin category and ordering writes keep the authenticated batch contracts'
 
 test('business-hours admin client uses GET/PUT with optimistic versioning', async () => {
   const requests = [];
-  const responseBody = { openTime: '17:00', closeTime: '29:59', lastOrderTime: '29:30', isVisible: true, version: 8, updatedAtMs: 1234, displayText: '17:00－29:59（ラストオーダー29:30）' };
+  const responseBody = { openTime: '17:00', closeTime: '29:59', lastOrderTime: '29:30', isVisible: true, noticeText: '定休日\n臨時営業時間は店頭をご確認ください。', noticeEnabled: true, version: 8, updatedAtMs: 1234, displayText: '17:00－29:59（ラストオーダー29:30）' };
   const fetchImpl = async (url, options = {}) => {
     requests.push({ url, options, body: options.body ? JSON.parse(options.body) : null });
     return { ok: true, json: async () => responseBody };
@@ -100,6 +100,12 @@ test('business-hours admin client uses GET/PUT with optimistic versioning', asyn
   assert.equal(requests[1].options.method, 'PUT');
   assert.equal(requests[1].body.expectedVersion, 7);
   assert.equal(requests[1].body.closeTime, '29:59');
+  assert.equal(loaded.noticeText, responseBody.noticeText);
+  assert.equal(loaded.noticeEnabled, true);
+  assert.equal(requests[1].body.noticeText, responseBody.noticeText);
+  assert.equal(requests[1].body.noticeEnabled, true);
+  assert.equal(saved.noticeText, responseBody.noticeText);
+  assert.equal(saved.noticeEnabled, true);
   assert.equal(saved.version, 8);
 });
 

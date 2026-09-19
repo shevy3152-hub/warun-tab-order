@@ -29,7 +29,8 @@ import { bootstrapCustomerOrderClient } from "./customer-bootstrap.js";
 import { taxExcludedYen } from "./pricing.js";
 import { pairingCodeQrSvg } from "./qr-code.js";
 import { CUSTOMER_TEST_THEME, normalizeCustomerTheme } from "./customer-theme.js";
-import { DEFAULT_BUSINESS_HOURS, businessHoursDisplay, businessHoursHourLabel, combineBusinessHoursTime, fetchPublicBusinessHours, splitBusinessHoursTime } from "./business-hours.js";
+import { DEFAULT_BUSINESS_HOURS, businessHoursDisplay, businessHoursHourLabel, combineBusinessHoursTime, normalizeBusinessHours, splitBusinessHoursTime } from "./business-hours.js";
+import { DEFAULT_BUSINESS_HOURS_NOTICE, withBusinessHoursNotice } from "./business-hours-notice.js";
 
 const STORAGE_KEY = "izakaya-order-prototype-v3";
 
@@ -495,22 +496,55 @@ function ConnectionBadge({ online = true, compact = false }) {
 }
 
 function usePublicBusinessHours(enabled = true) {
-  const [settings, setSettings] = useState(DEFAULT_BUSINESS_HOURS);
+  const [settings, setSettings] = useState(() => withBusinessHoursNotice({ ...DEFAULT_BUSINESS_HOURS, ...DEFAULT_BUSINESS_HOURS_NOTICE }));
   useEffect(() => {
     if (!enabled) return undefined;
     let cancelled = false;
-    void fetchPublicBusinessHours({ env: window }).then((next) => {
-      if (!cancelled) setSettings(next);
+    void fetchPublicBusinessHoursWithNotice({ env: window }).then((next) => {
+      if (!cancelled) setSettings(withBusinessHoursNotice(next));
     });
     return () => { cancelled = true; };
   }, [enabled]);
   return settings;
 }
 
+async function fetchPublicBusinessHoursWithNotice({ env = globalThis } = {}) {
+  const configured = typeof env?.WARUN_API_BASE === "string" ? env.WARUN_API_BASE.trim() : "";
+  let base;
+  try {
+    base = new URL(configured || "/v1", env.location?.origin).toString().replace(/\/+$/, "");
+  } catch {
+    return withBusinessHoursNotice({ ...DEFAULT_BUSINESS_HOURS, ...DEFAULT_BUSINESS_HOURS_NOTICE });
+  }
+  try {
+    const response = await env.fetch(`${base}/business-hours`, { headers: { Accept: "application/json" } });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const body = await response.json();
+    return withBusinessHoursNotice({
+      ...normalizeBusinessHours(body),
+      noticeText: body.noticeText,
+      noticeEnabled: body.noticeEnabled,
+    });
+  } catch {
+    return withBusinessHoursNotice({ ...DEFAULT_BUSINESS_HOURS, ...DEFAULT_BUSINESS_HOURS_NOTICE });
+  }
+}
+
 function BusinessHoursText({ settings, className }) {
   if (!settings?.isVisible) return null;
   const display = businessHoursDisplay(settings);
   return <div className={className}><b>本日の営業時間</b><span>{display.range}</span><small>{display.lastOrder}</small></div>;
+}
+
+function CustomerBusinessHours({ settings, onOpenNotice }) {
+  const showHours = settings?.isVisible === true;
+  const showNotice = settings?.noticeEnabled === true && Boolean(settings.noticeText?.trim());
+  if (!showHours && !showNotice) return null;
+  const display = businessHoursDisplay(settings);
+  return <div className="customer-hours">
+    {showHours ? <><b>本日の営業時間</b><span>{display.range}</span><small>{display.lastOrder}</small></> : null}
+    {showNotice ? <button type="button" className="business-hours-notice-button" onClick={onOpenNotice}>その他ご案内</button> : null}
+  </div>;
 }
 
 function IconButton({ icon: Icon, children, badge, onClick, className = "" }) {
@@ -523,17 +557,19 @@ function IconButton({ icon: Icon, children, badge, onClick, className = "" }) {
   );
 }
 
-function Modal({ title, titleExtra = null, children, footer = null, onClose, wide = false, className = "" }) {
+function Modal({ title, titleExtra = null, children, footer = null, onClose, wide = false, className = "", titleId = "modal-title" }) {
   useEffect(() => {
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
-    return () => { document.body.style.overflow = previousOverflow; };
-  }, []);
+    const onKeyDown = (event) => { if (event.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKeyDown);
+    return () => { document.body.style.overflow = previousOverflow; window.removeEventListener("keydown", onKeyDown); };
+  }, [onClose]);
 
   return (
     <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
-      <section className={`modal ${wide ? "modal--wide" : ""} ${className}`.trim()} role="dialog" aria-modal="true" aria-label={title}>
-        <header className="modal__header"><div className="modal__title-group"><h2>{title}</h2>{titleExtra}</div><button className="icon-only" onClick={onClose} aria-label="閉じる"><X size={26} weight="bold" /></button></header>
+      <section className={`modal ${wide ? "modal--wide" : ""} ${className}`.trim()} role="dialog" aria-modal="true" aria-labelledby={titleId}>
+        <header className="modal__header"><div className="modal__title-group"><h2 id={titleId}>{title}</h2>{titleExtra}</div><button className="icon-only" onClick={onClose} aria-label="閉じる"><X size={26} weight="bold" /></button></header>
         <div className="modal__body">{children}</div>
         {footer ? <div className="modal__footer">{footer}</div> : null}
       </section>
@@ -647,6 +683,7 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
     ["edamame", 1], ["dashimaki", 1], ["beer", 2], ["lemon", 1], ["karaage", 1], ["yakitori", 2], ["otoshi", 2],
   ].map(([menuItemId, quantity]) => [menuItemId, { menuItemId, quantity }])));
   const [modal, setModal] = useState(null);
+  const [showBusinessNotice, setShowBusinessNotice] = useState(false);
   const [detailItem, setDetailItem] = useState(null);
   const [sakeSelection, setSakeSelection] = useState(null);
   const [sakeSelectionError, setSakeSelectionError] = useState("");
@@ -1032,7 +1069,7 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
         {majorNavOpen ? <nav className="category-nav" aria-label="大分類カテゴリー">
           {customerMajorCategories.map((category, index) => category.isPlaceholder ? <span key={category.id} className="category-nav__placeholder" aria-hidden="true"><b>{String(index + 1).padStart(2, "0")}</b><span></span></span> : <button key={category.id} className={category.id === majorCategoryId ? "is-active" : ""} onClick={() => selectMajorCategory(category.id)}><b>{String(index + 1).padStart(2, "0")}</b><span>{category.name}</span></button>)}
         </nav> : <button className="customer-sidebar__collapsed-toggle" onClick={() => setMajorNavOpen(true)} aria-label="メインカテゴリーに戻る"><span>現在</span><strong>{currentMajorCategory.name}</strong><span>メインカテゴリーに戻る</span></button>}
-        <BusinessHoursText settings={businessHours} className="customer-hours" />
+        <CustomerBusinessHours settings={businessHours} onOpenNotice={() => setShowBusinessNotice(true)} />
       </aside>
 
       <section className={`customer-main ${isMenuHeaderHidden ? "customer-main--menu-active" : ""} ${notice ? "customer-main--has-notice" : ""}`}>
@@ -1148,6 +1185,7 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
       {modal === "feature" ? <Modal title="確認" onClose={() => setModal(null)}><p className="modal-lead">この機能は次の実装段階で接続します。</p><div className="modal-actions"><button className="button button--primary" onClick={() => setModal(null)}>閉じる</button></div></Modal> : null}
       {modal === "history" ? <Modal title="これまでのご注文" onClose={() => setModal(null)} wide><div className="customer-history">{apiMode && apiHistoryState.loading ? <div className="empty-state"><ClipboardText size={42} /><p>注文履歴を読み込んでいます。</p></div> : apiMode && apiHistoryState.error ? <div className="empty-state"><ClipboardText size={42} /><p>注文履歴を取得できません。</p></div> : customerHistory.length ? customerHistory.map((order) => <article key={order.id}><header><b>{formatTime(order.createdAt)} のご注文</b><span className={`status-chip status-${order.status}`}>{customerTransportLabel(order)}</span></header>{order.items.map((item) => <div key={item.id}><span>{selectionDisplayName({ name: item.nameSnapshot }, item)}</span><b>{item.quantity}点</b></div>)}</article>) : <div className="empty-state"><ClipboardText size={42} /><p>注文履歴はまだありません。</p></div>}</div></Modal> : null}
       {detailItem ? <Modal title={detailItem.name} titleExtra={detailItem.detail?.reading ? <span className="modal__title-reading">{detailItem.detail.reading}</span> : null} onClose={() => setDetailItem(null)} wide className="modal--product-detail" footer={<div className="modal-actions product-detail__actions"><button className="button button--quiet" onClick={() => setDetailItem(null)}>一覧へ戻る</button>{detailItem.categoryId === "shochu" && detailItem.servingOptions?.length ? <button className="button button--primary button--large" onClick={() => chooseShochuFromDetail(detailItem)}>これにする</button> : null}</div>}><div className="product-detail">{detailItem.detail?.imageUri || detailItem.imageUri ? <div className="product-detail__image"><img src={detailItem.detail?.imageUri || detailItem.imageUri} alt={detailItem.name} style={imageLayoutStyle(detailItem, "detail")} /></div> : null}<div>{detailItem.detail?.itemType ? <span className="category-tag">{detailItem.detail.itemType}</span> : null}<p className="product-detail__description">{detailItem.detail?.description || detailItem.description}</p><dl>{[["産地", "origin"], ["蔵元", "producer"], ["味の特徴", "taste"], ["香り", "aroma"], ["甘辛", "sweetness"], ["キレ", "finish"]].filter(([, key]) => detailItem.detail?.[key]).map(([label, key]) => <div key={key}><dt>{label}</dt><dd>{detailItem.detail[key]}</dd></div>)}</dl>{detailItem.detail?.recommendation ? <blockquote>{detailItem.detail.recommendation}</blockquote> : null}</div></div></Modal> : null}
+      {showBusinessNotice && businessHours.noticeEnabled && businessHours.noticeText.trim() ? <Modal title="営業日・営業時間のご案内" titleId="business-hours-notice-title" onClose={() => setShowBusinessNotice(false)} className="modal--business-hours-notice" footer={<div className="modal-actions"><button type="button" className="button button--primary" onClick={() => setShowBusinessNotice(false)}>閉じる</button></div>}><div className="business-hours-notice__body"><p>{businessHours.noticeText}</p></div></Modal> : null}
     </div>
   );
 }
@@ -1355,6 +1393,12 @@ function BusinessHoursEditor({ state, adminApiMode, onChange, onSave, onDiscard,
       <BusinessHoursTimeFields label="ラストオーダー" value={draft.lastOrderTime} maxHour={29} disabled={!adminApiMode || state.loading || state.saving} onChange={(lastOrderTime) => onChange({ lastOrderTime })} />
       <label className="business-hours-visible"><input type="checkbox" checked={draft.isVisible} disabled={!adminApiMode || state.loading || state.saving} onChange={(event) => onChange({ isVisible: event.target.checked })} /> 客席画面に表示する</label>
     </div>
+    <div className="business-hours-notice-editor">
+      <label htmlFor="business-hours-notice-text">その他ご案内（定休日・臨時営業時間など）</label>
+      <textarea id="business-hours-notice-text" maxLength={500} value={draft.noticeText ?? ""} disabled={!adminApiMode || state.loading || state.saving} onChange={(event) => onChange({ noticeText: event.target.value })} rows={4} />
+      <div className="business-hours-notice-editor__meta"><span>{[...(draft.noticeText ?? "")].length} / 500</span><label><input type="checkbox" checked={draft.noticeEnabled === true} disabled={!adminApiMode || state.loading || state.saving} onChange={(event) => onChange({ noticeEnabled: event.target.checked })} /> 客席画面に表示する</label></div>
+      {draft.noticeEnabled === true && !(draft.noticeText ?? "").trim() ? <p className="business-hours-editor__message is-error" role="alert">案内を表示する場合は本文を入力してください。</p> : null}
+    </div>
     {state.message ? <p className={`business-hours-editor__message ${state.messageKind === "error" ? "is-error" : state.messageKind === "success" ? "is-success" : ""}`} role={state.messageKind === "error" ? "alert" : "status"}>{state.message}</p> : null}
     <div className="business-hours-editor__actions"><button type="button" className="button button--quiet" onClick={onDiscard} disabled={state.saving || !state.formal}>変更を破棄</button><button type="button" className="button button--outline" onClick={onReload} disabled={state.loading || state.saving || !adminApiMode}>再読込</button><button type="button" className="button button--primary" onClick={onSave} disabled={!adminApiMode || state.loading || state.saving || !state.formal}>{state.saving ? "保存中" : "営業時間を保存"}</button></div>
   </section>;
@@ -1501,10 +1545,22 @@ function AdminScreen({ state, updateState, section = "menu" }) {
   const discardBusinessHours = () => setBusinessHoursState((current) => current.formal ? ({ ...current, draft: current.formal, message: "", messageKind: "" }) : current);
   const saveBusinessHours = async () => {
     if (!adminApiMode || businessHoursState.saving || !businessHoursState.formal) return;
+    if (businessHoursState.draft.noticeEnabled === true && !(businessHoursState.draft.noticeText ?? "").trim()) {
+      setBusinessHoursState((current) => ({ ...current, error: true, message: "案内を表示する場合は本文を入力してください。", messageKind: "error" }));
+      return;
+    }
     setBusinessHoursState((current) => ({ ...current, saving: true, error: false, message: "", messageKind: "" }));
     try {
-      await saveAdminBusinessHours({ env: window, settings: businessHoursState.draft, expectedVersion: businessHoursState.formal.version });
+      const requested = withBusinessHoursNotice(businessHoursState.draft);
+      await saveAdminBusinessHours({ env: window, settings: requested, expectedVersion: businessHoursState.formal.version });
       const formal = await fetchAdminBusinessHours({ env: window });
+      const matches = formal.openTime === requested.openTime
+        && formal.closeTime === requested.closeTime
+        && formal.lastOrderTime === requested.lastOrderTime
+        && formal.isVisible === requested.isVisible
+        && formal.noticeText === requested.noticeText
+        && formal.noticeEnabled === requested.noticeEnabled;
+      if (!matches) throw new Error("営業時間設定の再取得値が保存値と一致しません。");
       setBusinessHoursState({ loading: false, saving: false, error: false, message: `保存しました（version ${formal.version}）。`, messageKind: "success", formal, draft: formal });
     } catch (error) {
       const message = error?.code === "BUSINESS_HOURS_CONFLICT" || error?.status === 409

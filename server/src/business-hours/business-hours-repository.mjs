@@ -8,6 +8,8 @@ const DEFAULTS = Object.freeze({
   closeMinutes: 24 * 60,
   lastOrderMinutes: 23 * 60 + 30,
   isVisible: true,
+  noticeText: '',
+  noticeEnabled: false,
   version: 0,
   updatedAtMs: 0,
 });
@@ -41,6 +43,14 @@ function requireExpectedVersion(request) {
   return request.expectedVersion;
 }
 
+function normalizeNoticeText(value) {
+  if (typeof value !== 'string') throw invalidRequest('noticeText must be a string.');
+  const normalized = value.replace(/\r\n?/g, '\n').trim();
+  if ([...normalized].length > 500) throw invalidRequest('noticeText must be 500 characters or fewer.');
+  if (/<\/?[A-Za-z][^>]*>/.test(normalized)) throw invalidRequest('noticeText must be plain text.');
+  return normalized;
+}
+
 export function normalizeBusinessHoursWriteRequest(request) {
   if (request === null || typeof request !== 'object' || Array.isArray(request)) {
     throw invalidRequest('Business-hours request must be an object.');
@@ -55,7 +65,11 @@ export function normalizeBusinessHoursWriteRequest(request) {
   if (typeof request.isVisible !== 'boolean') {
     throw invalidRequest('isVisible must be boolean.');
   }
-  return { expectedVersion, openMinutes, closeMinutes, lastOrderMinutes, isVisible: request.isVisible };
+  const noticeText = Object.hasOwn(request, 'noticeText') ? normalizeNoticeText(request.noticeText) : undefined;
+  const noticeEnabled = Object.hasOwn(request, 'noticeEnabled') ? request.noticeEnabled : undefined;
+  if (noticeEnabled !== undefined && typeof noticeEnabled !== 'boolean') throw invalidRequest('noticeEnabled must be boolean.');
+  if (noticeEnabled === true && noticeText !== undefined && noticeText === '') throw invalidRequest('noticeEnabled requires noticeText.');
+  return { expectedVersion, openMinutes, closeMinutes, lastOrderMinutes, isVisible: request.isVisible, noticeText, noticeEnabled };
 }
 
 function timeText(minutes) {
@@ -71,6 +85,10 @@ export function mapBusinessHours(row = DEFAULTS) {
     : Boolean(row.isVisible ?? row.is_visible);
   const version = Number(row.version ?? DEFAULTS.version);
   const updatedAtMs = Number(row.updatedAtMs ?? row.updated_at_ms ?? DEFAULTS.updatedAtMs);
+  const noticeText = String(row.noticeText ?? row.notice_text ?? DEFAULTS.noticeText).replace(/\r\n?/g, '\n').trim();
+  const noticeEnabled = row.noticeEnabled === undefined && row.notice_enabled === undefined
+    ? DEFAULTS.noticeEnabled
+    : Boolean(row.noticeEnabled ?? row.notice_enabled);
   const openTime = timeText(openMinutes);
   const closeTime = timeText(closeMinutes);
   const lastOrderTime = timeText(lastOrderMinutes);
@@ -79,6 +97,8 @@ export function mapBusinessHours(row = DEFAULTS) {
     closeTime,
     lastOrderTime,
     isVisible,
+    noticeText,
+    noticeEnabled,
     version,
     updatedAtMs,
     displayText: `${openTime}－${closeTime}（ラストオーダー${lastOrderTime}）`,
@@ -101,7 +121,8 @@ export function createBusinessHoursRepository({ database, now = Date.now } = {})
   let closed = false;
   function findRow() {
     return database.prepare(`
-      SELECT open_minutes, close_minutes, last_order_minutes, is_visible, version, updated_at_ms
+      SELECT open_minutes, close_minutes, last_order_minutes, is_visible,
+             notice_text, notice_enabled, version, updated_at_ms
       FROM business_hours
       WHERE singleton_id = 1
     `).get();
@@ -141,17 +162,23 @@ export function createBusinessHoursRepository({ database, now = Date.now } = {})
         throw repositoryError(BUSINESS_HOURS_ERROR_CODES.DATABASE_FAILURE, 'The business-hours write clock returned an invalid timestamp.');
       }
       const nextVersion = currentVersion + 1;
+      const currentSettings = mapBusinessHours(current ?? DEFAULTS);
+      const noticeText = normalized.noticeText ?? currentSettings.noticeText;
+      const noticeEnabled = normalized.noticeEnabled ?? currentSettings.noticeEnabled;
+      if (noticeEnabled && noticeText === '') throw invalidRequest('noticeEnabled requires noticeText.');
       if (current) {
         const update = database.prepare(`
           UPDATE business_hours
           SET open_minutes = ?, close_minutes = ?, last_order_minutes = ?,
-              is_visible = ?, version = ?, updated_at_ms = ?
+              is_visible = ?, notice_text = ?, notice_enabled = ?, version = ?, updated_at_ms = ?
           WHERE singleton_id = 1 AND version = ?
         `).run(
           normalized.openMinutes,
           normalized.closeMinutes,
           normalized.lastOrderMinutes,
           normalized.isVisible ? 1 : 0,
+          noticeText,
+          noticeEnabled ? 1 : 0,
           nextVersion,
           timestamp,
           normalized.expectedVersion,
@@ -166,13 +193,15 @@ export function createBusinessHoursRepository({ database, now = Date.now } = {})
         database.prepare(`
           INSERT INTO business_hours (
             singleton_id, open_minutes, close_minutes, last_order_minutes,
-            is_visible, version, created_at_ms, updated_at_ms
-          ) VALUES (1, ?, ?, ?, ?, ?, ?, ?)
+            is_visible, notice_text, notice_enabled, version, created_at_ms, updated_at_ms
+          ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `).run(
           normalized.openMinutes,
           normalized.closeMinutes,
           normalized.lastOrderMinutes,
           normalized.isVisible ? 1 : 0,
+          noticeText,
+          noticeEnabled ? 1 : 0,
           nextVersion,
           timestamp,
           timestamp,
@@ -186,6 +215,8 @@ export function createBusinessHoursRepository({ database, now = Date.now } = {})
         closeTime: timeText(normalized.closeMinutes),
         lastOrderTime: timeText(normalized.lastOrderMinutes),
         isVisible: normalized.isVisible,
+        noticeText,
+        noticeEnabled,
       });
       const event = database.prepare(`
         INSERT INTO event_log (
@@ -196,7 +227,7 @@ export function createBusinessHoursRepository({ database, now = Date.now } = {})
       database.exec('COMMIT;');
       transactionOpen = false;
       return {
-        ...mapBusinessHours({ ...normalized, version: nextVersion, updatedAtMs: timestamp }),
+        ...mapBusinessHours({ ...normalized, noticeText, noticeEnabled, version: nextVersion, updatedAtMs: timestamp }),
         idempotencyResult: 'created',
         event: { eventEpoch: state.event_epoch, eventId: Number(event.lastInsertRowid) },
       };

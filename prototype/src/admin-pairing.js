@@ -1,4 +1,5 @@
 import { normalizeBusinessHours } from "./business-hours.js";
+import { withBusinessHoursNotice } from "./business-hours-notice.js";
 
 export function configuredAdminToken(env) {
   if (typeof env?.WARUN_ADMIN_API_TOKEN === "string") return env.WARUN_ADMIN_API_TOKEN.trim();
@@ -192,7 +193,12 @@ export async function fetchAdminBusinessHours({ env = globalThis, fetchImpl = en
   }
   if (!response.ok) await responseError(response, "営業時間設定を取得できません。", "BUSINESS_HOURS_REQUEST_FAILED");
   try {
-    return normalizeBusinessHours(await response.json(), { includeVersion: true });
+    const body = await response.json();
+    return withBusinessHoursNotice({
+      ...normalizeBusinessHours(body, { includeVersion: true }),
+      noticeText: body.noticeText,
+      noticeEnabled: body.noticeEnabled,
+    });
   } catch {
     throw new AdminPairingError("営業時間設定の応答が不正です。", { status: 503, code: "API_UNAVAILABLE" });
   }
@@ -213,6 +219,8 @@ export async function saveAdminBusinessHours({ env = globalThis, settings, expec
         closeTime: settings.closeTime,
         lastOrderTime: settings.lastOrderTime,
         isVisible: settings.isVisible,
+        noticeText: settings.noticeText ?? "",
+        noticeEnabled: settings.noticeEnabled === true,
       }),
     });
   } catch {
@@ -220,7 +228,12 @@ export async function saveAdminBusinessHours({ env = globalThis, settings, expec
   }
   if (!response.ok) await responseError(response, "営業時間設定を保存できません。", response.status === 409 ? "BUSINESS_HOURS_CONFLICT" : "BUSINESS_HOURS_REQUEST_FAILED");
   try {
-    return normalizeBusinessHours(await response.json(), { includeVersion: true });
+    const body = await response.json();
+    return withBusinessHoursNotice({
+      ...normalizeBusinessHours(body, { includeVersion: true }),
+      noticeText: body.noticeText,
+      noticeEnabled: body.noticeEnabled,
+    });
   } catch {
     throw new AdminPairingError("営業時間設定の保存応答が不正です。", { status: 503, code: "API_UNAVAILABLE" });
   }

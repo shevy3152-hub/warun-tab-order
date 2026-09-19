@@ -143,10 +143,11 @@ h1, h2, h3, p { margin: 0; }
 .category-nav button.is-active b { height: 100%; display: grid; place-items: center; background: var(--ink); color: #fff; }
 .category-nav__placeholder { min-height: 55px; border-bottom: 1px solid rgb(255 255 255 / 45%); display: grid; grid-template-columns: 62px 1fr; align-items: center; color: rgb(255 255 255 / 55%); }
 .category-nav__placeholder b { font: 700 20px/1 var(--font-display); text-align: center; }
-.customer-hours { margin: auto 14px 18px; display: flex; flex-direction: column; gap: 4px; color: #fff; }
+.customer-hours { margin: auto 14px 8px; display: flex; flex-direction: column; gap: 4px; color: #fff; }
 .customer-hours b { font-size: 12px; }
 .customer-hours span { font: 700 17px/1.2 monospace; letter-spacing: .08em; }
 .customer-hours small { font-size: 11px; }
+.business-hours-notice-button { min-height: 52px; margin-top: 8px; padding: 8px 10px; border: 1px solid #fff; background: transparent; color: #fff; font-size: 14px; font-weight: 900; line-height: 1.2; touch-action: manipulation; }
 .customer-sidebar .brand { margin-top: 0; }
 .customer-main { min-width: 0; min-height: 0; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; }
 .customer-main--has-notice { grid-template-rows: auto auto minmax(0, 1fr) auto; }
@@ -342,6 +343,10 @@ h1, h2, h3, p { margin: 0; }
 .modal__header { min-height: 78px; padding: 16px 22px; border-bottom: 2px solid var(--red); display: flex; align-items: center; justify-content: space-between; }
 .modal__header h2 { font-size: 28px; color: var(--red); letter-spacing: .05em; }
 .modal__body { padding: 26px; }
+.modal--business-hours-notice { width: min(680px, 92vw); }
+.modal--business-hours-notice .modal__body { min-height: 0; }
+.business-hours-notice__body { max-height: min(52vh, 420px); overflow-y: auto; overscroll-behavior: contain; }
+.business-hours-notice__body p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.75; font-size: 18px; }
 .modal-lead { text-align: center; font-size: 18px; font-weight: 700; padding-block: 20px; }
 .modal-actions { margin-top: 26px; display: flex; justify-content: flex-end; gap: 12px; }
 .shochu-selection-modal { min-height: 0; display: flex; flex-direction: column; gap: 10px; }
@@ -558,6 +563,11 @@ h1, h2, h3, p { margin: 0; }
 .business-hours-editor__message.is-error { color: var(--red); }
 .business-hours-editor__message.is-success { color: var(--green); }
 .business-hours-editor__actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 14px; }
+.business-hours-notice-editor { display: grid; gap: 7px; margin-top: 16px; }
+.business-hours-notice-editor > label:first-child { font-size: 14px; font-weight: 900; }
+.business-hours-notice-editor textarea { width: 100%; box-sizing: border-box; min-height: 104px; padding: 10px 12px; border: 1px solid var(--line); background: #fff; color: var(--ink); font: inherit; line-height: 1.5; resize: vertical; }
+.business-hours-notice-editor__meta { display: flex; align-items: center; justify-content: space-between; gap: 12px; color: var(--muted); font-size: 12px; font-weight: 800; }
+.business-hours-notice-editor__meta label { color: var(--ink); font-size: 13px; }
 .menu-reorder-toolbar { display: flex; align-items: end; gap: 14px; padding: 14px 0; border-bottom: 1px solid var(--line); }
 .menu-reorder-toolbar label { display: grid; gap: 6px; font-size: 12px; font-weight: 800; }
 .menu-reorder-toolbar select { min-width: 280px; height: 48px; border: 1px solid var(--line); background: var(--paper); padding: 0 12px; }

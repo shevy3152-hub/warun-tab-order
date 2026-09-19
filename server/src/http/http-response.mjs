@@ -40,7 +40,7 @@ const EVENT_TYPES_BY_ROLE = Object.freeze({
     'table.assignment_updated',
   ]),
 });
-const SUPPORTED_SCHEMA_VERSION = 9;
+const SUPPORTED_SCHEMA_VERSION = 10;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const OPAQUE_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
 
@@ -489,6 +489,8 @@ export function mapBusinessHoursResponse(settings, { includeVersion = false } = 
     closeTime: requireString(settings.closeTime),
     lastOrderTime: requireString(settings.lastOrderTime),
     isVisible: requireBoolean(settings.isVisible),
+    noticeText: requireString(settings.noticeText),
+    noticeEnabled: requireBoolean(settings.noticeEnabled),
     displayText: settings.displayText === null ? null : requireString(settings.displayText),
   };
   if (includeVersion) {

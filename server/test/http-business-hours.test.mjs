@@ -118,6 +118,8 @@ test('business-hours public/admin API validates versions, boundaries, and atomic
       closeTime: '24:00',
       lastOrderTime: '23:30',
       isVisible: true,
+      noticeText: '',
+      noticeEnabled: false,
       displayText: '17:00－24:00（ラストオーダー23:30）',
     });
 
@@ -140,7 +142,49 @@ test('business-hours public/admin API validates versions, boundaries, and atomic
     assert.equal(saved.statusCode, 200);
     assert.equal(saved.json.version, 2);
     assert.equal(saved.json.isVisible, false);
+    assert.equal(saved.json.noticeText, '');
+    assert.equal(saved.json.noticeEnabled, false);
     assert.equal(database.prepare('SELECT COUNT(*) AS count FROM event_log').get().count, 1);
+
+    const notice = await request({
+      port,
+      token: ADMIN_TOKEN,
+      method: 'PUT',
+      path: '/v1/admin/business-hours',
+      body: { expectedVersion: 2, openTime: '17:00', closeTime: '24:00', lastOrderTime: '23:30', isVisible: true, noticeText: '定休日\r\n臨時営業時間は店頭をご確認ください。', noticeEnabled: true },
+    });
+    assert.equal(notice.statusCode, 200);
+    assert.equal(notice.json.noticeText, '定休日\n臨時営業時間は店頭をご確認ください。');
+    assert.equal(notice.json.noticeEnabled, true);
+    assert.equal(database.prepare('SELECT COUNT(*) AS count FROM event_log').get().count, 2);
+
+    for (const invalidNotice of [
+      { noticeText: 'a'.repeat(501), noticeEnabled: false },
+      { noticeText: '', noticeEnabled: true },
+      { noticeText: '<b>HTML</b>', noticeEnabled: false },
+    ]) {
+      const invalidNoticeResponse = await request({
+        port,
+        token: ADMIN_TOKEN,
+        method: 'PUT',
+        path: '/v1/admin/business-hours',
+        body: { expectedVersion: 3, openTime: '17:00', closeTime: '24:00', lastOrderTime: '23:30', isVisible: true, ...invalidNotice },
+      });
+      assert.equal(invalidNoticeResponse.statusCode, 400);
+    }
+    assert.equal(database.prepare('SELECT COUNT(*) AS count FROM event_log').get().count, 2);
+
+    const oldClient = await request({
+      port,
+      token: ADMIN_TOKEN,
+      method: 'PUT',
+      path: '/v1/admin/business-hours',
+      body: { expectedVersion: 3, openTime: '17:00', closeTime: '24:00', lastOrderTime: '23:30', isVisible: true },
+    });
+    assert.equal(oldClient.statusCode, 200);
+    assert.equal(oldClient.json.noticeText, '定休日\n臨時営業時間は店頭をご確認ください。');
+    assert.equal(oldClient.json.noticeEnabled, true);
+    assert.equal(database.prepare('SELECT COUNT(*) AS count FROM event_log').get().count, 3);
 
     const conflict = await request({
       port,
@@ -151,9 +195,9 @@ test('business-hours public/admin API validates versions, boundaries, and atomic
     });
     assert.equal(conflict.statusCode, 409);
     for (const body of [
-      { expectedVersion: 2, openTime: '9:00', closeTime: '24:00', lastOrderTime: '23:30', isVisible: true },
-      { expectedVersion: 2, openTime: '17:00', closeTime: '30:00', lastOrderTime: '23:30', isVisible: true },
-      { expectedVersion: 2, openTime: '20:00', closeTime: '24:00', lastOrderTime: '19:00', isVisible: true },
+      { expectedVersion: 4, openTime: '9:00', closeTime: '24:00', lastOrderTime: '23:30', isVisible: true },
+      { expectedVersion: 4, openTime: '17:00', closeTime: '30:00', lastOrderTime: '23:30', isVisible: true },
+      { expectedVersion: 4, openTime: '20:00', closeTime: '24:00', lastOrderTime: '19:00', isVisible: true },
       { openTime: '17:00', closeTime: '24:00', lastOrderTime: '23:30', isVisible: true },
     ]) {
       const invalid = await request({ port, token: ADMIN_TOKEN, method: 'PUT', path: '/v1/admin/business-hours', body });
@@ -168,19 +212,19 @@ test('business-hours public/admin API validates versions, boundaries, and atomic
       body: { expectedVersion: 2, openTime: '17:00', closeTime: '24:00', lastOrderTime: '23:30', isVisible: true },
     });
     assert.equal(unauthorized.statusCode, 401);
-    assert.equal(database.prepare('SELECT COUNT(*) AS count FROM event_log').get().count, 1);
+    assert.equal(database.prepare('SELECT COUNT(*) AS count FROM event_log').get().count, 3);
 
     const boundary = await request({
       port,
       token: ADMIN_TOKEN,
       method: 'PUT',
       path: '/v1/admin/business-hours',
-      body: { expectedVersion: 2, openTime: '23:00', closeTime: '29:59', lastOrderTime: '29:59', isVisible: true },
+      body: { expectedVersion: 4, openTime: '23:00', closeTime: '29:59', lastOrderTime: '29:59', isVisible: true },
     });
     assert.equal(boundary.statusCode, 200);
     assert.equal(boundary.json.closeTime, '29:59');
     assert.equal(boundary.json.lastOrderTime, '29:59');
-    assert.equal(database.prepare('SELECT COUNT(*) AS count FROM event_log').get().count, 2);
+    assert.equal(database.prepare('SELECT COUNT(*) AS count FROM event_log').get().count, 4);
 
     const protectedAfter = Object.fromEntries(
       ['orders', 'order_items', 'table_sessions', 'menu_items'].map((table) => [table, database.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get().count]),
