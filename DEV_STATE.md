@@ -662,3 +662,18 @@ A90 WebView実機でtable 1の認証済み客席UIを受入確認し、確認さ
 - APIは既存の公開GET／管理GET／expectedVersion付き管理PUTを拡張する方針。管理PUTは認証・400・409・トランザクション・成功時イベント1件を維持し、公開GETはnoticeが空欄またはOFFなら表示用noticeを返さない。
 - 予定変更ファイルは`docs/schema-v10-migration.sql`、`docs/openapi-v1.yaml`、`server/src/db/database.mjs`、`server/src/business-hours/*`、`server/src/http/http-server.mjs`、`server/src/http/http-response.mjs`、`prototype/src/business-hours.js`、`prototype/src/admin-pairing.js`、`prototype/src/App.jsx`、`prototype/src/styles.css`および対応テスト。必要に応じてbusiness-hoursイベントの既存allow-listも更新する。
 - 次段階のUIは営業時間ブロック下に「その他ご案内」ボタンを表示し、空欄またはOFFではボタンを生成しない。ポップアップは「営業日・営業時間のご案内」、本文スクロール、×／「閉じる」を備える。今回は未実装で停止した。
+## 2026-09-19 その他ご案内 v10 checkpoint
+
+- safe-copyはschema v10、PID 8956で稼働中。DB targetはsafe-copy、production=false。
+- 正式営業時間は18:00–22:30、ラストオーダー22:00、表示ON。
+- その他ご案内は本文あり・表示ONで正式採用した。version 5、event_log 343件を維持している。
+- A90アプリアイコンからユーザー目視PASS。保存後の管理画面再読込と客席ポップアップ表示を確認した。
+- 保存後に本文が消えた原因は、prototypeのnormalizeBusinessHoursがnoticeText／noticeEnabledを破棄していたこと。管理・公開GETのraw notice値を保持し、保存後再GET値が送信値と一致した場合だけ成功表示するよう修正した。
+- 修正後は管理画面再読込、客席ポップアップ、複数行本文、旧payloadによるnotice値維持、OFF時のボタン非表示を隔離DBでPASSした。
+- server 385/385 PASS、prototype 107/107 PASS、Vite build PASS、integrity_check=ok、foreign key違反0。
+- production DB、pairing、注文は未操作。safe-copyの営業時間PUTは今回の修正では行っていない。
+- 次の不急タスクとして、タクシー・運転代行案内機能を記録する。
+  - お客様自身で呼び出す案内
+  - タクシー／運転代行の連絡先一覧
+  - 当店住所固定表示
+  - 管理画面で住所・名称・電話・備考・表示順・表示状態を編集
