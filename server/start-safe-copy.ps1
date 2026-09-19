@@ -151,6 +151,11 @@ function Get-DatabaseIdentity {
   }
 }
 
+function Test-SupportedSafeCopySchema {
+  param([Parameter(Mandatory)][int]$SchemaVersion)
+  return $SchemaVersion -eq 8 -or $SchemaVersion -eq 9
+}
+
 function Get-ChildProcessEnvironment {
   $environment = @{}
   foreach ($entry in [Environment]::GetEnvironmentVariables('Process').GetEnumerator()) {
@@ -339,8 +344,9 @@ function Test-ExistingRuntime {
   try { $health = Get-Health "http://127.0.0.1:$stateApiPort/v1/health" } catch { return [pscustomobject]@{ valid = $false; reason = "health unavailable: $($_.Exception.Message)"; processId = $stateProcessId; webPort = $stateWebPort; apiPort = $stateApiPort } }
   try { $healthBody = $health.Content | ConvertFrom-Json } catch { return [pscustomobject]@{ valid = $false; reason = 'health JSON invalid'; processId = $stateProcessId; webPort = $stateWebPort; apiPort = $stateApiPort } }
   $identity = Get-DatabaseIdentity -Path $stateDatabasePath
-  if ($health.StatusCode -ne 200 -or $healthBody.status -ne 'ready' -or $healthBody.db -ne 'ready' -or $healthBody.schemaVersion -ne 8 -or $health.Headers['X-Warun-Environment'] -ne 'safe-copy' -or $health.Headers['X-Warun-Database-Target'] -ne 'safe-copy' -or $health.Headers['X-Warun-Database-Identity'] -ne $identity -or (Get-HealthProcessId -HealthResponse $health) -ne $stateProcessId) { return [pscustomobject]@{ valid = $false; reason = 'health identity mismatch'; processId = $stateProcessId; webPort = $stateWebPort; apiPort = $stateApiPort } }
-  [pscustomobject]@{ valid = $true; reason = 'matched'; processId = $stateProcessId; webPort = $stateWebPort; apiPort = $stateApiPort; webPids = $webPids; apiPids = $apiPids; health = $health; healthBody = $healthBody; process = $process }
+  $schemaVersion = [int]$healthBody.schemaVersion
+  if ($health.StatusCode -ne 200 -or $healthBody.status -ne 'ready' -or $healthBody.db -ne 'ready' -or -not (Test-SupportedSafeCopySchema -SchemaVersion $schemaVersion) -or $health.Headers['X-Warun-Environment'] -ne 'safe-copy' -or $health.Headers['X-Warun-Database-Target'] -ne 'safe-copy' -or $health.Headers['X-Warun-Database-Identity'] -ne $identity -or (Get-HealthProcessId -HealthResponse $health) -ne $stateProcessId) { return [pscustomobject]@{ valid = $false; reason = 'health identity mismatch'; processId = $stateProcessId; webPort = $stateWebPort; apiPort = $stateApiPort; schemaVersion = $schemaVersion } }
+  [pscustomobject]@{ valid = $true; reason = 'matched'; migrationRequired = ($schemaVersion -eq 8); schemaVersion = $schemaVersion; processId = $stateProcessId; webPort = $stateWebPort; apiPort = $stateApiPort; webPids = $webPids; apiPids = $apiPids; health = $health; healthBody = $healthBody; process = $process }
 }
 
 function Invoke-RuntimeStatus {
@@ -350,7 +356,10 @@ function Invoke-RuntimeStatus {
   try {
     $result = Test-ExistingRuntime -State $state
     Write-Output "Runtime identity: $($result.reason)"
-    if ($result.valid) { Write-Output "Runtime process: PID $($result.processId), Web/API listeners verified" }
+    if ($result.valid) {
+      $migrationState = if ($result.migrationRequired) { 'migration required (schema v8)' } else { 'schema v9' }
+      Write-Output "Runtime process: PID $($result.processId), Web/API listeners verified, $migrationState"
+    }
   } catch {
     Write-Output "Runtime identity: unverified ($($_.Exception.Message))"
   }
@@ -495,7 +504,7 @@ try {
 
   $health = Get-Health "http://127.0.0.1:$ApiPort/v1/health"
   $healthBody = $health.Content | ConvertFrom-Json
-  if ($health.StatusCode -ne 200 -or $healthBody.status -ne 'ready' -or $healthBody.db -ne 'ready' -or $healthBody.schemaVersion -ne 8) { throw 'safe-copy health/schema check failed.' }
+  if ($health.StatusCode -ne 200 -or $healthBody.status -ne 'ready' -or $healthBody.db -ne 'ready' -or $healthBody.schemaVersion -ne 9) { throw 'safe-copy health/schema check failed.' }
   if ($health.Headers['X-Warun-Environment'] -ne 'safe-copy' -or $health.Headers['X-Warun-Database-Target'] -ne 'safe-copy' -or $health.Headers['X-Warun-Database-Identity'] -ne (Get-DatabaseIdentity $DatabasePath)) { throw 'The running process is not identified as the requested safe-copy runtime.' }
   if ((Get-HealthProcessId -HealthResponse $health) -ne $processId) { throw 'Health belongs to a different process than the safe-copy listener.' }
   $preflight = Get-AdminPreflight -Token $SafeCopyAdminToken -Port $ApiPort
