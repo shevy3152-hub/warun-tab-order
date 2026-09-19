@@ -6,6 +6,7 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+$TargetSchemaVersion = 10
 
 $ProjectRoot = if ([string]::IsNullOrWhiteSpace($ProjectRoot)) {
   Split-Path -Parent $PSScriptRoot
@@ -50,7 +51,7 @@ function Get-ReadyHealth {
     if ($response.StatusCode -eq 200 -and
         $body.status -eq 'ready' -and
         $body.db -eq 'ready' -and
-        $body.schemaVersion -eq 9 -and
+        $body.schemaVersion -eq $TargetSchemaVersion -and
         (Get-HeaderFirst -Headers $response.Headers -Name 'X-Warun-Environment') -eq 'safe-copy' -and
         (Get-HeaderFirst -Headers $response.Headers -Name 'X-Warun-Database-Target') -eq 'safe-copy') {
       return $response
@@ -135,7 +136,7 @@ try {
     $health = Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$ApiPort/v1/health" -Method Get -TimeoutSec 5
   }
   $healthBody = $health.Content | ConvertFrom-Json
-  if ($health.StatusCode -ne 200 -or $healthBody.status -ne 'ready' -or $healthBody.db -ne 'ready' -or $healthBody.schemaVersion -ne 9) {
+  if ($health.StatusCode -ne 200 -or $healthBody.status -ne 'ready' -or $healthBody.db -ne 'ready' -or $healthBody.schemaVersion -ne $TargetSchemaVersion) {
     throw 'safe-copy healthがreadyになりませんでした。'
   }
   if ((Get-HeaderFirst -Headers $health.Headers -Name 'X-Warun-Environment') -ne 'safe-copy' -or
