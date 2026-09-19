@@ -628,3 +628,37 @@ A90 WebView実機でtable 1の認証済み客席UIを受入確認し、確認さ
 - 静的画像追加後は `prototype` で `pnpm run build` を実行する必要がある。Vite buildはPASSした。
 - safe-copy schema v6、`integrity_check=ok`、foreign key違反0件。production DBは変更していない。
 - production反映、実機A90確認、pairing、注文送信は未実施。
+
+## 2026-09-19 本日の営業時間 checkpoint
+
+営業時間設定機能をsafe-copyへ反映し、ユーザーによるA90確認PASSとして受入した。schema v8からv9へのmigrationは正式safe-copy launcherの起動時に1回だけ実行し、営業時間PUTは行わず初期値を確認した。
+
+- checkpoint commit 1: `e3b45a4` `fix: support safe-copy schema upgrade shutdown`
+- checkpoint commit 2: `116b434` `feat: add editable business hours`
+- safe-copy最終PID: `4428`
+- safe-copy DB: `server/var/safe-copies/initial-menu-20260818.sqlite3`
+- schema v9、DB target `safe-copy`、`production=false`
+- 初期値: 開始17:00、終了24:00、ラストオーダー23:30、表示ON、version 1
+- localhost／LAN healthはHTTP 200、`ready`、`db=ready`。LAN IPv4は`192.168.11.6`。
+- 管理GET、公開GET、管理画面、客席画面、JS/CSSはHTTP 200。未認証管理PUTは401。管理画面で正式値を表示確認し、保存は押していない。
+- ユーザーA90確認PASS。A90 URLは`http://192.168.11.6:25173/customer/customer-01`。
+- 開始前後のlive read-only値: `menu_items=90`、`orders=20`、`order_items=33`、`table_sessions=6`、`image layouts=10`、`event_log=339`、最新event ID=`339`、`integrity_check=ok`、foreign key違反0。
+- live safe-copyでは一時変更・復元PUTを行っていない。隔離検証の一時変更・復元は隔離DBのみで実施し、live event_logは不変だった。
+- 反映前バックアップ: `server/var/safe-copies/backups/initial-menu-20260818-before-business-hours-v9-20260919-181940.sqlite3`。SHA-256は`A293A6ECF0A755AC5491F41C55AFC4D003D3338AD2D13FF0CB195EA87C91CC1E`。schema v8、WAL 0 bytes、integrity `ok`、foreign key違反0。
+- `business_hours.updated`イベントはmigrationおよび今回の確認では発生していない。
+- prototype 107/107 PASS、server 384/384 PASS、Vite build PASS、PowerShell構文PASS、launcher関連テストPASS、`git diff --check` PASS。
+- production DB、pairing、注文、A90操作、stage・pushは実施していない。`prototype/CONTEXT.md`と既存未追跡ファイルは保全した。
+
+### その他ご案内 実装前調査
+
+実装は開始せず、既存コードとAPIの調査のみ行った。
+
+- 現行営業時間表示は`prototype/src/App.jsx`の`BusinessHoursText`を共通利用し、客席左赤レールとスタッフ画面へ公開GET値を表示している。
+- 管理編集は同ファイルの`BusinessHoursEditor`、APIクライアントは`prototype/src/business-hours.js`と`prototype/src/admin-pairing.js`に集約されている。
+- server側は`server/src/business-hours/business-hours-repository.mjs`、`server/src/http/http-server.mjs`、`server/src/http/http-response.mjs`、`server/src/db/database.mjs`が中心で、OpenAPIは`docs/openapi-v1.yaml`にある。
+- 固定営業時間の残存表示は上記共通表示とfallback初期値に限定され、その他ご案内用の既存notice項目や専用APIは未実装だった。
+- 予定migrationはschema v9→v10。`business_hours`へ`notice_text`（TEXT、最大500文字、改行可、HTML不可）と`notice_enabled`（boolean相当）を追加し、既存営業時間とversion互換を維持する。
+- 欠損・未migration時はnoticeを空欄／OFFとして扱い、既存営業時間のfallbackは維持する。既存の注文、商品、カテゴリー、画像、端末、pairing、event_logの既存イベント形式には影響させない。
+- APIは既存の公開GET／管理GET／expectedVersion付き管理PUTを拡張する方針。管理PUTは認証・400・409・トランザクション・成功時イベント1件を維持し、公開GETはnoticeが空欄またはOFFなら表示用noticeを返さない。
+- 予定変更ファイルは`docs/schema-v10-migration.sql`、`docs/openapi-v1.yaml`、`server/src/db/database.mjs`、`server/src/business-hours/*`、`server/src/http/http-server.mjs`、`server/src/http/http-response.mjs`、`prototype/src/business-hours.js`、`prototype/src/admin-pairing.js`、`prototype/src/App.jsx`、`prototype/src/styles.css`および対応テスト。必要に応じてbusiness-hoursイベントの既存allow-listも更新する。
+- 次段階のUIは営業時間ブロック下に「その他ご案内」ボタンを表示し、空欄またはOFFではボタンを生成しない。ポップアップは「営業日・営業時間のご案内」、本文スクロール、×／「閉じる」を備える。今回は未実装で停止した。
