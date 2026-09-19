@@ -89,14 +89,21 @@ test("customer menu uses major category navigation with a collapsible rail", () 
 test("customer categories collapse after selection while the product list keeps its own scroll", () => {
   assert.match(customerScreen, /const \[drinkCategoryNavOpen, setDrinkCategoryNavOpen\] = useState\(true\)/);
   assert.match(customerScreen, /currentMajorCategory\.id === "drink" && !drinkCategoryNavOpen \? <button className="category-return-button category-return-button--inline"/);
-  assert.match(customerScreen, />酒類選択に戻る<\/button>/);
+  assert.match(customerScreen, />飲み物一覧に戻る<\/button>/);
   assert.match(customerScreen, /const restoreDrinkCategoryNavigation = \(\) => \{[\s\S]*setDrinkCategoryNavOpen\(true\)[\s\S]*setShochuSelection\(null\)[\s\S]*setSakeSelection\(null\)/);
   assert.match(customerScreen, /onClick=\{\(event\) => \{ event\.stopPropagation\(\); restoreDrinkCategoryNavigation\(\); \}\}/);
   const restoreBlock = customerScreen.slice(customerScreen.indexOf("const restoreDrinkCategoryNavigation"), customerScreen.indexOf("const collapseMajorNavOnMenuTap"));
   assert.doesNotMatch(restoreBlock, /setModal\(/);
   assert.match(customerScreen, /setDrinkCategoryNavOpen\(false\)/);
   assert.match(customerScreen, /menu-heading[\s\S]*menu-heading__breadcrumb[\s\S]*category-return-button category-return-button--inline/);
-  assert.match(styles, /\.category-return-button--inline \{[\s\S]*min-height: 44px[\s\S]*padding: 0 10px[\s\S]*border: 3px solid var\(--red\)[\s\S]*background: #fff1d8[\s\S]*font-size: 13px/);
+  assert.match(customerScreen, /menu-heading \$\{currentMajorCategory\.id === "drink" \? "menu-heading--drink" : ""\}/);
+  assert.match(styles, /\.menu-heading--drink \{ padding-bottom: 12px; \}/);
+  assert.match(customerScreen, /currentCategory\?\.id === "shochu" \? "menu-heading--shochu" : ""/);
+  assert.match(styles, /\.menu-heading--shochu \{ padding-top: 7px; padding-bottom: 24px; \}/);
+  assert.match(styles, /\.menu-heading--shochu \.menu-heading__breadcrumb \{ margin-top: 8px; \}/);
+  assert.match(styles, /\.menu-heading--shochu \.category-return-button--inline \{ position: relative; top: 2px; \}/);
+  assert.match(styles, /@media \(max-width: 1350px\) \{[\s\S]*\.menu-heading\.menu-heading--shochu \{ padding-bottom: 24px; \}/);
+  assert.match(styles, /\.category-return-button--inline \{[\s\S]*min-height: 52px[\s\S]*padding: 0 12px[\s\S]*border: 3px solid var\(--red\)[\s\S]*background: #fff1d8[\s\S]*font-size: 18px/);
   assert.match(styles, /\.menu-list \{[\s\S]*overflow-y: auto/);
   assert.match(styles, /\.category-return-button \{[\s\S]*min-height: 44px/);
   assert.doesNotMatch(customerScreen, /category-nav-toggle|▲ 商品を見る|▼ カテゴリー/);
