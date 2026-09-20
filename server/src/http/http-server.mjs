@@ -12,6 +12,10 @@ import {
   isBusinessHoursRepositoryError,
 } from '../business-hours/business-hours-errors.mjs';
 import {
+  RIDE_GUIDANCE_ERROR_CODES,
+  isRideGuidanceRepositoryError,
+} from '../ride-guidance/ride-guidance-errors.mjs';
+import {
   CATALOG_ERROR_CODES,
   isCatalogRepositoryError,
 } from '../catalog/catalog-errors.mjs';
@@ -43,6 +47,8 @@ import {
   mapCustomerOrderHistoryResponse,
   mapCatalogWriteResponse,
   mapBusinessHoursResponse,
+  mapRideGuidanceResponse,
+  mapRideGuidanceWriteResponse,
   mapCategoryWriteResponse,
   mapMenuOrderingWriteResponse,
   mapDeviceConfigResponse,
@@ -66,6 +72,7 @@ import {
 const ROUTE_METHODS = new Map([
   ['/v1/health', 'GET'],
   ['/v1/business-hours', 'GET'],
+  ['/v1/ride-guidance', 'GET'],
   ['/v1/device/config', 'GET'],
   ['/v1/menu', 'GET'],
   ['/v1/orders', 'POST'],
@@ -87,6 +94,10 @@ const ROUTE_METHODS = new Map([
   ['/v1/admin/catalog/category', 'PUT'],
   ['/v1/admin/catalog/menu-order', 'PUT'],
   ['/v1/admin/business-hours', new Set(['GET', 'PUT'])],
+  ['/v1/admin/ride-guidance', 'GET'],
+  ['/v1/admin/ride-guidance/pickup', 'PUT'],
+  ['/v1/admin/ride-guidance/contacts', 'POST'],
+  ['/v1/admin/ride-guidance/contacts/order', 'PUT'],
 ]);
 const READ_ONLY_ROUTE_METHODS = new Map([
   ['/v1/health', 'GET'],
@@ -543,6 +554,15 @@ function mapApplicationError(error) {
     return createHttpError(HTTP_ERROR_CODES.INTERNAL_ERROR);
   }
 
+  if (isRideGuidanceRepositoryError(error)) {
+    if (error.code === RIDE_GUIDANCE_ERROR_CODES.INVALID_WRITE_REQUEST) return createHttpError(HTTP_ERROR_CODES.BAD_REQUEST);
+    if (error.code === RIDE_GUIDANCE_ERROR_CODES.VERSION_CONFLICT) return createHttpError(HTTP_ERROR_CODES.RIDE_GUIDANCE_CONFLICT);
+    if (error.code === RIDE_GUIDANCE_ERROR_CODES.CONTACT_NOT_FOUND) return createHttpError(HTTP_ERROR_CODES.NOT_FOUND);
+    if (error.code === RIDE_GUIDANCE_ERROR_CODES.CONTACT_ORDER_MISMATCH) return createHttpError(HTTP_ERROR_CODES.BAD_REQUEST);
+    if (error.code === RIDE_GUIDANCE_ERROR_CODES.DATABASE_FAILURE && hasBusyCause(error)) return createHttpError(HTTP_ERROR_CODES.SERVICE_UNAVAILABLE);
+    return createHttpError(HTTP_ERROR_CODES.INTERNAL_ERROR);
+  }
+
   if (isOrderRepositoryError(error)) {
     if (error.code === ORDER_ERROR_CODES.DEVICE_NOT_REGISTERED) return authenticationFailed();
     if (
@@ -787,6 +807,7 @@ function createConfiguredHttpServer({
   diagnosticRecorder = undefined,
   menuDiagnosticRecorder = undefined,
   businessHours = undefined,
+  rideGuidance = undefined,
 } = {}, { integrated }) {
   if (
     !authenticator
@@ -842,7 +863,10 @@ function createConfiguredHttpServer({
 
     const handle = async () => {
       const target = requestTarget(request.url);
-      const configuredMethods = routeMethods.get(target.path);
+      let configuredMethods = routeMethods.get(target.path);
+      if (!configuredMethods && integrated && /^\/v1\/admin\/ride-guidance\/contacts\/[A-Za-z0-9_-]{1,64}$/.test(target.path)) {
+        configuredMethods = new Set(['PUT', 'DELETE']);
+      }
       if (!configuredMethods) {
         drainRequest(request);
         throw createHttpError(HTTP_ERROR_CODES.NOT_FOUND);
@@ -885,6 +909,16 @@ function createConfiguredHttpServer({
         writeJsonResponse(response, {
           statusCode: 200,
           body: mapBusinessHoursResponse(settings),
+          requestId,
+        });
+        return;
+      }
+
+      if (target.path === '/v1/ride-guidance') {
+        drainRequest(request);
+        writeJsonResponse(response, {
+          statusCode: 200,
+          body: mapRideGuidanceResponse(requireService(rideGuidance, 'getPublicGuidance').getPublicGuidance()),
           requestId,
         });
         return;
@@ -992,6 +1026,53 @@ function createConfiguredHttpServer({
           body: mapBusinessHoursResponse(result, { includeVersion: true }),
           requestId,
         });
+        return;
+      }
+
+      if (target.path === '/v1/admin/ride-guidance') {
+        authorizeDeviceRole(principal, ['admin']);
+        drainRequest(request);
+        writeJsonResponse(response, {
+          statusCode: 200,
+          body: mapRideGuidanceResponse(requireService(rideGuidance, 'getAdminGuidance').getAdminGuidance(), { includeHidden: true }),
+          requestId,
+        });
+        return;
+      }
+
+      if (target.path === '/v1/admin/ride-guidance/pickup') {
+        authorizeDeviceRole(principal, ['admin']);
+        const result = requireService(rideGuidance, 'updatePickup').updatePickup(principal, await readJsonBody(request));
+        await notifyCommittedSafely(sseHub, result);
+        writeJsonResponse(response, { statusCode: 200, body: mapRideGuidanceWriteResponse(result), requestId });
+        return;
+      }
+
+      if (target.path === '/v1/admin/ride-guidance/contacts') {
+        authorizeDeviceRole(principal, ['admin']);
+        const result = requireService(rideGuidance, 'addContact').addContact(principal, await readJsonBody(request));
+        await notifyCommittedSafely(sseHub, result);
+        writeJsonResponse(response, { statusCode: 201, body: mapRideGuidanceWriteResponse(result), requestId });
+        return;
+      }
+
+      if (target.path === '/v1/admin/ride-guidance/contacts/order') {
+        authorizeDeviceRole(principal, ['admin']);
+        const result = requireService(rideGuidance, 'reorderContacts').reorderContacts(principal, await readJsonBody(request));
+        await notifyCommittedSafely(sseHub, result);
+        writeJsonResponse(response, { statusCode: 200, body: mapRideGuidanceWriteResponse(result), requestId });
+        return;
+      }
+
+      if (target.path.startsWith('/v1/admin/ride-guidance/contacts/')) {
+        authorizeDeviceRole(principal, ['admin']);
+        const contactId = target.path.slice('/v1/admin/ride-guidance/contacts/'.length);
+        const body = await readJsonBody(request);
+        const result = request.method === 'DELETE'
+          ? requireService(rideGuidance, 'deleteContact').deleteContact(principal, { ...body, id: contactId })
+          : requireService(rideGuidance, 'updateContact').updateContact(principal, { ...body, id: contactId });
+        await notifyCommittedSafely(sseHub, result);
+        writeJsonResponse(response, { statusCode: 200, body: mapRideGuidanceWriteResponse(result), requestId });
         return;
       }
 

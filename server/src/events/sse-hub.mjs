@@ -2,7 +2,7 @@ const EVENT_EPOCH_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f
 const EVENT_TYPE_PATTERN = /^[a-z0-9]+(?:[._-][a-z0-9]+)*$/;
 const EVENT_AUDIENCES = new Set(['customer', 'kitchen', 'admin']);
 const OPAQUE_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
-const EVENT_RESOURCES = new Set(['orders', 'menu', 'staffCalls', 'deviceConfig', 'businessHours']);
+const EVENT_RESOURCES = new Set(['orders', 'menu', 'staffCalls', 'deviceConfig', 'businessHours', 'rideGuidance']);
 const EVENT_TYPES_BY_AUDIENCE = Object.freeze({
   customer: new Set([
     'order.created', 'order.updated', 'order.completed',
@@ -22,6 +22,9 @@ const EVENT_TYPES_BY_AUDIENCE = Object.freeze({
     'staff_call.created', 'staff_call.resolved',
     'device.paired', 'device.revoked', 'table.assignment_updated',
     'business_hours.updated',
+    'ride_guidance.pickup_updated', 'ride_guidance.contact_created',
+    'ride_guidance.contact_updated', 'ride_guidance.contact_deleted',
+    'ride_guidance.contacts_reordered',
   ]),
 });
 

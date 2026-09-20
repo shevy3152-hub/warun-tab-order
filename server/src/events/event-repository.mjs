@@ -64,6 +64,7 @@ function eventResource(eventType) {
     return 'deviceConfig';
   }
   if (eventType === 'business_hours.updated') return 'businessHours';
+  if (eventType.startsWith('ride_guidance.')) return 'rideGuidance';
   throw repositoryError(
     EVENT_ERROR_CODES.DATABASE_FAILURE,
     'The stored event type is unsupported.',

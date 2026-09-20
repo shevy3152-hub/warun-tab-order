@@ -9,6 +9,7 @@ export const HTTP_ERROR_CODES = Object.freeze({
   ORDER_CONFLICT: 'ORDER_CONFLICT',
   CATALOG_CONFLICT: 'CATALOG_CONFLICT',
   BUSINESS_HOURS_CONFLICT: 'BUSINESS_HOURS_CONFLICT',
+  RIDE_GUIDANCE_CONFLICT: 'RIDE_GUIDANCE_CONFLICT',
   ORDER_NOT_FOUND: 'ORDER_NOT_FOUND',
   SESSION_NOT_FOUND: 'SESSION_NOT_FOUND',
   SESSION_CONFLICT: 'SESSION_CONFLICT',
@@ -70,6 +71,10 @@ const DEFINITIONS = Object.freeze({
   [HTTP_ERROR_CODES.BUSINESS_HOURS_CONFLICT]: Object.freeze({
     statusCode: 409,
     message: 'Business hours conflict with a newer version.',
+  }),
+  [HTTP_ERROR_CODES.RIDE_GUIDANCE_CONFLICT]: Object.freeze({
+    statusCode: 409,
+    message: 'Ride guidance conflicts with a newer version.',
   }),
   [HTTP_ERROR_CODES.ORDER_NOT_FOUND]: Object.freeze({
     statusCode: 404,

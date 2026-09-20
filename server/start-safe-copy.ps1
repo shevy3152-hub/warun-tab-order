@@ -18,7 +18,7 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
-$TargetSchemaVersion = 10
+$TargetSchemaVersion = 11
 
 $ServerRoot = $PSScriptRoot
 $ProjectRoot = Split-Path -Parent $ServerRoot

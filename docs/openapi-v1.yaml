@@ -21,6 +21,7 @@ tags:
   - name: Orders
   - name: StaffCalls
   - name: Admin
+  - name: RideGuidance
   - name: Events
 security:
   - bearerAuth: []
@@ -94,6 +95,172 @@ paths:
           $ref: '#/components/responses/AuthenticationFailed'
         '403':
           $ref: '#/components/responses/PermissionDenied'
+        '409':
+          $ref: '#/components/responses/VersionConflict'
+
+  /v1/ride-guidance:
+    get:
+      tags: [RideGuidance]
+      summary: タクシー・運転代行の案内情報を取得する
+      operationId: getPublicRideGuidance
+      security: []
+      responses:
+        '200':
+          description: お迎え先と表示中の連絡先。住所や連絡先が空でも正常応答する。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PublicRideGuidance'
+
+  /v1/admin/ride-guidance:
+    get:
+      tags: [Admin, RideGuidance]
+      summary: タクシー・運転代行の案内設定を取得する
+      operationId: getAdminRideGuidance
+      responses:
+        '200':
+          description: 非表示を含む案内設定
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminRideGuidance'
+        '401':
+          $ref: '#/components/responses/AuthenticationFailed'
+        '403':
+          $ref: '#/components/responses/PermissionDenied'
+
+  /v1/admin/ride-guidance/pickup:
+    put:
+      tags: [Admin, RideGuidance]
+      summary: 店舗のお迎え先情報を更新する
+      operationId: updateRideGuidancePickup
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateRideGuidancePickupRequest'
+      responses:
+        '200':
+          description: 更新後のお迎え先情報
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RideGuidancePickupWriteResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/AuthenticationFailed'
+        '403':
+          $ref: '#/components/responses/PermissionDenied'
+        '409':
+          $ref: '#/components/responses/VersionConflict'
+
+  /v1/admin/ride-guidance/contacts:
+    post:
+      tags: [Admin, RideGuidance]
+      summary: 連絡先を追加する
+      operationId: createRideGuidanceContact
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RideGuidanceContactWriteRequest'
+      responses:
+        '201':
+          description: 追加後の連絡先
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RideGuidanceContactWriteResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/AuthenticationFailed'
+        '403':
+          $ref: '#/components/responses/PermissionDenied'
+
+  /v1/admin/ride-guidance/contacts/order:
+    put:
+      tags: [Admin, RideGuidance]
+      summary: type内の連絡先表示順を更新する
+      operationId: reorderRideGuidanceContacts
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReorderRideGuidanceContactsRequest'
+      responses:
+        '200':
+          description: 更新後のtype内連絡先
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReorderedRideGuidanceContactsResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/AuthenticationFailed'
+        '403':
+          $ref: '#/components/responses/PermissionDenied'
+
+  /v1/admin/ride-guidance/contacts/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          $ref: '#/components/schemas/OpaqueId'
+    put:
+      tags: [Admin, RideGuidance]
+      summary: 連絡先を更新する
+      operationId: updateRideGuidanceContact
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateRideGuidanceContactRequest'
+      responses:
+        '200':
+          description: 更新後の連絡先
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RideGuidanceContactWriteResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/AuthenticationFailed'
+        '403':
+          $ref: '#/components/responses/PermissionDenied'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/VersionConflict'
+    delete:
+      tags: [Admin, RideGuidance]
+      summary: 連絡先を削除する
+      operationId: deleteRideGuidanceContact
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DeleteRideGuidanceContactRequest'
+      responses:
+        '200':
+          description: 削除した連絡先ID
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/AuthenticationFailed'
+        '403':
+          $ref: '#/components/responses/PermissionDenied'
+        '404':
+          $ref: '#/components/responses/NotFound'
         '409':
           $ref: '#/components/responses/VersionConflict'
 
@@ -1028,6 +1195,194 @@ components:
             $ref: '#/components/schemas/Problem'
 
   schemas:
+    RideGuidanceType:
+      type: string
+      enum: [taxi, driver_service]
+    RideGuidancePickup:
+      type: object
+      additionalProperties: false
+      required: [pickupLabel, pickupAddress]
+      properties:
+        pickupLabel:
+          type: string
+          maxLength: 100
+        pickupAddress:
+          type: string
+          maxLength: 300
+    AdminRideGuidancePickup:
+      allOf:
+        - $ref: '#/components/schemas/RideGuidancePickup'
+        - type: object
+          required: [version, updatedAtMs]
+          properties:
+            version:
+              type: integer
+              minimum: 0
+            updatedAtMs:
+              $ref: '#/components/schemas/TimestampMs'
+    RideGuidanceContact:
+      type: object
+      additionalProperties: false
+      required: [id, type, name, phone, note, isVisible, sortOrder, version, createdAtMs, updatedAtMs]
+      properties:
+        id:
+          $ref: '#/components/schemas/OpaqueId'
+        type:
+          $ref: '#/components/schemas/RideGuidanceType'
+        name:
+          type: string
+          maxLength: 100
+        phone:
+          type: string
+          maxLength: 30
+          pattern: '^[0-9 ()+-]+$'
+        note:
+          type: string
+          maxLength: 200
+        isVisible:
+          type: boolean
+        sortOrder:
+          type: integer
+          minimum: 0
+        version:
+          type: integer
+          minimum: 1
+        createdAtMs:
+          $ref: '#/components/schemas/TimestampMs'
+        updatedAtMs:
+          $ref: '#/components/schemas/TimestampMs'
+    PublicRideGuidanceContact:
+      type: object
+      additionalProperties: false
+      required: [id, type, name, phone, note, sortOrder]
+      properties:
+        id:
+          $ref: '#/components/schemas/OpaqueId'
+        type:
+          $ref: '#/components/schemas/RideGuidanceType'
+        name:
+          type: string
+          maxLength: 100
+        phone:
+          type: string
+          maxLength: 30
+          pattern: '^[0-9 ()+-]+$'
+        note:
+          type: string
+          maxLength: 200
+        sortOrder:
+          type: integer
+          minimum: 0
+    PublicRideGuidance:
+      type: object
+      additionalProperties: false
+      required: [pickup, contacts]
+      properties:
+        pickup:
+          $ref: '#/components/schemas/RideGuidancePickup'
+        contacts:
+          type: array
+          items:
+            $ref: '#/components/schemas/PublicRideGuidanceContact'
+    AdminRideGuidance:
+      type: object
+      additionalProperties: false
+      required: [pickup, contacts]
+      properties:
+        pickup:
+          $ref: '#/components/schemas/AdminRideGuidancePickup'
+        contacts:
+          type: array
+          items:
+            $ref: '#/components/schemas/RideGuidanceContact'
+    UpdateRideGuidancePickupRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion, pickupLabel, pickupAddress]
+      properties:
+        expectedVersion:
+          type: integer
+          minimum: 0
+        pickupLabel:
+          type: string
+          maxLength: 100
+        pickupAddress:
+          type: string
+          maxLength: 300
+    RideGuidanceContactWriteRequest:
+      type: object
+      additionalProperties: false
+      required: [type, name, phone, isVisible]
+      properties:
+        type:
+          $ref: '#/components/schemas/RideGuidanceType'
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        phone:
+          type: string
+          minLength: 1
+          maxLength: 30
+          pattern: '^[0-9 ()+.-]+$'
+        note:
+          type: string
+          maxLength: 200
+        isVisible:
+          type: boolean
+    UpdateRideGuidanceContactRequest:
+      allOf:
+        - $ref: '#/components/schemas/RideGuidanceContactWriteRequest'
+        - type: object
+          required: [expectedVersion]
+          properties:
+            expectedVersion:
+              type: integer
+              minimum: 1
+    DeleteRideGuidanceContactRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion]
+      properties:
+        expectedVersion:
+          type: integer
+          minimum: 1
+    ReorderRideGuidanceContactsRequest:
+      type: object
+      additionalProperties: false
+      required: [type, contactIds]
+      properties:
+        type:
+          $ref: '#/components/schemas/RideGuidanceType'
+        contactIds:
+          type: array
+          items:
+            $ref: '#/components/schemas/OpaqueId'
+    RideGuidancePickupWriteResponse:
+      type: object
+      additionalProperties: false
+      required: [pickup]
+      properties:
+        pickup:
+          $ref: '#/components/schemas/AdminRideGuidancePickup'
+    RideGuidanceContactWriteResponse:
+      type: object
+      additionalProperties: false
+      required: [contact]
+      properties:
+        contact:
+          $ref: '#/components/schemas/RideGuidanceContact'
+    ReorderedRideGuidanceContactsResponse:
+      type: object
+      additionalProperties: false
+      required: [type, contacts]
+      properties:
+        type:
+          $ref: '#/components/schemas/RideGuidanceType'
+        contacts:
+          type: array
+          items:
+            $ref: '#/components/schemas/RideGuidanceContact'
     PublicBusinessHours:
       type: object
       additionalProperties: false
@@ -1138,6 +1493,7 @@ components:
             - item_sold_out
             - invalid_quantity
             - version_conflict
+            - ride_guidance_conflict
             - order_completed
             - event_history_unavailable
             - server_busy
@@ -1998,7 +2354,7 @@ components:
       properties:
         resource:
           type: string
-          enum: [orders, menu, staffCalls, deviceConfig]
+          enum: [orders, menu, staffCalls, deviceConfig, businessHours, rideGuidance]
         refreshRequired:
           type: boolean
           const: true

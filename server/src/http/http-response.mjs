@@ -3,7 +3,7 @@ import { HTTP_ERROR_CODES, createHttpError } from './http-errors.mjs';
 const DEVICE_ROLES = new Set(['customer', 'kitchen', 'admin']);
 const ORDER_STATUSES = new Set(['new', 'active', 'completed']);
 const STAFF_CALL_STATUSES = new Set(['open', 'resolved']);
-const EVENT_RESOURCES = new Set(['orders', 'menu', 'staffCalls', 'deviceConfig', 'businessHours']);
+const EVENT_RESOURCES = new Set(['orders', 'menu', 'staffCalls', 'deviceConfig', 'businessHours', 'rideGuidance']);
 const EVENT_TYPES_BY_ROLE = Object.freeze({
   customer: new Set([
     'order.created',
@@ -37,10 +37,13 @@ const EVENT_TYPES_BY_ROLE = Object.freeze({
     'device.paired',
     'device.revoked',
     'business_hours.updated',
+    'ride_guidance.pickup_updated', 'ride_guidance.contact_created',
+    'ride_guidance.contact_updated', 'ride_guidance.contact_deleted',
+    'ride_guidance.contacts_reordered',
     'table.assignment_updated',
   ]),
 });
-const SUPPORTED_SCHEMA_VERSION = 10;
+const SUPPORTED_SCHEMA_VERSION = 11;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const OPAQUE_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
 
@@ -399,6 +402,10 @@ function mapEvent(event, audience, eventEpoch, previousEventId, lastEventId) {
       ? 'menu'
       : type.startsWith('staff_call.')
         ? 'staffCalls'
+        : type === 'business_hours.updated'
+          ? 'businessHours'
+        : type.startsWith('ride_guidance.')
+          ? 'rideGuidance'
         : 'deviceConfig';
   const resource = requireOneOf(payload.resource, EVENT_RESOURCES);
   if (resource !== expectedResource || requireBoolean(payload.refreshRequired) !== true) {
@@ -497,6 +504,53 @@ export function mapBusinessHoursResponse(settings, { includeVersion = false } = 
     response.version = requireInteger(settings.version);
     response.updatedAtMs = requireInteger(settings.updatedAtMs);
   }
+  return response;
+}
+
+function mapRideGuidanceContact(contact, { admin = false } = {}) {
+  const response = {
+    id: requireOpaqueId(contact.id),
+    type: requireOneOf(contact.type, new Set(['taxi', 'driver_service'])),
+    name: requireString(contact.name),
+    phone: requireString(contact.phone),
+    note: requireString(contact.note ?? ''),
+    sortOrder: requireInteger(contact.sortOrder),
+  };
+  if (admin) {
+    response.isVisible = requireBoolean(contact.isVisible);
+    response.version = requireInteger(contact.version);
+    response.createdAtMs = requireInteger(contact.createdAtMs);
+    response.updatedAtMs = requireInteger(contact.updatedAtMs);
+  }
+  return response;
+}
+
+export function mapRideGuidanceResponse(guidance, { includeHidden = false } = {}) {
+  requireObject(guidance);
+  const pickup = requireObject(guidance.pickup);
+  const contacts = requireArray(guidance.contacts).map((contact) => mapRideGuidanceContact(contact, { admin: includeHidden }));
+  const response = {
+    pickup: {
+      pickupLabel: requireString(pickup.pickupLabel),
+      pickupAddress: requireString(pickup.pickupAddress),
+    },
+    contacts,
+  };
+  if (includeHidden) {
+    response.pickup.version = requireInteger(pickup.version);
+    response.pickup.updatedAtMs = requireInteger(pickup.updatedAtMs);
+  }
+  return response;
+}
+
+export function mapRideGuidanceWriteResponse(result) {
+  requireObject(result);
+  const response = {};
+  if (Object.hasOwn(result, 'pickup')) response.pickup = mapRideGuidanceResponse({ pickup: result.pickup, contacts: [] }, { includeHidden: true }).pickup;
+  if (Object.hasOwn(result, 'contact')) response.contact = mapRideGuidanceContact(result.contact, { admin: true });
+  if (Object.hasOwn(result, 'contacts')) response.type = requireOneOf(result.type, new Set(['taxi', 'driver_service']));
+  if (Object.hasOwn(result, 'contacts')) response.contacts = requireArray(result.contacts).map((contact) => mapRideGuidanceContact(contact, { admin: true }));
+  if (Object.hasOwn(result, 'id')) response.id = requireOpaqueId(result.id);
   return response;
 }
 

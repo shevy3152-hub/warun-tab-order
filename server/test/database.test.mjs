@@ -161,19 +161,19 @@ function legacySchemaSql() {
   return schema;
 }
 
-test('new database creates its parent directory and applies schema v10', async () => {
+test('new database creates its parent directory and applies schema v11', async () => {
   await withTemporaryDatabase(({ databasePath }) => {
     const connection = initializeDatabase({ databasePath });
     assert.equal(existsSync(databasePath), true);
-    assert.equal(connection.schemaVersion, 10);
+    assert.equal(connection.schemaVersion, 11);
     connection.close();
   });
 });
 
-test('new database records PRAGMA user_version = 10', async () => {
+test('new database records PRAGMA user_version = 11', async () => {
   await withTemporaryDatabase(({ databasePath }) => {
     const connection = initializeDatabase({ databasePath });
-    assert.equal(pragmaValue(connection.database, 'user_version'), 10);
+    assert.equal(pragmaValue(connection.database, 'user_version'), 11);
     connection.close();
   });
 });
@@ -206,9 +206,9 @@ test('schema v7 migrates to v8 with every existing menu item in normal mode', as
     raw.close();
 
     const connection = initializeDatabase({ databasePath });
-    assert.equal(connection.schemaVersion, 10);
-    assert.equal(pragmaValue(connection.database, 'user_version'), 10);
-    assert.equal(connection.database.prepare('SELECT schema_version FROM system_state').get().schema_version, 10);
+    assert.equal(connection.schemaVersion, 11);
+    assert.equal(pragmaValue(connection.database, 'user_version'), 11);
+    assert.equal(connection.database.prepare('SELECT schema_version FROM system_state').get().schema_version, 11);
     assert.equal(connection.database.prepare("SELECT COUNT(*) AS count FROM menu_items WHERE ordering_mode = 'normal'").get().count, 1);
     assert.equal(connection.database.prepare('SELECT COUNT(*) AS count FROM menu_items').get().count, 1);
     assert.equal(connection.database.prepare('PRAGMA integrity_check').get().integrity_check, 'ok');
@@ -258,7 +258,7 @@ test('v8 clone migrates to v9 and rerunning the v9 migration is safe', async () 
   });
 });
 
-test('schema v9 clone migrates to v10 with notice defaults and no event', async () => {
+test('schema v9 clone migrates through v10 and v11 with notice defaults and no event', async () => {
   await withTemporaryDatabase(({ databasePath }) => {
     mkdirSync(dirname(databasePath), { recursive: true });
     const raw = new DatabaseSync(databasePath);
@@ -270,8 +270,8 @@ test('schema v9 clone migrates to v10 with notice defaults and no event', async 
     raw.close();
 
     const connection = initializeDatabase({ databasePath });
-    assert.equal(connection.schemaVersion, 10);
-    assert.equal(pragmaValue(connection.database, 'user_version'), 10);
+    assert.equal(connection.schemaVersion, 11);
+    assert.equal(pragmaValue(connection.database, 'user_version'), 11);
     const noticeDefaults = connection.database.prepare('SELECT notice_text, notice_enabled FROM business_hours').get();
     assert.equal(noticeDefaults.notice_text, '');
     assert.equal(noticeDefaults.notice_enabled, 0);
@@ -313,16 +313,16 @@ test('synchronous mode is FULL', async () => {
   });
 });
 
-test('a valid schema v10 database can be closed and reopened', async () => {
+test('a valid schema v11 database can be closed and reopened', async () => {
   await withTemporaryDatabase(({ databasePath }) => {
     initializeDatabase({ databasePath }).close();
     const reopened = initializeDatabase({ databasePath });
-    assert.equal(reopened.schemaVersion, 10);
+    assert.equal(reopened.schemaVersion, 11);
     reopened.close();
   });
 });
 
-test('reopening schema v10 preserves existing data', async () => {
+test('reopening schema v11 preserves existing data', async () => {
   await withTemporaryDatabase(({ databasePath }) => {
     const first = initializeDatabase({ databasePath });
     first.database.exec(`
@@ -453,9 +453,9 @@ test('legacy schema v1 migrates through schema v10 and assigns existing orders t
       WHERE order_id = ?
     `).get(ORDER_ID);
 
-    assert.equal(connection.schemaVersion, 10);
-    assert.equal(pragmaValue(connection.database, 'user_version'), 10);
-    assert.equal(connection.database.prepare('SELECT schema_version FROM system_state').get().schema_version, 10);
+    assert.equal(connection.schemaVersion, 11);
+    assert.equal(pragmaValue(connection.database, 'user_version'), 11);
+    assert.equal(connection.database.prepare('SELECT schema_version FROM system_state').get().schema_version, 11);
     assert.deepEqual({
       orders: connection.database.prepare('SELECT COUNT(*) AS count FROM orders').get().count,
       orderItems: connection.database.prepare('SELECT COUNT(*) AS count FROM order_items').get().count,
@@ -527,8 +527,8 @@ test('schema v4 fixture migrates through the formal v7 path while preserving cat
 
     const connection = initializeDatabase({ databasePath: v4Path });
     const database = connection.database;
-    assert.equal(connection.schemaVersion, 10);
-    assert.equal(pragmaValue(database, 'user_version'), 10);
+    assert.equal(connection.schemaVersion, 11);
+    assert.equal(pragmaValue(database, 'user_version'), 11);
     assert.equal(database.prepare('PRAGMA integrity_check').get().integrity_check, 'ok');
     assert.deepEqual({
       orders: database.prepare('SELECT COUNT(*) AS count FROM orders').get().count,
@@ -605,11 +605,11 @@ test('invalid item quantities are rejected by CHECK constraints', async () => {
   });
 });
 
-test('schema versions newer than v10 are rejected without migration', async () => {
+test('schema versions newer than v11 are rejected without migration', async () => {
   await withTemporaryDatabase(({ directory }) => {
     const databasePath = join(directory, 'version-5.sqlite3');
     const raw = new DatabaseSync(databasePath);
-    raw.exec('PRAGMA user_version = 11;');
+    raw.exec('PRAGMA user_version = 12;');
     raw.close();
 
     assert.throws(
