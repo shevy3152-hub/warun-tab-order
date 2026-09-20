@@ -357,7 +357,8 @@ h1, h2, h3, p { margin: 0; }
 .ride-guidance-customer__view { display: grid; gap: 12px; min-height: 0; }
 .ride-guidance-customer__pickup { position: sticky; top: 0; z-index: 2; display: grid; gap: 5px; padding: 8px 14px 10px; border-bottom: 2px solid var(--red); background: var(--paper); }
 .ride-guidance-customer__pickup strong { color: var(--red); font-size: 23px; overflow-wrap: anywhere; }
-.ride-guidance-customer__pickup p { margin: 0; line-height: 1.55; overflow-wrap: anywhere; white-space: pre-wrap; }
+.ride-guidance-customer__pickup-place { color: var(--ink); }
+.ride-guidance-customer__pickup p { margin: 0; font-size: 22px; line-height: 1.5; font-weight: 600; overflow-wrap: normal; white-space: nowrap; }
 .ride-guidance-customer__heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .ride-guidance-customer__heading h3 { color: var(--red); font-size: 26px; }
 .ride-guidance-customer__heading .button { flex: 0 0 auto; }

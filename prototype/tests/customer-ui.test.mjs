@@ -147,6 +147,7 @@ test("customer ride guidance uses public data and keeps the flow separate from o
   assert.match(appSource, /fetch\(`\$\{base\}\/ride-guidance`/);
   assert.match(appSource, /function RideGuidanceModal/);
   assert.match(appSource, /title=\{selectedType \? typeLabel : "タクシー・運転代行"\}/);
+  assert.match(appSource, /ride-guidance-customer__pickup-place/);
 assert.match(appSource, /const typeLabel = selectedType === "taxi" \? "タクシー" : "運転代行";/);
 assert.match(appSource, /title=\{selectedType \? typeLabel : "タクシー・運転代行"\}/);
   assert.doesNotMatch(appSource, /ride-guidance-customer__heading/);
@@ -169,6 +170,7 @@ assert.match(appSource, /title=\{selectedType \? typeLabel : "タクシー・運
   assert.match(styles, /\.ride-guidance-customer__footer--list \{ grid-template-columns: minmax\(0, 1fr\) minmax\(0, 1fr\); \}/);
   assert.match(styles, /\.modal--ride-guidance \.modal__body \{[\s\S]*padding: 10px 22px 14px/);
   assert.match(styles, /\.ride-guidance-customer__pickup \{ position: sticky; top: 0;[\s\S]*padding: 8px 14px 10px/);
+  assert.match(styles, /\.ride-guidance-customer__pickup p \{ margin: 0; font-size: 22px; line-height: 1\.5; font-weight: 600; overflow-wrap: normal; white-space: nowrap;/);
   assert.doesNotMatch(styles, /\.ride-guidance-customer__pickup[^}]*transform:/);
   assert.doesNotMatch(styles, /\.ride-guidance-customer__pickup[^}]*margin-top:\s*-/);
 });
