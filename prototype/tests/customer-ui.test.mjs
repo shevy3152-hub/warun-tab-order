@@ -142,6 +142,37 @@ test("customer common actions stay outside the independently scrolling content r
   assert.match(customerScreen, /タクシー・運転代行/);
 });
 
+test("customer ride guidance uses public data and keeps the flow separate from ordering", () => {
+  assert.match(appSource, /async function fetchPublicRideGuidance/);
+  assert.match(appSource, /fetch\(`\$\{base\}\/ride-guidance`/);
+  assert.match(appSource, /function RideGuidanceModal/);
+  assert.match(appSource, /title=\{selectedType \? typeLabel : "タクシー・運転代行"\}/);
+assert.match(appSource, /const typeLabel = selectedType === "taxi" \? "タクシー" : "運転代行";/);
+assert.match(appSource, /title=\{selectedType \? typeLabel : "タクシー・運転代行"\}/);
+  assert.doesNotMatch(appSource, /ride-guidance-customer__heading/);
+  assert.match(customerScreen, /const \[rideGuidanceType, setRideGuidanceType\] = useState\(null\)/);
+  assert.match(customerScreen, /const \[rideGuidanceState, setRideGuidanceState\]/);
+  assert.match(customerScreen, /onClick=\{openRideGuidance\}>タクシー・運転代行/);
+  assert.match(appSource, /お呼び出しはお客様からお願いします/);
+  assert.doesNotMatch(appSource, /種類選択に戻る/);
+  assert.match(appSource, /ride-guidance-customer__footer--list/);
+  assert.match(appSource, /onClick=\{onBack\}>戻る/);
+  assert.match(appSource, /現在、連絡先を表示できません/);
+  assert.match(appSource, /現在登録されている連絡先はありません/);
+  assert.match(appSource, /お迎え先住所は現在準備中です/);
+  assert.match(appSource, /role="dialog" aria-modal="true" aria-labelledby=\{titleId\}/);
+  assert.match(styles, /\.modal--ride-guidance \{/);
+  assert.match(styles, /\.ride-guidance-customer__pickup \{ position: sticky/);
+  assert.match(styles, /\.ride-guidance-customer__contacts strong \{/);
+  assert.match(styles, /\.modal--ride-guidance \.modal__body \{[\s\S]*overflow-y: auto/);
+  assert.match(styles, /\.ride-guidance-customer__footer \.button \{[\s\S]*min-height: 52px/);
+  assert.match(styles, /\.ride-guidance-customer__footer--list \{ grid-template-columns: minmax\(0, 1fr\) minmax\(0, 1fr\); \}/);
+  assert.match(styles, /\.modal--ride-guidance \.modal__body \{[\s\S]*padding: 10px 22px 14px/);
+  assert.match(styles, /\.ride-guidance-customer__pickup \{ position: sticky; top: 0;[\s\S]*padding: 8px 14px 10px/);
+  assert.doesNotMatch(styles, /\.ride-guidance-customer__pickup[^}]*transform:/);
+  assert.doesNotMatch(styles, /\.ride-guidance-customer__pickup[^}]*margin-top:\s*-/);
+});
+
 test("customer footer keeps information replaceable and shows smoking availability", () => {
   assert.match(appSource, /const CUSTOMER_FOOTER_INFORMATION = ""/);
   assert.match(customerScreen, /CUSTOMER_FOOTER_INFORMATION \? <span>\{CUSTOMER_FOOTER_INFORMATION\}<\/span> : null/);
@@ -308,6 +339,27 @@ test("business-hours settings use the management API and shared public display",
   assert.match(styles, /\.business-hours-editor__/);
   assert.doesNotMatch(appSource, /<div className="customer-hours"><b>本日の営業時間<\/b><span>17:00/);
   assert.doesNotMatch(appSource, /<div className="hours"><b>本日の営業時間<\/b><span>17:00/);
+});
+
+test("ride guidance management stays in an independent collapsible section", () => {
+  assert.match(appSource, /function RideGuidanceEditor\(\{ adminApiMode \}\)/);
+  assert.match(appSource, /<RideGuidanceEditor adminApiMode=\{adminApiMode\} \/>/);
+  assert.match(appSource, /aria-label="タクシー・運転代行案内"/);
+  assert.match(appSource, /aria-expanded=\{expanded\}/);
+  assert.match(appSource, /fetchAdminRideGuidance/);
+  assert.match(appSource, /await load\(\);/);
+  assert.match(appSource, /expectedVersion: state\.pickup\.version/);
+  assert.match(appSource, /saveAdminRideGuidancePickup/);
+  assert.match(appSource, /createAdminRideGuidanceContact/);
+  assert.match(appSource, /updateAdminRideGuidanceContact/);
+  assert.match(appSource, /deleteAdminRideGuidanceContact/);
+  assert.match(appSource, /saveAdminRideGuidanceOrdering/);
+  assert.match(appSource, /window\.confirm\(`「\$\{contact\.name\}」を削除しますか？`\)/);
+  assert.match(appSource, /登録されている連絡先はありません/);
+  assert.match(appSource, /disabled=\{state\.saving\}/);
+  assert.match(styles, /\.ride-guidance-editor \{/);
+  assert.match(styles, /\.ride-guidance-row__actions \{/);
+  assert.match(styles, /\.ride-guidance-groups \{ display: grid; grid-template-columns: repeat\(2/);
 });
 
 test("expanded customer rail uses a smaller wrapping subcategory label while collapsed stays at 20px", () => {

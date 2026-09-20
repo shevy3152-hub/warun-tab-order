@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { fetchAdminBusinessHours, saveAdminBusinessHours, saveAdminCategory, saveAdminMenuItem, saveAdminMenuOrdering } from '../src/admin-pairing.js';
+import { createAdminRideGuidanceContact, deleteAdminRideGuidanceContact, fetchAdminRideGuidance, saveAdminRideGuidanceOrdering, saveAdminRideGuidancePickup, updateAdminRideGuidanceContact, fetchAdminBusinessHours, saveAdminBusinessHours, saveAdminCategory, saveAdminMenuItem, saveAdminMenuOrdering } from '../src/admin-pairing.js';
 
 const env = {
   WARUN_ADMIN_API_TOKEN: 'admin-token-for-test',
@@ -118,4 +118,44 @@ test('business-hours admin client preserves 409 conflict and does not report suc
     }),
     (error) => error.code === 'BUSINESS_HOURS_CONFLICT' && error.status === 409,
   );
+});
+
+test('ride-guidance admin client uses the authenticated CRUD and ordering contracts', async () => {
+  const requests = [];
+  const responseBodies = [
+    { pickup: { pickupLabel: 'お迎え先（当店）', pickupAddress: '架空住所', version: 3 } , contacts: [] },
+    { pickup: { pickupLabel: 'お迎え先（当店）', pickupAddress: '架空住所', version: 4 }, contacts: [] },
+    { contact: { id: 'contact-1', type: 'taxi', name: '架空タクシー', phone: '03-0000-0000', note: '', isVisible: true, version: 1 } },
+    { contact: { id: 'contact-1', type: 'driver_service', name: '架空代行', phone: '+81 (0)3 0000 0000', note: '架空', isVisible: false, version: 2 } },
+    { deleted: true },
+    { type: 'taxi', contacts: [] },
+  ];
+  const fetchImpl = async (url, options = {}) => {
+    requests.push({ url, options, body: options.body ? JSON.parse(options.body) : null });
+    return { ok: true, status: 200, json: async () => responseBodies.shift() };
+  };
+  await fetchAdminRideGuidance({ env, fetchImpl });
+  await saveAdminRideGuidancePickup({ env, pickup: { pickupLabel: 'お迎え先（当店）', pickupAddress: '架空住所', version: 3 }, expectedVersion: 3, fetchImpl });
+  await createAdminRideGuidanceContact({ env, contact: { type: 'taxi', name: '架空タクシー', phone: '03-0000-0000', note: '', isVisible: true }, fetchImpl });
+  await updateAdminRideGuidanceContact({ env, contact: { id: 'contact-1', type: 'driver_service', name: '架空代行', phone: '+81 (0)3 0000 0000', note: '架空', isVisible: false, version: 1 }, fetchImpl });
+  await deleteAdminRideGuidanceContact({ env, contactId: 'contact-1', expectedVersion: 2, fetchImpl });
+  await saveAdminRideGuidanceOrdering({ env, type: 'taxi', contactIds: ['contact-2', 'contact-1'], fetchImpl });
+  assert.equal(requests[0].url, `${env.WARUN_API_BASE}/admin/ride-guidance`);
+  assert.equal(requests[1].options.method, 'PUT');
+  assert.equal(requests[1].body.expectedVersion, 3);
+  assert.equal(requests[2].options.method, 'POST');
+  assert.equal(requests[3].body.type, 'driver_service');
+  assert.equal(requests[4].options.method, 'DELETE');
+  assert.equal(requests[5].body.type, 'taxi');
+  assert.deepEqual(requests[5].body.contactIds, ['contact-2', 'contact-1']);
+  assert.equal(requests[2].options.headers.Authorization, 'Bearer admin-token-for-test');
+});
+
+test('ride-guidance admin client preserves 409, 400, and 401 without reporting success', async () => {
+  for (const [status, code] of [[409, 'RIDE_GUIDANCE_CONFLICT'], [400, 'RIDE_GUIDANCE_INVALID'], [401, 'AUTH_TOKEN_MISMATCH']]) {
+    await assert.rejects(
+      () => saveAdminRideGuidancePickup({ env, pickup: { pickupLabel: '', pickupAddress: '', version: 1 }, fetchImpl: async () => ({ ok: false, status, json: async () => ({ error: { code } }) }) }),
+      (error) => error.status === status && error.code === code,
+    );
+  }
 });

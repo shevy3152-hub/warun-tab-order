@@ -343,3 +343,81 @@ export async function saveAdminImageLayouts({ env = globalThis, menuItemId, expe
   if (body?.menuItemId !== menuItemId || !Number.isSafeInteger(body.version)) throw new Error("Image layout response was invalid.");
   return body;
 }
+
+async function rideGuidanceRequest({ env = globalThis, path, method = "GET", body, fetchImpl = env.fetch, message }) {
+  const { token, base, fetchImpl: request } = assertAdminTransport({ env, fetchImpl });
+  let response;
+  try {
+    response = await request(`${base}${path}`, {
+      method,
+      headers: {
+        Accept: "application/json",
+        ...(body === undefined ? {} : { "Content-Type": "application/json" }),
+        Authorization: `Bearer ${token}`,
+      },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    });
+  } catch {
+    throw new AdminPairingError(message, { status: 503, code: "API_UNAVAILABLE" });
+  }
+  if (!response.ok) await responseError(response, message, "RIDE_GUIDANCE_REQUEST_FAILED");
+  try {
+    return await response.json();
+  } catch {
+    throw new AdminPairingError("案内APIの応答が不正です。", { status: 503, code: "API_UNAVAILABLE" });
+  }
+}
+
+export async function fetchAdminRideGuidance({ env = globalThis, fetchImpl = env.fetch } = {}) {
+  const body = await rideGuidanceRequest({ env, fetchImpl, path: "/admin/ride-guidance", message: "案内設定を取得できません。" });
+  if (!body?.pickup || !Array.isArray(body.contacts)) throw new AdminPairingError("案内設定の応答が不正です。", { status: 503, code: "API_UNAVAILABLE" });
+  return body;
+}
+
+export async function saveAdminRideGuidancePickup({ env = globalThis, pickup, expectedVersion = pickup?.version ?? 0, fetchImpl = env.fetch } = {}) {
+  const body = await rideGuidanceRequest({
+    env, fetchImpl, path: "/admin/ride-guidance/pickup", method: "PUT",
+    body: { expectedVersion, pickupLabel: pickup?.pickupLabel ?? "", pickupAddress: pickup?.pickupAddress ?? "" },
+    message: "お迎え先を保存できません。",
+  });
+  if (!body?.pickup) throw new AdminPairingError("お迎え先の保存応答が不正です。", { status: 503, code: "API_UNAVAILABLE" });
+  return body;
+}
+
+export async function createAdminRideGuidanceContact({ env = globalThis, contact, fetchImpl = env.fetch } = {}) {
+  const body = await rideGuidanceRequest({
+    env, fetchImpl, path: "/admin/ride-guidance/contacts", method: "POST",
+    body: { type: contact?.type, name: contact?.name, phone: contact?.phone, note: contact?.note ?? "", isVisible: contact?.isVisible !== false },
+    message: "連絡先を追加できません。",
+  });
+  if (!body?.contact?.id) throw new AdminPairingError("連絡先の追加応答が不正です。", { status: 503, code: "API_UNAVAILABLE" });
+  return body;
+}
+
+export async function updateAdminRideGuidanceContact({ env = globalThis, contact, expectedVersion = contact?.version, fetchImpl = env.fetch } = {}) {
+  const body = await rideGuidanceRequest({
+    env, fetchImpl, path: `/admin/ride-guidance/contacts/${encodeURIComponent(contact?.id ?? "")}`, method: "PUT",
+    body: { expectedVersion, type: contact?.type, name: contact?.name, phone: contact?.phone, note: contact?.note ?? "", isVisible: contact?.isVisible !== false },
+    message: "連絡先を保存できません。",
+  });
+  if (!body?.contact?.id) throw new AdminPairingError("連絡先の保存応答が不正です。", { status: 503, code: "API_UNAVAILABLE" });
+  return body;
+}
+
+export async function deleteAdminRideGuidanceContact({ env = globalThis, contactId, expectedVersion, fetchImpl = env.fetch } = {}) {
+  const body = await rideGuidanceRequest({
+    env, fetchImpl, path: `/admin/ride-guidance/contacts/${encodeURIComponent(contactId ?? "")}`, method: "DELETE",
+    body: { expectedVersion }, message: "連絡先を削除できません。",
+  });
+  if (body?.deleted !== true) throw new AdminPairingError("連絡先の削除応答が不正です。", { status: 503, code: "API_UNAVAILABLE" });
+  return body;
+}
+
+export async function saveAdminRideGuidanceOrdering({ env = globalThis, type, contactIds, fetchImpl = env.fetch } = {}) {
+  const body = await rideGuidanceRequest({
+    env, fetchImpl, path: "/admin/ride-guidance/contacts/order", method: "PUT",
+    body: { type, contactIds }, message: "連絡先の並び順を保存できません。",
+  });
+  if (body?.type !== type || !Array.isArray(body.contacts)) throw new AdminPairingError("連絡先の並び替え応答が不正です。", { status: 503, code: "API_UNAVAILABLE" });
+  return body;
+}

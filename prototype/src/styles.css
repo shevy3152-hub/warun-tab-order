@@ -347,6 +347,37 @@ h1, h2, h3, p { margin: 0; }
 .modal--business-hours-notice .modal__body { min-height: 0; }
 .business-hours-notice__body { max-height: min(52vh, 420px); overflow-y: auto; overscroll-behavior: contain; }
 .business-hours-notice__body p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.75; font-size: 18px; }
+.modal--ride-guidance { width: min(760px, 92vw); max-height: calc(100dvh - 32px); overflow: hidden; display: flex; flex-direction: column; }
+.modal--ride-guidance .modal__body { min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 10px 22px 14px; }
+.modal--ride-guidance .modal__footer { flex: 0 0 auto; padding: 0 22px 16px; }
+.ride-guidance-customer__select { display: grid; gap: 18px; }
+.ride-guidance-customer__lead { margin: 4px 0 8px; text-align: center; font-size: clamp(23px, 3vw, 32px); line-height: 1.45; font-weight: 900; }
+.ride-guidance-customer__choices { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.ride-guidance-customer__choices .button { min-height: 68px; font-size: 22px; }
+.ride-guidance-customer__view { display: grid; gap: 12px; min-height: 0; }
+.ride-guidance-customer__pickup { position: sticky; top: 0; z-index: 2; display: grid; gap: 5px; padding: 8px 14px 10px; border-bottom: 2px solid var(--red); background: var(--paper); }
+.ride-guidance-customer__pickup strong { color: var(--red); font-size: 23px; overflow-wrap: anywhere; }
+.ride-guidance-customer__pickup p { margin: 0; line-height: 1.55; overflow-wrap: anywhere; white-space: pre-wrap; }
+.ride-guidance-customer__heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.ride-guidance-customer__heading h3 { color: var(--red); font-size: 26px; }
+.ride-guidance-customer__heading .button { flex: 0 0 auto; }
+.ride-guidance-customer__contacts { display: grid; gap: 10px; }
+.ride-guidance-customer__contacts article { display: grid; gap: 4px; padding: 12px 14px; border-left: 5px solid var(--red); background: #fffaf3; }
+.ride-guidance-customer__contacts h4 { margin: 0; font-size: 20px; overflow-wrap: anywhere; }
+.ride-guidance-customer__contacts strong { color: var(--red); font: 900 clamp(23px, 3vw, 32px)/1.15 var(--font-ui); letter-spacing: .03em; overflow-wrap: anywhere; }
+.ride-guidance-customer__contacts p { margin: 2px 0 0; line-height: 1.5; overflow-wrap: anywhere; white-space: pre-wrap; }
+.ride-guidance-customer__state { margin: 8px 0; padding: 18px 12px; border: 1px dashed var(--line); text-align: center; font-weight: 800; }
+.ride-guidance-customer__state.is-error { border-color: var(--red); color: var(--red); }
+.ride-guidance-customer__footer { margin-top: 0; display: grid; justify-content: stretch; gap: 18px; }
+.ride-guidance-customer__footer--list { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+.ride-guidance-customer__footer .button { width: 100%; min-height: 52px; }
+@media (max-width: 620px) {
+  .modal--ride-guidance .modal__body { padding: 10px 14px 14px; }
+  .modal--ride-guidance .modal__footer { padding: 0 14px 12px; }
+  .ride-guidance-customer__choices { grid-template-columns: 1fr; }
+  .ride-guidance-customer__heading { align-items: stretch; flex-direction: column; }
+  .ride-guidance-customer__footer { gap: 12px; }
+}
 .modal-lead { text-align: center; font-size: 18px; font-weight: 700; padding-block: 20px; }
 .modal-actions { margin-top: 26px; display: flex; justify-content: flex-end; gap: 12px; }
 .shochu-selection-modal { min-height: 0; display: flex; flex-direction: column; gap: 10px; }
@@ -568,6 +599,43 @@ h1, h2, h3, p { margin: 0; }
 .business-hours-notice-editor textarea { width: 100%; box-sizing: border-box; min-height: 104px; padding: 10px 12px; border: 1px solid var(--line); background: #fff; color: var(--ink); font: inherit; line-height: 1.5; resize: vertical; }
 .business-hours-notice-editor__meta { display: flex; align-items: center; justify-content: space-between; gap: 12px; color: var(--muted); font-size: 12px; font-weight: 800; }
 .business-hours-notice-editor__meta label { color: var(--ink); font-size: 13px; }
+.ride-guidance-editor { margin: 18px 0; border: 1px solid var(--line); background: #fffaf3; }
+.ride-guidance-editor__header { min-height: 78px; display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 14px 18px; border-bottom: 1px solid var(--line); background: #efe5d5; }
+.ride-guidance-editor__header h2, .ride-guidance-subheading h3 { margin: 3px 0 0; color: var(--red); }
+.ride-guidance-editor__header p, .ride-guidance-subheading p { margin: 4px 0 0; color: var(--muted); font-size: 12px; font-weight: 700; }
+.ride-guidance-editor__body { display: grid; gap: 18px; padding: 18px; }
+.ride-guidance-pickup, .ride-guidance-contacts { border: 1px solid var(--line); background: #fff; padding: 16px; }
+.ride-guidance-subheading { display: flex; align-items: start; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
+.ride-guidance-subheading h3 { font-size: 20px; }
+.ride-guidance-pickup__fields { display: grid; grid-template-columns: minmax(180px, .8fr) minmax(320px, 1.6fr) auto; gap: 12px; align-items: end; }
+.ride-guidance-editor label { display: grid; gap: 5px; min-width: 0; font-size: 12px; font-weight: 800; }
+.ride-guidance-editor input, .ride-guidance-editor select { width: 100%; height: 40px; border: 1px solid var(--line); background: var(--paper); padding: 0 10px; font: inherit; }
+.ride-guidance-editor input:focus, .ride-guidance-editor select:focus { outline: 2px solid var(--red); outline-offset: 1px; }
+.ride-guidance-editor__message { margin: 0; font-size: 12px; font-weight: 900; }
+.ride-guidance-editor__message.is-success, .ride-guidance-row__message.is-success { color: #247345; }
+.ride-guidance-editor__message.is-error, .ride-guidance-row__message.is-error { color: var(--red); }
+.ride-guidance-add { display: grid; grid-template-columns: 150px minmax(160px, 1fr) minmax(190px, 1.1fr) minmax(160px, 1fr) 100px auto; gap: 10px; align-items: end; padding: 12px; border: 1px dashed var(--line); background: #fffaf3; }
+.ride-guidance-checkbox { display: flex !important; grid-template-columns: auto 1fr; align-items: center; gap: 6px !important; min-height: 40px; white-space: nowrap; }
+.ride-guidance-checkbox input { width: 18px; height: 18px; }
+.ride-guidance-groups { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin-top: 16px; }
+.ride-guidance-group { min-width: 0; border-top: 4px solid var(--red); background: #fffaf3; }
+.ride-guidance-group h4 { margin: 0; padding: 10px 12px; font-size: 18px; color: var(--red); }
+.ride-guidance-row { padding: 12px; border-top: 1px solid var(--line); }
+.ride-guidance-row__fields { display: grid; grid-template-columns: minmax(130px, 1.1fr) minmax(170px, 1.25fr) minmax(120px, 1fr) 145px 92px; gap: 8px; align-items: end; }
+.ride-guidance-row__actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; margin-top: 10px; }
+.ride-guidance-row__actions .button { min-width: 58px; min-height: 34px; padding: 0 10px; font-size: 12px; }
+.ride-guidance-row__actions .button--danger { border: 1px solid var(--line); color: var(--red); background: transparent; }
+.ride-guidance-row__message { margin: 8px 0 0; font-size: 12px; font-weight: 900; }
+.ride-guidance-empty { margin: 0; padding: 18px 12px; color: var(--muted); font-size: 13px; font-weight: 800; }
+.ride-guidance-editor__hint { margin: 0; color: var(--muted); font-weight: 800; }
+@media (max-width: 1200px) {
+  .ride-guidance-add { grid-template-columns: 130px minmax(130px, 1fr) minmax(160px, 1fr) minmax(120px, 1fr) 90px auto; }
+  .ride-guidance-row__fields { grid-template-columns: minmax(120px, 1fr) minmax(150px, 1.2fr) minmax(100px, 1fr) 125px 88px; }
+}
+@media (max-width: 900px) {
+  .ride-guidance-pickup__fields, .ride-guidance-add, .ride-guidance-groups { grid-template-columns: 1fr; }
+  .ride-guidance-row__fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
 .menu-reorder-toolbar { display: flex; align-items: end; gap: 14px; padding: 14px 0; border-bottom: 1px solid var(--line); }
 .menu-reorder-toolbar label { display: grid; gap: 6px; font-size: 12px; font-weight: 800; }
 .menu-reorder-toolbar select { min-width: 280px; height: 48px; border: 1px solid var(--line); background: var(--paper); padding: 0 12px; }

@@ -23,7 +23,7 @@ import {
 import { createCustomerOrderClient, resolveOrderApiConfig } from "./order-outbox.js";
 import { claimCustomerDevice, createIndexedDbCredentialStore, loadOrCreateCustomerDevice, pairingClaimErrorMessage, runtimeForCustomerCredentials } from "./device-credentials.js";
 import { customerOrderErrorCategory, customerOrderNoticeFromOutboxEvent } from "./customer-order-notice.js";
-import { AdminPairingError, configuredAdminToken, fetchAdminBusinessHours, fetchAdminDiagnostics, fetchAdminMenu, fetchAdminOrderHistory, fetchAdminPairingPreflight, issueCustomerPairingCode, revokeAdminDevice, saveAdminBusinessHours, saveAdminMenuItem, saveAdminImageLayouts, saveAdminCategory, saveAdminMenuOrdering } from "./admin-pairing.js";
+import { AdminPairingError, configuredAdminToken, createAdminRideGuidanceContact, deleteAdminRideGuidanceContact, fetchAdminBusinessHours, fetchAdminDiagnostics, fetchAdminMenu, fetchAdminOrderHistory, fetchAdminPairingPreflight, fetchAdminRideGuidance, issueCustomerPairingCode, revokeAdminDevice, saveAdminBusinessHours, saveAdminImageLayouts, saveAdminCategory, saveAdminMenuItem, saveAdminMenuOrdering, saveAdminRideGuidanceOrdering, saveAdminRideGuidancePickup, updateAdminRideGuidanceContact } from "./admin-pairing.js";
 import { closeKitchenTableSession, fetchKitchenOrderHistory, fetchKitchenSnapshot, kitchenApiConfigured, markKitchenItemServed } from "./kitchen-api.js";
 import { bootstrapCustomerOrderClient } from "./customer-bootstrap.js";
 import { taxExcludedYen } from "./pricing.js";
@@ -530,6 +530,36 @@ async function fetchPublicBusinessHoursWithNotice({ env = globalThis } = {}) {
   }
 }
 
+async function fetchPublicRideGuidance({ env = globalThis } = {}) {
+  const configured = typeof env?.WARUN_API_BASE === "string" ? env.WARUN_API_BASE.trim() : "";
+  let base;
+  try {
+    base = new URL(configured || "/v1", env.location?.origin).toString().replace(/\/+$/, "");
+  } catch {
+    throw new Error("RIDE_GUIDANCE_API_UNAVAILABLE");
+  }
+  const response = await env.fetch(`${base}/ride-guidance`, { headers: { Accept: "application/json" } });
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  const body = await response.json();
+  if (!body?.pickup || !Array.isArray(body.contacts)) throw new Error("RIDE_GUIDANCE_RESPONSE_INVALID");
+  return {
+    pickup: {
+      pickupLabel: typeof body.pickup.pickupLabel === "string" ? body.pickup.pickupLabel : "",
+      pickupAddress: typeof body.pickup.pickupAddress === "string" ? body.pickup.pickupAddress : "",
+    },
+    contacts: body.contacts
+      .filter((contact) => contact?.isVisible !== false)
+      .filter((contact) => contact?.type === "taxi" || contact?.type === "driver_service")
+      .map((contact) => ({
+        type: contact.type,
+        name: typeof contact.name === "string" ? contact.name : "",
+        phone: typeof contact.phone === "string" ? contact.phone : "",
+        note: typeof contact.note === "string" ? contact.note : "",
+        sortOrder: Number.isSafeInteger(contact.sortOrder) ? contact.sortOrder : 0,
+      })),
+  };
+}
+
 function BusinessHoursText({ settings, className }) {
   if (!settings?.isVisible) return null;
   const display = businessHoursDisplay(settings);
@@ -644,6 +674,17 @@ function Launcher({ state, updateState }) {
   );
 }
 
+function RideGuidanceModal({ dataState, selectedType, onSelectType, onBack, onClose }) {
+  const typeLabel = selectedType === "taxi" ? "タクシー" : "運転代行";
+  const contacts = dataState.data?.contacts.filter((contact) => contact.type === selectedType).sort((a, b) => a.sortOrder - b.sortOrder) ?? [];
+  return <Modal title={selectedType ? typeLabel : "タクシー・運転代行"} titleId="ride-guidance-title" onClose={onClose} wide className="modal--ride-guidance" footer={<div className={`modal-actions ride-guidance-customer__footer${selectedType ? " ride-guidance-customer__footer--list" : ""}`}>{selectedType ? <button type="button" className="button button--quiet button--large" onClick={onBack}>戻る</button> : null}<button type="button" className="button button--primary button--large" onClick={onClose}>閉じる</button></div>}>
+    {selectedType ? <div className="ride-guidance-customer__view">
+      <div className="ride-guidance-customer__pickup"><span className="section-kicker">PICKUP LOCATION</span><strong>{dataState.data?.pickup.pickupLabel || "お迎え先"}</strong><p>{dataState.data?.pickup.pickupAddress || "お迎え先住所は現在準備中です"}</p></div>
+      {dataState.loading ? <p className="ride-guidance-customer__state" role="status">連絡先を読み込み中です</p> : dataState.error ? <p className="ride-guidance-customer__state is-error" role="alert">現在、連絡先を表示できません</p> : contacts.length ? <div className="ride-guidance-customer__contacts">{contacts.map((contact, index) => <article key={`${contact.type}-${contact.sortOrder}-${index}`}><h4>{contact.name}</h4><strong>{contact.phone}</strong>{contact.note ? <p>{contact.note}</p> : null}</article>)}</div> : <p className="ride-guidance-customer__state">現在登録されている連絡先はありません</p>}
+    </div> : <div className="ride-guidance-customer__select"><p className="ride-guidance-customer__lead">お呼び出しはお客様からお願いします</p>{dataState.error ? <p className="ride-guidance-customer__state is-error" role="alert">現在、連絡先を表示できません</p> : null}<div className="ride-guidance-customer__choices"><button type="button" className="button button--primary button--large" onClick={() => onSelectType("taxi")}>タクシー</button><button type="button" className="button button--primary button--large" onClick={() => onSelectType("driver_service")}>運転代行</button></div></div>}
+  </Modal>;
+}
+
 function CustomerScreen({ state, updateState, deviceId, orderClient, customerDeviceConfig, theme = CUSTOMER_TEST_THEME }) {
   const customerTheme = normalizeCustomerTheme(theme);
   const localDevice = state.devices.find((item) => item.deviceId === deviceId) ?? state.devices[0];
@@ -683,6 +724,9 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
     ["edamame", 1], ["dashimaki", 1], ["beer", 2], ["lemon", 1], ["karaage", 1], ["yakitori", 2], ["otoshi", 2],
   ].map(([menuItemId, quantity]) => [menuItemId, { menuItemId, quantity }])));
   const [modal, setModal] = useState(null);
+  const [rideGuidanceType, setRideGuidanceType] = useState(null);
+  const [rideGuidanceState, setRideGuidanceState] = useState({ loading: true, error: false, data: null });
+  const [rideGuidanceRefreshKey, setRideGuidanceRefreshKey] = useState(0);
   const [showBusinessNotice, setShowBusinessNotice] = useState(false);
   const [detailItem, setDetailItem] = useState(null);
   const [sakeSelection, setSakeSelection] = useState(null);
@@ -760,6 +804,18 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
       });
     return () => { cancelled = true; };
   }, [apiMode, modal, orderClient, historyRefreshKey]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setRideGuidanceState((current) => ({ ...current, loading: true, error: false }));
+    void fetchPublicRideGuidance({ env: window }).then((data) => {
+      if (cancelled) return;
+      setRideGuidanceState({ loading: false, error: false, data });
+    }).catch(() => {
+      if (!cancelled) setRideGuidanceState({ loading: false, error: true, data: null });
+    });
+    return () => { cancelled = true; };
+  }, [rideGuidanceRefreshKey]);
 
   useEffect(() => {
     if (!apiMode || typeof orderClient.subscribeInvalidations !== "function") return undefined;
@@ -1061,9 +1117,23 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
     setSakeSelection(null);
     setSakeSelectionError("");
   };
+  const openRideGuidance = () => {
+    setRideGuidanceType(null);
+    setRideGuidanceRefreshKey((current) => current + 1);
+    setModal("ride-guidance");
+  };
+  const closeRideGuidance = () => {
+    setRideGuidanceType(null);
+    setModal(null);
+  };
+  const selectedRideContacts = rideGuidanceState.data?.contacts
+    .filter((contact) => contact.type === rideGuidanceType)
+    .sort((a, b) => a.sortOrder - b.sortOrder);
+  const rideGuidanceTypeLabel = rideGuidanceType === "taxi" ? "タクシー" : "運転代行";
 
   return (
     <div className={`customer-app ${majorNavOpen ? "" : "customer-app--category-collapsed"}`} data-customer-theme={customerTheme}>
+      {modal === "ride-guidance" ? <RideGuidanceModal dataState={rideGuidanceState} selectedType={rideGuidanceType} onSelectType={setRideGuidanceType} onBack={() => setRideGuidanceType(null)} onClose={closeRideGuidance} /> : null}
       <aside className="customer-sidebar">
         <div className="customer-title customer-title--horizontal"><span>IZAKAYA WARUN</span></div>
         {majorNavOpen ? <nav className="category-nav" aria-label="大分類カテゴリー">
@@ -1077,7 +1147,7 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
           <IconButton icon={ClipboardText} onClick={() => setModal("history")}>注文履歴</IconButton>
           <IconButton icon={Bell} onClick={() => setModal("staff")}>スタッフを呼ぶ</IconButton>
           <IconButton icon={CurrencyJpy} onClick={() => setModal("feature")}>お会計</IconButton>
-          <IconButton icon={Car} onClick={() => setModal("feature")}>タクシー・運転代行</IconButton>
+          <IconButton icon={Car} onClick={openRideGuidance}>タクシー・運転代行</IconButton>
           <div className="table-label">テーブル <b>{device.tableId}</b></div>
         </header>
 
@@ -1473,6 +1543,118 @@ function ImageLayoutEditor({ item, onClose, onSaved }) {
       </div>
     </div>
   </Modal>;
+}
+
+function rideGuidanceErrorMessage(error, action = "操作") {
+  if (error?.status === 409) return "409：別の管理端末で更新されています。最新値を再取得しました。";
+  if (error?.status === 401 || error?.code === "AUTH_TOKEN_MISMATCH") return "401：管理者tokenを確認してください。";
+  if (error?.status === 400) return "400：入力内容を確認してください。";
+  if (error?.status === 503 || error?.code === "API_UNAVAILABLE") return `${action}できません。管理APIを確認してください。`;
+  return `${action}できませんでした。`;
+}
+
+const RIDE_GUIDANCE_TYPES = [
+  ["taxi", "タクシー"],
+  ["driver_service", "運転代行"],
+];
+
+function RideGuidanceEditor({ adminApiMode }) {
+  const [expanded, setExpanded] = useState(true);
+  const [state, setState] = useState({ loading: adminApiMode, saving: false, error: "", message: "", pickup: null, contacts: [], rowMessages: {} });
+  const [pickupDraft, setPickupDraft] = useState({ pickupLabel: "", pickupAddress: "" });
+  const [newContact, setNewContact] = useState({ type: "taxi", name: "", phone: "", note: "", isVisible: true });
+
+  const load = async ({ keepMessage = false } = {}) => {
+    if (!adminApiMode) return null;
+    setState((current) => ({ ...current, loading: true, error: "", ...(keepMessage ? {} : { message: "" }) }));
+    try {
+      const data = await fetchAdminRideGuidance({ env: window });
+      const contacts = [...data.contacts].sort((a, b) => a.type.localeCompare(b.type) || a.sortOrder - b.sortOrder || a.id.localeCompare(b.id));
+      setState((current) => ({ ...current, loading: false, error: "", pickup: data.pickup, contacts, ...(keepMessage ? {} : { message: "" }) }));
+      setPickupDraft({ pickupLabel: data.pickup.pickupLabel ?? "", pickupAddress: data.pickup.pickupAddress ?? "" });
+      return { ...data, contacts };
+    } catch (error) {
+      setState((current) => ({ ...current, loading: false, error: rideGuidanceErrorMessage(error, "案内設定を取得"), pickup: current.pickup, contacts: current.contacts }));
+      throw error;
+    }
+  };
+
+  useEffect(() => {
+    if (!adminApiMode) {
+      setState((current) => ({ ...current, loading: false }));
+      return undefined;
+    }
+    void load();
+    return undefined;
+  }, [adminApiMode]);
+
+  const runMutation = async (key, mutation, action) => {
+    if (state.saving) return;
+    setState((current) => ({ ...current, saving: true, error: "", message: "", rowMessages: key && key !== "pickup" ? { ...current.rowMessages, [key]: "" } : current.rowMessages }));
+    try {
+      await mutation();
+      await load();
+      setState((current) => ({ ...current, saving: false, message: "保存しました。", rowMessages: key && key !== "pickup" ? { ...current.rowMessages, [key]: "保存しました。" } : current.rowMessages }));
+      return true;
+    } catch (error) {
+      if (error?.status === 409) {
+        try { await load({ keepMessage: true }); } catch { /* Preserve the conflict message if refetch also fails. */ }
+      }
+      const message = rideGuidanceErrorMessage(error, action);
+      setState((current) => ({ ...current, saving: false, error: key === "pickup" ? message : current.error, message: key === "pickup" ? message : current.message, rowMessages: key && key !== "pickup" ? { ...current.rowMessages, [key]: message } : current.rowMessages }));
+      return false;
+    }
+  };
+
+  const savePickup = () => {
+    if (!state.pickup) return;
+    void runMutation("pickup", () => saveAdminRideGuidancePickup({ env: window, pickup: pickupDraft, expectedVersion: state.pickup.version }), "お迎え先を保存");
+  };
+  const addContact = (event) => {
+    event.preventDefault();
+    void (async () => {
+      const saved = await runMutation("new-contact", () => createAdminRideGuidanceContact({ env: window, contact: { ...newContact, name: newContact.name.trim(), phone: newContact.phone.trim(), note: newContact.note.trim() } }), "連絡先を追加");
+      if (saved) setNewContact((current) => ({ ...current, name: "", phone: "", note: "" }));
+    })();
+  };
+  const updateContact = (contact) => {
+    void runMutation(contact.id, () => updateAdminRideGuidanceContact({ env: window, contact: { ...contact, name: contact.name.trim(), phone: contact.phone.trim(), note: contact.note.trim() }, expectedVersion: contact.version }), "連絡先を保存");
+  };
+  const deleteContact = (contact) => {
+    if (typeof window.confirm === "function" && !window.confirm(`「${contact.name}」を削除しますか？`)) return;
+    void runMutation(contact.id, () => deleteAdminRideGuidanceContact({ env: window, contactId: contact.id, expectedVersion: contact.version }), "連絡先を削除");
+  };
+  const moveContact = (type, index, direction) => {
+    const group = state.contacts.filter((contact) => contact.type === type);
+    const targetIndex = index + direction;
+    if (targetIndex < 0 || targetIndex >= group.length) return;
+    const ids = group.map((contact) => contact.id);
+    [ids[index], ids[targetIndex]] = [ids[targetIndex], ids[index]];
+    void runMutation(`order-${type}`, () => saveAdminRideGuidanceOrdering({ env: window, type, contactIds: ids }), "連絡先の並び順を保存");
+  };
+
+  const updateContactDraft = (id, patch) => setState((current) => ({ ...current, message: "", rowMessages: { ...current.rowMessages, [id]: "" }, contacts: current.contacts.map((contact) => contact.id === id ? { ...contact, ...patch } : contact) }));
+
+  return <section className="ride-guidance-editor" aria-label="タクシー・運転代行案内">
+    <header className="ride-guidance-editor__header">
+      <div><span className="section-kicker">RIDE GUIDANCE</span><h2>タクシー・運転代行案内</h2><p>客席へ案内するお迎え先と連絡先を管理します。電話発信や外部配車は行いません。</p></div>
+      <button className="button button--quiet" type="button" aria-expanded={expanded} onClick={() => setExpanded((current) => !current)}>{expanded ? "閉じる" : "開く"}</button>
+    </header>
+    {expanded ? <div className="ride-guidance-editor__body">
+      {state.loading && !state.pickup ? <p role="status">案内設定を読み込み中です。</p> : null}
+      {!adminApiMode ? <p className="ride-guidance-editor__hint">管理API接続時に案内設定を編集できます。</p> : null}
+      {state.error ? <p className="ride-guidance-editor__message is-error" role="alert">{state.error}</p> : null}
+      <section className="ride-guidance-pickup" aria-label="お迎え先設定">
+        <div className="ride-guidance-subheading"><div><h3>お迎え先</h3><p>客席から案内する店舗のお迎え先です。</p></div>{state.message ? <p className="ride-guidance-editor__message is-success" role="status">{state.message}</p> : null}</div>
+        <div className="ride-guidance-pickup__fields"><label>呼び出し先名称<input value={pickupDraft.pickupLabel} maxLength={100} placeholder="例：お迎え先（当店）" onChange={(event) => { setPickupDraft((current) => ({ ...current, pickupLabel: event.target.value })); setState((current) => ({ ...current, message: "" })); }} disabled={!state.pickup || state.saving} /></label><label>店舗住所<input value={pickupDraft.pickupAddress} maxLength={300} onChange={(event) => { setPickupDraft((current) => ({ ...current, pickupAddress: event.target.value })); setState((current) => ({ ...current, message: "" })); }} disabled={!state.pickup || state.saving} /></label><button className="button button--primary" type="button" onClick={savePickup} disabled={!state.pickup || state.saving}>{state.saving ? "保存中" : "保存"}</button></div>
+      </section>
+      <section className="ride-guidance-contacts" aria-label="連絡先一覧">
+        <div className="ride-guidance-subheading"><div><h3>連絡先一覧</h3><p>表示中の連絡先だけが客席向け公開APIに含まれます。</p></div>{state.message ? <p className="ride-guidance-editor__message is-success" role="status">{state.message}</p> : null}</div>
+        <form className="ride-guidance-add" onSubmit={addContact}><label>種別<select value={newContact.type} onChange={(event) => setNewContact((current) => ({ ...current, type: event.target.value }))} disabled={state.saving}><option value="taxi">タクシー</option><option value="driver_service">運転代行</option></select></label><label>会社名<input required maxLength={100} value={newContact.name} onChange={(event) => setNewContact((current) => ({ ...current, name: event.target.value }))} disabled={state.saving} /></label><label>電話番号<input required maxLength={30} pattern="[0-9 +()\\-]+" value={newContact.phone} onChange={(event) => setNewContact((current) => ({ ...current, phone: event.target.value }))} disabled={state.saving} /></label><label>備考<input maxLength={200} value={newContact.note} onChange={(event) => setNewContact((current) => ({ ...current, note: event.target.value }))} disabled={state.saving} /></label><label className="ride-guidance-checkbox"><input type="checkbox" checked={newContact.isVisible} onChange={(event) => setNewContact((current) => ({ ...current, isVisible: event.target.checked }))} disabled={state.saving} /> 表示する</label><button className="button button--primary" type="submit" disabled={state.saving}>新規追加</button></form>
+        <div className="ride-guidance-groups">{RIDE_GUIDANCE_TYPES.map(([type, label]) => { const group = state.contacts.filter((contact) => contact.type === type); return <section className="ride-guidance-group" key={type} aria-label={label}><h4>{label}</h4>{group.length ? group.map((contact, index) => <article className="ride-guidance-row" key={contact.id}><div className="ride-guidance-row__fields"><label>会社名<input maxLength={100} value={contact.name} onChange={(event) => updateContactDraft(contact.id, { name: event.target.value })} disabled={state.saving} /></label><label>電話番号<input maxLength={30} pattern="[0-9 +()\\-]+" value={contact.phone} onChange={(event) => updateContactDraft(contact.id, { phone: event.target.value })} disabled={state.saving} /></label><label>備考<input maxLength={200} value={contact.note} onChange={(event) => updateContactDraft(contact.id, { note: event.target.value })} disabled={state.saving} /></label><label>種別<select value={contact.type} onChange={(event) => updateContactDraft(contact.id, { type: event.target.value })} disabled={state.saving}><option value="taxi">タクシー</option><option value="driver_service">運転代行</option></select></label><label className="ride-guidance-checkbox"><input type="checkbox" checked={contact.isVisible} onChange={(event) => updateContactDraft(contact.id, { isVisible: event.target.checked })} disabled={state.saving} /> 表示する</label></div><div className="ride-guidance-row__actions"><button className="button button--quiet" type="button" onClick={() => moveContact(type, index, -1)} disabled={state.saving || index === 0}>上へ</button><button className="button button--quiet" type="button" onClick={() => moveContact(type, index, 1)} disabled={state.saving || index === group.length - 1}>下へ</button><button className="button button--primary" type="button" onClick={() => updateContact(contact)} disabled={state.saving}>保存</button><button className="button button--danger" type="button" onClick={() => deleteContact(contact)} disabled={state.saving}>削除</button></div>{state.rowMessages[contact.id] ? <p className={`ride-guidance-row__message ${state.rowMessages[contact.id].startsWith("保存しました") ? "is-success" : "is-error"}`} role={state.rowMessages[contact.id].startsWith("保存しました") ? "status" : "alert"}>{state.rowMessages[contact.id]}</p> : null}</article>) : <p className="ride-guidance-empty">登録されている連絡先はありません</p>}</section>; })}</div>
+      </section>
+    </div> : null}
+  </section>;
 }
 
 function AdminScreen({ state, updateState, section = "menu" }) {
@@ -1957,6 +2139,7 @@ function AdminScreen({ state, updateState, section = "menu" }) {
         {section === "menu" ? <>
            <div className="admin-toolbar"><div className="admin-metrics"><span>登録数 <b>{state.menuItems.length}</b> 品</span><span>売り切れ <b>{Math.max(2, state.menuItems.filter((item) => item.isSoldOut).length)}</b> 品</span></div><div className="admin-toolbar__actions"><button className="button button--outline" type="button" onClick={() => reorderMode ? cancelReorder() : beginReorder()}>{reorderMode ? "通常編集へ戻る" : "並び替えモード"}</button><button className="button button--outline button--large" onClick={() => showAdd ? resetMenuEditor() : (setEditingMenuId(null), setShowAdd(true))}><Plus size={28} weight="bold" /> {showAdd ? "編集を閉じる" : "新しいメニューを追加"}</button></div></div>
            <BusinessHoursEditor state={businessHoursState} adminApiMode={adminApiMode} onChange={updateBusinessHoursDraft} onSave={saveBusinessHours} onDiscard={discardBusinessHours} onReload={loadBusinessHours} />
+           <RideGuidanceEditor adminApiMode={adminApiMode} />
            {reorderMode ? <div className="menu-reorder-toolbar"><label>対象カテゴリー<select value={reorderCategoryId} onChange={(event) => { const next = menuGroups.find((group) => group.category.id === event.target.value); setReorderCategoryId(event.target.value); setReorderDraftIds(next?.items.map((item) => item.id) ?? []); setReorderBaseIds(next?.items.map((item) => item.id) ?? []); }} disabled={catalogState.saving}>{menuGroups.map((group) => <option key={group.category.id} value={group.category.id}>{group.category.name}</option>)}</select></label><button className="button button--quiet" type="button" onClick={cancelReorder} disabled={catalogState.saving}>キャンセル</button><button className="button button--primary" type="button" onClick={saveReorder} disabled={catalogState.saving}>{catalogState.saving ? "保存中" : "並び順を保存"}</button></div> : null}
           {showAdd ? <form className="inline-form inline-form--menu menu-editor" key={editingMenuId ?? "new-menu"} onSubmit={addMenu}>
             <label>正式名<input name="name" required placeholder="例：だし巻き玉子" defaultValue={editingMenu?.name ?? ""} /></label>
