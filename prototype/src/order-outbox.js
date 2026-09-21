@@ -781,6 +781,8 @@ export function createCustomerOrderClient({
       get() { return Promise.resolve(null); },
       getHistory() { return Promise.resolve([]); },
       getMenu() { return Promise.resolve(null); },
+      getCheckout() { return Promise.resolve(null); },
+      requestCheckout() { return Promise.reject(new CustomerCheckoutError("会計APIはデモモードでは利用できません。", { code: "DEMO_MODE" })); },
       list() { return Promise.resolve([]); },
     };
   }
@@ -812,6 +814,12 @@ export function createCustomerOrderClient({
         env: global,
         fetchImpl: options.fetchImpl || global.fetch,
       });
+    },
+    getCheckout() {
+      return fetchCustomerCheckout({ config, fetchImpl: options.fetchImpl || global.fetch });
+    },
+    requestCheckout({ checkoutRequestId, receiptRequested }) {
+      return requestCustomerCheckout({ config, checkoutRequestId, receiptRequested, fetchImpl: options.fetchImpl || global.fetch });
     },
     subscribeInvalidations(listener) {
       return subscribeCustomerInvalidations({
