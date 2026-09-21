@@ -5,13 +5,15 @@ import { DatabaseSync } from 'node:sqlite';
 
 export const LEGACY_SCHEMA_VERSION = 1;
 export const SESSION_SCHEMA_VERSION = 2;
-export const SCHEMA_VERSION = 11;
+export const SCHEMA_VERSION = 12;
 
 export const REQUIRED_TABLES = Object.freeze([
   'system_state',
   'business_hours',
   'store_pickup_settings',
   'ride_service_contacts',
+  'checkout_requests',
+  'checkout_adjustments',
   'devices',
   'tables',
   'table_sessions',
@@ -51,6 +53,10 @@ export const REQUIRED_INDEXES = Object.freeze([
   'idx_menu_item_image_layouts_item',
   'idx_ride_service_contacts_type_visible_sort',
   'idx_ride_service_contacts_type_sort',
+  'uq_checkout_requests_active_session',
+  'idx_checkout_requests_status_requested',
+  'idx_checkout_requests_session',
+  'idx_checkout_adjustments_request_sort',
 ]);
 
 export const REQUIRED_TRIGGERS = Object.freeze([
@@ -118,6 +124,9 @@ export const DEFAULT_V10_MIGRATION_PATH = resolve(
 );
 export const DEFAULT_V11_MIGRATION_PATH = resolve(
   moduleDirectory, '..', '..', '..', 'docs', 'schema-v11-migration.sql',
+);
+export const DEFAULT_V12_MIGRATION_PATH = resolve(
+  moduleDirectory, '..', '..', '..', 'docs', 'schema-v12-migration.sql',
 );
 
 export class DatabaseInitializationError extends Error {
@@ -287,6 +296,7 @@ function validateLegacySchema(database) {
     'store_pickup_settings', 'ride_service_contacts',
     'menu_item_image_layouts',
     'table_sessions', 'menu_item_details', 'menu_item_variants', 'menu_item_serving_options',
+    'checkout_requests', 'checkout_adjustments',
   ].includes(name));
   const legacyIndexes = REQUIRED_INDEXES.filter((name) => ![
     'idx_ride_service_contacts_type_visible_sort',
@@ -298,6 +308,10 @@ function validateLegacySchema(database) {
     'idx_menu_item_variants_item_sort',
     'idx_menu_item_serving_options_item_sort',
     'uq_order_items_order_selection',
+    'uq_checkout_requests_active_session',
+    'idx_checkout_requests_status_requested',
+    'idx_checkout_requests_session',
+    'idx_checkout_adjustments_request_sort',
   ].includes(name));
   legacyIndexes.push('uq_order_items_order_menu');
   const legacyTriggers = REQUIRED_TRIGGERS.filter((name) => ![
@@ -332,6 +346,7 @@ function validateSchemaV2(database) {
     'store_pickup_settings', 'ride_service_contacts',
     'menu_item_image_layouts',
     'menu_item_details', 'menu_item_variants', 'menu_item_serving_options',
+    'checkout_requests', 'checkout_adjustments',
   ].includes(name));
   const indexes = REQUIRED_INDEXES.filter((name) => ![
     'idx_ride_service_contacts_type_visible_sort',
@@ -341,6 +356,10 @@ function validateSchemaV2(database) {
     'idx_menu_item_variants_item_sort',
     'idx_menu_item_serving_options_item_sort',
     'uq_order_items_order_selection',
+    'uq_checkout_requests_active_session',
+    'idx_checkout_requests_status_requested',
+    'idx_checkout_requests_session',
+    'idx_checkout_adjustments_request_sort',
   ].includes(name));
   indexes.push('uq_order_items_order_menu');
   assertRequiredNames(schemaObjectNames(database, 'table'), tables, 'tables');
@@ -437,6 +456,14 @@ function migrateSchemaV10ToV11(database, migrationPath) {
   catch (error) {
     try { if (database.isTransaction) database.exec('ROLLBACK;'); } catch {}
     throw new DatabaseInitializationError('MIGRATION_FAILED', 'The ride-guidance schema migration failed.', { cause: error });
+  }
+}
+
+function migrateSchemaV11ToV12(database, migrationPath) {
+  try { database.exec(readFileSync(migrationPath, 'utf8')); }
+  catch (error) {
+    try { if (database.isTransaction) database.exec('ROLLBACK;'); } catch {}
+    throw new DatabaseInitializationError('MIGRATION_FAILED', 'The checkout schema migration failed.', { cause: error });
   }
 }
 
@@ -654,6 +681,16 @@ function validateSchema(database) {
     ['id', 'type', 'name', 'phone', 'note', 'is_visible', 'sort_order', 'version', 'created_at_ms', 'updated_at_ms'],
     'ride service contact columns',
   );
+  assertRequiredNames(
+    tableColumns(database, 'checkout_requests'),
+    ['checkout_request_id', 'table_session_id', 'status', 'receipt_requested', 'ordered_items_total_yen', 'adjustments_total_yen', 'grand_total_yen', 'version', 'requested_at_ms', 'ready_at_ms', 'updated_at_ms'],
+    'checkout request columns',
+  );
+  assertRequiredNames(
+    tableColumns(database, 'checkout_adjustments'),
+    ['adjustment_id', 'checkout_request_id', 'kind', 'label', 'amount_yen', 'sort_order'],
+    'checkout adjustment columns',
+  );
 
   const state = database
     .prepare(`
@@ -737,6 +774,7 @@ export function initializeDatabase({
   v9MigrationPath = DEFAULT_V9_MIGRATION_PATH,
   v10MigrationPath = DEFAULT_V10_MIGRATION_PATH,
   v11MigrationPath = DEFAULT_V11_MIGRATION_PATH,
+  v12MigrationPath = DEFAULT_V12_MIGRATION_PATH,
 } = {}) {
   const resolvedDatabasePath = resolveFilePath(databasePath, 'databasePath');
   const resolvedSchemaPath = resolveFilePath(schemaPath, 'schemaPath');
@@ -749,6 +787,7 @@ export function initializeDatabase({
   const resolvedV9MigrationPath = resolveFilePath(v9MigrationPath, 'v9MigrationPath');
   const resolvedV10MigrationPath = resolveFilePath(v10MigrationPath, 'v10MigrationPath');
   const resolvedV11MigrationPath = resolveFilePath(v11MigrationPath, 'v11MigrationPath');
+  const resolvedV12MigrationPath = resolveFilePath(v12MigrationPath, 'v12MigrationPath');
 
   mkdirSync(dirname(resolvedDatabasePath), { recursive: true });
 
@@ -817,6 +856,11 @@ export function initializeDatabase({
     }
     if (currentVersion === 10) {
       migrateSchemaV10ToV11(database, resolvedV11MigrationPath);
+      enableWriteAheadLogging(database);
+      currentVersion = 11;
+    }
+    if (currentVersion === 11) {
+      migrateSchemaV11ToV12(database, resolvedV12MigrationPath);
       enableWriteAheadLogging(database);
       currentVersion = SCHEMA_VERSION;
     }
