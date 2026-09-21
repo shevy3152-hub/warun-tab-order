@@ -20,11 +20,11 @@ import {
   WifiSlash,
   X,
 } from "@phosphor-icons/react";
-import { createCustomerOrderClient, resolveOrderApiConfig } from "./order-outbox.js";
+import { createClientOrderId, createCustomerOrderClient, CustomerCheckoutError, resolveOrderApiConfig } from "./order-outbox.js";
 import { claimCustomerDevice, createIndexedDbCredentialStore, loadOrCreateCustomerDevice, pairingClaimErrorMessage, runtimeForCustomerCredentials } from "./device-credentials.js";
 import { customerOrderErrorCategory, customerOrderNoticeFromOutboxEvent } from "./customer-order-notice.js";
 import { AdminPairingError, configuredAdminToken, createAdminRideGuidanceContact, deleteAdminRideGuidanceContact, fetchAdminBusinessHours, fetchAdminDiagnostics, fetchAdminMenu, fetchAdminOrderHistory, fetchAdminPairingPreflight, fetchAdminRideGuidance, issueCustomerPairingCode, revokeAdminDevice, saveAdminBusinessHours, saveAdminImageLayouts, saveAdminCategory, saveAdminMenuItem, saveAdminMenuOrdering, saveAdminRideGuidanceOrdering, saveAdminRideGuidancePickup, updateAdminRideGuidanceContact } from "./admin-pairing.js";
-import { closeKitchenTableSession, fetchKitchenOrderHistory, fetchKitchenSnapshot, kitchenApiConfigured, markKitchenItemServed } from "./kitchen-api.js";
+import { cancelKitchenCheckout, closeKitchenTableSession, fetchKitchenCheckoutRequests, fetchKitchenOrderHistory, fetchKitchenSnapshot, kitchenApiConfigured, KitchenApiError, markKitchenItemServed, readyKitchenCheckout, saveKitchenCheckoutAdjustments, subscribeKitchenInvalidations } from "./kitchen-api.js";
 import { bootstrapCustomerOrderClient } from "./customer-bootstrap.js";
 import { taxExcludedYen } from "./pricing.js";
 import { pairingCodeQrSvg } from "./qr-code.js";
@@ -357,6 +357,34 @@ function selectionDisplayName(item, selection = {}) {
   return suffix ? `${item.name}（${suffix}）` : item.name;
 }
 
+function prepareCheckoutBell(audioRef) {
+  try {
+    const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContextCtor) return;
+    if (!audioRef.current) audioRef.current = new AudioContextCtor();
+    void audioRef.current.resume().catch(() => {});
+  } catch { /* Sound is optional; the visual state remains authoritative. */ }
+}
+
+function playCheckoutBell(audioRef) {
+  try {
+    const context = audioRef.current;
+    if (!context) return;
+    const oscillator = context.createOscillator();
+    const gain = context.createGain();
+    oscillator.type = "sine";
+    oscillator.frequency.setValueAtTime(660, context.currentTime);
+    oscillator.frequency.exponentialRampToValueAtTime(880, context.currentTime + 0.12);
+    gain.gain.setValueAtTime(0.0001, context.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.08, context.currentTime + 0.015);
+    gain.gain.exponentialRampToValueAtTime(0.0001, context.currentTime + 0.28);
+    oscillator.connect(gain);
+    gain.connect(context.destination);
+    oscillator.start();
+    oscillator.stop(context.currentTime + 0.3);
+  } catch { /* Browsers may reject audio; never make that a visible error. */ }
+}
+
 const KUSHIKATSU_MENU_ITEM_ID = "food-kushi-kushikatsu";
 
 function PriceDisplay({ priceYen }) {
@@ -687,6 +715,19 @@ function RideGuidanceModal({ dataState, selectedType, onSelectType, onBack, onCl
   </Modal>;
 }
 
+function CustomerCheckoutModal({ checkoutState, receiptRequested, onReceiptChange, onRequest, onRetry, onResetCancelled, onClose, submitting }) {
+  const [splitCount, setSplitCount] = useState(2);
+  const checkout = checkoutState.checkout;
+  const ready = checkout?.status === "ready" && Number.isSafeInteger(checkout.grandTotalYen);
+  const waiting = checkout?.status === "requested";
+  const cancelled = checkout?.status === "cancelled";
+  const splitAmount = ready ? Math.ceil(checkout.grandTotalYen / splitCount) : null;
+  const error = checkoutState.error;
+  return <Modal title="お会計" onClose={onClose} className="modal--checkout" footer={ready ? <div className="modal-actions checkout-modal__footer"><button type="button" className="button button--primary button--large" onClick={onClose}>閉じる</button></div> : null}>
+    {checkoutState.loading ? <div className="checkout-customer-state"><p className="checkout-customer-state__large">会計状態を確認中です</p></div> : error ? <div className="checkout-customer-state"><p className="checkout-customer-state__error" role="alert">会計状態を取得できませんでした。</p><p>通信状態を確認して、もう一度お試しください。</p><button type="button" className="button button--primary button--large" onClick={onRetry}>再試行</button></div> : ready ? <div className="checkout-customer-ready"><p className="checkout-customer-state__large">お会計金額</p><strong className="checkout-customer-total" aria-live="polite">税込 {yen(checkout.grandTotalYen)}</strong>{checkout.receiptRequested ? <p className="checkout-receipt-note">手書き領収書を希望済み</p> : null}<section className="checkout-split" aria-label="割り勘"><h3>割り勘</h3><div className="checkout-split__control"><button type="button" aria-label="人数を1人減らす" onClick={() => setSplitCount((current) => Math.max(2, current - 1))} disabled={splitCount <= 2}>−</button><strong>{splitCount}人</strong><button type="button" aria-label="人数を1人増やす" onClick={() => setSplitCount((current) => Math.min(20, current + 1))} disabled={splitCount >= 20}>＋</button></div><p className="checkout-split__amount">おひとり {checkout.grandTotalYen % splitCount === 0 ? "" : "約"}{yen(splitAmount)}</p></section></div> : waiting ? <div className="checkout-customer-state"><p className="checkout-customer-state__large">しばらくお待ちください</p><p>ただいま会計を確認しています</p>{checkout.receiptRequested ? <p className="checkout-receipt-note">手書き領収書を希望済み</p> : null}</div> : cancelled ? <div className="checkout-customer-state"><p className="checkout-customer-state__error" role="alert">会計依頼が取り消されました</p><p>必要であれば、あらためて会計を依頼できます。</p><button type="button" className="button button--primary button--large" onClick={onResetCancelled}>新しく会計を依頼する</button></div> : <div className="checkout-customer-request"><p className="modal-lead">会計の準備をスタッフへ依頼します</p><button type="button" className={`checkout-receipt-toggle ${receiptRequested ? "is-selected" : ""}`} aria-pressed={receiptRequested} onClick={() => onReceiptChange(!receiptRequested)} disabled={submitting}><Receipt size={26} weight={receiptRequested ? "fill" : "regular"} /><span>手書き領収書を希望する</span><b>{receiptRequested ? "選択中" : ""}</b></button>{error ? <p className="checkout-customer-state__error" role="alert">会計依頼を送信できませんでした。もう一度お試しください。</p> : null}<div className="modal-actions checkout-modal__actions"><button type="button" className="button button--quiet" onClick={onClose} disabled={submitting}>キャンセル</button><button type="button" className="button button--primary button--large" onClick={onRequest} disabled={submitting}>{submitting ? "送信中…" : "お会計を依頼する"}</button></div></div>}
+  </Modal>;
+}
+
 function CustomerScreen({ state, updateState, deviceId, orderClient, customerDeviceConfig, theme = CUSTOMER_TEST_THEME }) {
   const customerTheme = normalizeCustomerTheme(theme);
   const localDevice = state.devices.find((item) => item.deviceId === deviceId) ?? state.devices[0];
@@ -741,8 +782,16 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
   const [apiOrders, setApiOrders] = useState([]);
   const [apiHistoryState, setApiHistoryState] = useState({ loading: false, error: false });
   const [historyRefreshKey, setHistoryRefreshKey] = useState(0);
+  const [checkoutState, setCheckoutState] = useState({ loading: false, error: false, checkout: null });
+  const [checkoutReceiptRequested, setCheckoutReceiptRequested] = useState(false);
+  const [checkoutSubmitting, setCheckoutSubmitting] = useState(false);
+  const [checkoutRefreshKey, setCheckoutRefreshKey] = useState(0);
   const [submitting, setSubmitting] = useState(false);
   const submitLock = useRef(false);
+  const checkoutRequestIdRef = useRef(null);
+  const checkoutPreviousRef = useRef(null);
+  const checkoutAudioRef = useRef(null);
+  const checkoutSoundKeysRef = useRef(new Set());
   const menuIdleTimerRef = useRef(null);
   const imoRef = useRef(null);
   const otherRef = useRef(null);
@@ -824,8 +873,35 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
     return orderClient.subscribeInvalidations((event) => {
       if (event?.payload?.resource === "menu") setMenuRefreshKey((current) => current + 1);
       if (event?.payload?.resource === "orders") setHistoryRefreshKey((current) => current + 1);
+      if (event?.payload?.resource === "checkout" || event?.resource === "checkout" || String(event?.payload?.type || event?.type || "").startsWith("checkout.")) setCheckoutRefreshKey((current) => current + 1);
     });
   }, [apiMode, orderClient]);
+
+  useEffect(() => {
+    if (!apiMode || !orderClient?.getCheckout || (modal !== "checkout" && checkoutRefreshKey === 0)) return undefined;
+    let cancelled = false;
+    if (modal === "checkout") setCheckoutState((current) => ({ ...current, loading: true, error: false }));
+    void orderClient.getCheckout().then((nextCheckout) => {
+      if (cancelled) return;
+      const previous = checkoutPreviousRef.current;
+      checkoutPreviousRef.current = nextCheckout;
+      if (previous?.status === "requested" && nextCheckout?.status === "ready") {
+        const soundKey = `${nextCheckout.checkoutRequestId}:${nextCheckout.version}`;
+        let alreadyPlayed = checkoutSoundKeysRef.current.has(soundKey);
+        try { alreadyPlayed = alreadyPlayed || sessionStorage.getItem(`warun-checkout-ready:${soundKey}`) === "1"; } catch { /* sessionStorage can be unavailable */ }
+        if (!alreadyPlayed) {
+          checkoutSoundKeysRef.current.add(soundKey);
+          try { sessionStorage.setItem(`warun-checkout-ready:${soundKey}`, "1"); } catch { /* best effort dedupe */ }
+          playCheckoutBell(checkoutAudioRef);
+        }
+      }
+      setCheckoutReceiptRequested(nextCheckout?.receiptRequested === true);
+      setCheckoutState({ loading: false, error: false, checkout: nextCheckout });
+    }).catch(() => {
+      if (!cancelled) setCheckoutState((current) => ({ ...current, loading: false, error: true }));
+    });
+    return () => { cancelled = true; };
+  }, [apiMode, modal, orderClient, checkoutRefreshKey]);
 
   useEffect(() => {
     const unsubscribe = orderClient.subscribe((event) => {
@@ -1124,6 +1200,38 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
     setRideGuidanceRefreshKey((current) => current + 1);
     setModal("ride-guidance");
   };
+  const openCheckout = () => {
+    if (!apiMode) {
+      setCheckoutState({ loading: false, error: true, checkout: null });
+      setModal("checkout");
+      return;
+    }
+    setModal("checkout");
+    setCheckoutRefreshKey((current) => current + 1);
+  };
+  const requestCheckout = async () => {
+    if (checkoutSubmitting || checkoutState.checkout?.status === "requested" || checkoutState.checkout?.status === "ready") return;
+    prepareCheckoutBell(checkoutAudioRef);
+    setCheckoutSubmitting(true);
+    setCheckoutState((current) => ({ ...current, loading: true, error: false }));
+    const checkoutRequestId = checkoutRequestIdRef.current || createClientOrderId();
+    checkoutRequestIdRef.current = checkoutRequestId;
+    try {
+      const checkout = await orderClient.requestCheckout({ checkoutRequestId, receiptRequested: checkoutReceiptRequested });
+      checkoutPreviousRef.current = checkout;
+      setCheckoutState({ loading: false, error: false, checkout });
+    } catch (error) {
+      setCheckoutState((current) => ({ ...current, loading: false, error: true }));
+      if (!(error instanceof CustomerCheckoutError)) setCheckoutState((current) => ({ ...current, error: true }));
+    } finally { setCheckoutSubmitting(false); }
+  };
+  const retryCheckout = () => setCheckoutRefreshKey((current) => current + 1);
+  const resetCancelledCheckout = () => {
+    checkoutRequestIdRef.current = null;
+    checkoutPreviousRef.current = null;
+    setCheckoutReceiptRequested(false);
+    setCheckoutState({ loading: false, error: false, checkout: null });
+  };
   const closeRideGuidance = () => {
     setRideGuidanceType(null);
     setModal(null);
@@ -1136,6 +1244,7 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
   return (
     <div className={`customer-app ${majorNavOpen ? "" : "customer-app--category-collapsed"}`} data-customer-theme={customerTheme}>
       {modal === "ride-guidance" ? <RideGuidanceModal dataState={rideGuidanceState} selectedType={rideGuidanceType} onSelectType={setRideGuidanceType} onBack={() => setRideGuidanceType(null)} onClose={closeRideGuidance} /> : null}
+      {modal === "checkout" ? <CustomerCheckoutModal checkoutState={checkoutState} receiptRequested={checkoutReceiptRequested} onReceiptChange={setCheckoutReceiptRequested} onRequest={requestCheckout} onRetry={retryCheckout} onResetCancelled={resetCancelledCheckout} onClose={() => setModal(null)} submitting={checkoutSubmitting} /> : null}
       <aside className="customer-sidebar">
         <div className="customer-title customer-title--horizontal"><span>IZAKAYA WARUN</span></div>
         {majorNavOpen ? <nav className="category-nav" aria-label="大分類カテゴリー">
@@ -1148,7 +1257,7 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
         <header className={`customer-header ${isMenuHeaderHidden ? "customer-header--menu-hidden" : ""}`}>
           <IconButton icon={ClipboardText} onClick={() => setModal("history")}>注文履歴</IconButton>
           <IconButton icon={Bell} onClick={() => setModal("staff")}>スタッフを呼ぶ</IconButton>
-          <IconButton icon={CurrencyJpy} onClick={() => setModal("feature")}>お会計</IconButton>
+          <IconButton icon={CurrencyJpy} onClick={openCheckout}>お会計</IconButton>
           <IconButton icon={Car} onClick={openRideGuidance}>タクシー・運転代行</IconButton>
           <div className="table-label">テーブル <b>{device.tableId}</b></div>
         </header>
@@ -1309,7 +1418,92 @@ function StaffShell({ route, title, subtitle, state, children, right, newOrderCo
   );
 }
 
-function KitchenScreen({ state, updateState, apiState, onServe, onCloseSession }) {
+const CHECKOUT_ADJUSTMENT_TYPES = [
+  ["seat_charge", "席料"],
+  ["late_night_charge", "深夜チャージ"],
+  ["extension_charge", "延長料金"],
+];
+
+function checkoutStatusLabel(status) {
+  return status === "ready" ? "会計準備完了" : status === "cancelled" ? "取消済み" : "会計依頼";
+}
+
+function checkoutErrorMessage(error, fallback) {
+  if (error instanceof KitchenApiError) {
+    if (error.status === 409 || error.code === "CHECKOUT_VERSION_CONFLICT") return "他の端末で更新されました。最新状態を再取得してください。";
+    if (error.status === 400) return "入力内容を確認してください。";
+    if (error.status === 401) return "認証が切れました。厨房画面を開き直してください。";
+  }
+  return fallback;
+}
+
+function CheckoutAdjustmentInput({ label, value, onChange, disabled, onDelete = null, optional = false }) {
+  return <div className="checkout-adjustment-row">
+    <label>{label ? <span>{label}</span> : <input aria-label="任意料金の項目名" value={value.label} onChange={(event) => onChange({ ...value, label: event.target.value })} placeholder="項目名" maxLength={100} disabled={disabled} />}
+      <input aria-label={`${label || "任意料金"}の金額`} className="checkout-amount-input" inputMode="numeric" pattern="[0-9]*" value={value.amount} onChange={(event) => { if (/^\d*$/.test(event.target.value)) onChange({ ...value, amount: event.target.value }); }} placeholder="0" disabled={disabled} /> <small>円</small>
+    </label>
+    {optional && onDelete ? <button type="button" className="button button--quiet checkout-adjustment-delete" onClick={onDelete} disabled={disabled}>削除</button> : null}
+  </div>;
+}
+
+function KitchenCheckoutPanel({ checkouts, sessions, loading, error, onRefresh, onSave, onReady, onCancel }) {
+  const [selectedId, setSelectedId] = useState(null);
+  const [drafts, setDrafts] = useState({});
+  const [busy, setBusy] = useState("");
+  const [message, setMessage] = useState("");
+  const [errorMessage, setErrorMessage] = useState("");
+  const [confirmAction, setConfirmAction] = useState(null);
+  const active = checkouts.filter((checkout) => checkout.status === "requested" || checkout.status === "ready");
+  const selected = active.find((checkout) => checkout.checkoutRequestId === selectedId) || active[0] || null;
+  const sessionTable = (checkout) => sessions.find((session) => session.sessionId === checkout?.tableSessionId)?.tableId || "—";
+  const draftFor = (checkout) => {
+    const current = drafts[checkout.checkoutRequestId];
+    if (current) return current;
+    const fixed = Object.fromEntries(CHECKOUT_ADJUSTMENT_TYPES.map(([kind, label]) => [kind, { label, amount: String(checkout.adjustments.find((item) => item.kind === kind)?.amountYen ?? 0) }]));
+    const other = checkout.adjustments.filter((item) => item.kind === "other").map((item) => ({ label: item.label, amount: String(item.amountYen) }));
+    return { ...fixed, other };
+  };
+  const setDraft = (checkout, next) => setDrafts((current) => ({ ...current, [checkout.checkoutRequestId]: next }));
+  const normalizedAdjustments = (checkout) => {
+    const draft = draftFor(checkout);
+    return [
+      ...CHECKOUT_ADJUSTMENT_TYPES.map(([kind]) => ({ kind, label: draft[kind].label, amountYen: Number(draft[kind].amount || 0) })),
+      ...draft.other.map((item) => ({ kind: "other", label: item.label.trim(), amountYen: Number(item.amount || 0) })),
+    ];
+  };
+  const previewTotal = (checkout) => checkout.orderedItemsTotalYen + normalizedAdjustments(checkout).reduce((sum, item) => sum + item.amountYen, 0);
+  const runAction = async (action, fallback) => {
+    setBusy(action); setMessage(""); setErrorMessage("");
+    try {
+      const result = await ({ save: onSave, ready: onReady, cancel: onCancel }[action])(selected, action === "save" ? normalizedAdjustments(selected) : undefined);
+      if (action === "ready") setMessage(`合計${yen(result.grandTotalYen)}で会計準備完了です。`);
+      else if (action === "cancel") setMessage("会計依頼を取り消しました。");
+      else setMessage("追加料金を保存しました。");
+      await onRefresh();
+      if (result?.status === "cancelled") setSelectedId(null);
+    } catch (actionError) {
+      setErrorMessage(checkoutErrorMessage(actionError, fallback));
+      await onRefresh().catch(() => {});
+    } finally { setBusy(""); setConfirmAction(null); }
+  };
+  return <section className="checkout-panel" aria-labelledby="checkout-panel-title">
+    <header className="checkout-panel__header"><div><span className="section-kicker">CHECKOUT</span><h2 id="checkout-panel-title">会計依頼</h2></div><span className="checkout-panel__count">{active.length}件</span></header>
+    {loading ? <div className="checkout-empty">会計依頼を読み込み中です。</div> : error ? <div className="checkout-empty" role="alert">会計依頼を取得できません。<button type="button" className="button button--quiet" onClick={onRefresh}>再読み込み</button></div> : !active.length ? <div className="checkout-empty">現在、会計依頼はありません。</div> : <div className="checkout-list">
+      <div className="checkout-list__cards">{active.map((checkout) => <button type="button" key={checkout.checkoutRequestId} className={`checkout-card ${selected?.checkoutRequestId === checkout.checkoutRequestId ? "is-selected" : ""}`} onClick={() => { setSelectedId(checkout.checkoutRequestId); setErrorMessage(""); }}>
+        <span className="checkout-card__table">テーブル <b>{sessionTable(checkout)}</b></span><span className={`checkout-status checkout-status--${checkout.status}`}>{checkoutStatusLabel(checkout.status)}</span><time>{formatTime(checkout.requestedAt)}</time><strong>{yen(checkout.orderedItemsTotalYen)}</strong>{checkout.receiptRequested ? <em>手書き領収書希望</em> : null}
+      </button>)}</div>
+      {selected ? <div className="checkout-editor">
+        <div className="checkout-editor__title"><div><h3>テーブル {sessionTable(selected)} の会計</h3><p>{formatTime(selected.requestedAt)} 依頼・{checkoutStatusLabel(selected.status)}</p></div>{selected.receiptRequested ? <strong className="receipt-notice"><Receipt size={24} weight="fill" /> 手書き領収書希望</strong> : null}</div>
+        <div className="checkout-breakdown"><div className="checkout-breakdown__line"><span>注文済み商品合計</span><b>{yen(selected.orderedItemsTotalYen)}</b></div><div className="checkout-adjustments"><h4>追加料金</h4>{CHECKOUT_ADJUSTMENT_TYPES.map(([kind, label]) => <CheckoutAdjustmentInput key={kind} label={label} value={draftFor(selected)[kind]} disabled={selected.status !== "requested" || Boolean(busy)} onChange={(value) => setDraft(selected, { ...draftFor(selected), [kind]: value })} />)}{draftFor(selected).other.map((value, index) => <CheckoutAdjustmentInput key={`other-${index}`} value={value} optional disabled={selected.status !== "requested" || Boolean(busy)} onChange={(next) => setDraft(selected, { ...draftFor(selected), other: draftFor(selected).other.map((item, itemIndex) => itemIndex === index ? next : item) })} onDelete={() => setDraft(selected, { ...draftFor(selected), other: draftFor(selected).other.filter((_, itemIndex) => itemIndex !== index) })} />)}{selected.status === "requested" ? <button type="button" className="button button--quiet checkout-add-other" onClick={() => setDraft(selected, { ...draftFor(selected), other: [...draftFor(selected).other, { label: "", amount: "0" }] })} disabled={Boolean(busy)}><Plus size={18} weight="bold" /> 任意料金を追加</button> : null}</div><div className="checkout-total-preview"><span>確認用合計</span><b>{yen(previewTotal(selected))}</b></div></div>
+        {errorMessage ? <p className="checkout-feedback checkout-feedback--error" role="alert">{errorMessage}</p> : null}{message ? <p className="checkout-feedback" role="status">{message}</p> : null}
+        {selected.status === "requested" ? <div className="checkout-editor__actions"><button type="button" className="button button--quiet" onClick={() => setConfirmAction("cancel")} disabled={Boolean(busy)}>会計依頼を取り消す</button><button type="button" className="button button--quiet" onClick={() => void runAction("save", "追加料金を保存できませんでした。")} disabled={Boolean(busy)}>{busy === "save" ? "保存中…" : "追加料金を保存"}</button><button type="button" className="button button--primary" onClick={() => setConfirmAction("ready")} disabled={Boolean(busy)}>{busy === "ready" ? "確定中…" : "合計金額を確定"}</button></div> : <div className="checkout-ready-note">正式合計 <b>{yen(selected.grandTotalYen)}</b>・この依頼は操作できません</div>}
+      </div> : null}
+    </div>}
+    {confirmAction ? <Modal title={confirmAction === "ready" ? "合計金額を確定しますか？" : "会計依頼を取り消しますか？"} onClose={() => { if (!busy) setConfirmAction(null); }}><p className="modal-lead">{confirmAction === "ready" ? `サーバーで注文履歴を再計算し、${yen(selected ? previewTotal(selected) : 0)}を確認用として確定します。` : "この会計依頼を取り消します。客席側には会計準備完了として表示されません。"}</p><div className="modal-actions"><button type="button" className="button button--quiet" onClick={() => setConfirmAction(null)} disabled={Boolean(busy)}>戻る</button><button type="button" className="button button--primary button--large" onClick={() => void runAction(confirmAction, confirmAction === "ready" ? "会計を確定できませんでした。" : "会計依頼を取り消せませんでした。")} disabled={Boolean(busy)}>{busy ? "処理中…" : confirmAction === "ready" ? "確定する" : "取り消す"}</button></div></Modal> : null}
+  </section>;
+}
+
+function KitchenScreen({ state, updateState, apiState, checkoutState, onServe, onCloseSession, onRefreshCheckouts, onSaveCheckout, onReadyCheckout, onCancelCheckout }) {
   const [callPanel, setCallPanel] = useState(false);
   const apiMode = Boolean(apiState);
   const sourceOrders = apiMode ? apiState.orders : state.orders;
@@ -1345,6 +1539,7 @@ function KitchenScreen({ state, updateState, apiState, onServe, onCloseSession }
   return (
     <StaffShell route="/kitchen" title="新着注文" subtitle="新しいご注文を確認してください。提供済みのテーブルは自動的に履歴へ移動します。" state={state} newOrderCount={activeOrders.length} right={<div className="staff-topbar__right"><button className="staff-call-button" onClick={() => setCallPanel(true)}><Bell size={26} weight="fill" /> スタッフ呼出 {activeCalls.length ? <b>{activeCalls.length}</b> : null}</button><ConnectionBadge online /><time className="kitchen-clock">{formatTime(new Date())}</time></div>}>
       <section className="kitchen-content">
+        {apiMode ? <KitchenCheckoutPanel checkouts={checkoutState?.checkouts || []} sessions={sessions} loading={checkoutState?.loading} error={checkoutState?.error} onRefresh={onRefreshCheckouts} onSave={onSaveCheckout} onReady={onReadyCheckout} onCancel={onCancelCheckout} /> : null}
         <div className="table-scroll">
           {apiMode && apiState.loading ? <div className="kitchen-empty"><p>注文を読み込み中です。</p></div> : apiMode && apiState.error ? <div className="kitchen-empty"><p>注文情報を取得できません。</p></div> : tables.length ? tables.map((tableId) => {
             const orders = activeOrders.filter((order) => order.tableId === tableId);
@@ -2285,6 +2480,7 @@ export function App() {
   const [orderClient, setOrderClient] = useState(null);
   const [customerDeviceConfig, setCustomerDeviceConfig] = useState(null);
   const [kitchenApiState, setKitchenApiState] = useState(null);
+  const [kitchenCheckoutState, setKitchenCheckoutState] = useState(null);
   const [pairingError, setPairingError] = useState("");
   const [state, setState] = useState(() => {
     try { return JSON.parse(localStorage.getItem(STORAGE_KEY)) || defaultState; } catch { return defaultState; }
@@ -2295,25 +2491,30 @@ export function App() {
   useEffect(() => {
     if (route !== "/kitchen") {
       setKitchenApiState(null);
+      setKitchenCheckoutState(null);
       return undefined;
     }
     if (!kitchenApiConfigured(window)) {
       setKitchenApiState(window.WARUN_ORDER_MODE === "demo" ? null : { loading: false, error: true, orders: [], sessions: [] });
+      setKitchenCheckoutState(window.WARUN_ORDER_MODE === "demo" ? null : { loading: false, error: true, checkouts: [] });
       return undefined;
     }
     let cancelled = false;
     const load = async () => {
       try {
-        const snapshot = await fetchKitchenSnapshot({ env: window });
+        const [snapshot, checkouts] = await Promise.all([fetchKitchenSnapshot({ env: window }), fetchKitchenCheckoutRequests({ env: window })]);
         if (!cancelled) setKitchenApiState({ loading: false, error: false, orders: snapshot.orders, sessions: snapshot.sessions });
+        if (!cancelled) setKitchenCheckoutState({ loading: false, error: false, checkouts });
       } catch {
         if (!cancelled) setKitchenApiState({ loading: false, error: true, orders: [], sessions: [] });
+        if (!cancelled) setKitchenCheckoutState((current) => current ? { ...current, loading: false, error: true } : { loading: false, error: true, checkouts: [] });
       }
     };
     setKitchenApiState({ loading: true, error: false, orders: [], sessions: [] });
     void load();
+    const unsubscribe = subscribeKitchenInvalidations({ env: window, onEvent: (event) => { if (event?.resource === "checkout" || String(event?.type || "").startsWith("checkout.")) void load(); } });
     const timer = window.setInterval(load, 2_000);
-    return () => { cancelled = true; window.clearInterval(timer); };
+    return () => { cancelled = true; window.clearInterval(timer); unsubscribe(); };
   }, [route]);
 
   const serveKitchenItem = async (orderId, orderItemId) => {
@@ -2324,6 +2525,30 @@ export function App() {
     } catch {
       setKitchenApiState((current) => current ? { ...current, error: true } : current);
     }
+  };
+
+  const refreshKitchenCheckouts = async () => {
+    const checkouts = await fetchKitchenCheckoutRequests({ env: window });
+    setKitchenCheckoutState({ loading: false, error: false, checkouts });
+    return checkouts;
+  };
+
+  const saveCheckout = async (checkout, adjustments) => {
+    const result = await saveKitchenCheckoutAdjustments({ env: window, checkoutRequestId: checkout.checkoutRequestId, expectedVersion: checkout.version, adjustments });
+    await refreshKitchenCheckouts();
+    return result;
+  };
+
+  const readyCheckout = async (checkout) => {
+    const result = await readyKitchenCheckout({ env: window, checkoutRequestId: checkout.checkoutRequestId, expectedVersion: checkout.version });
+    await refreshKitchenCheckouts();
+    return result;
+  };
+
+  const cancelCheckout = async (checkout) => {
+    const result = await cancelKitchenCheckout({ env: window, checkoutRequestId: checkout.checkoutRequestId, expectedVersion: checkout.version });
+    await refreshKitchenCheckouts();
+    return result;
   };
 
   const closeKitchenSession = async ({ tableId, sessionId }) => {
@@ -2406,7 +2631,7 @@ export function App() {
     if (isCustomerRoute && !orderClient) return <PairingScreen onClaim={claim} error={pairingError} />;
     if (route === "/") return <CustomerScreen state={state} updateState={updateState} deviceId="customer-03" orderClient={orderClient} customerDeviceConfig={customerDeviceConfig} />;
     if (route.startsWith("/customer/")) return <CustomerScreen state={state} updateState={updateState} deviceId={route.split("/")[2]} orderClient={orderClient} customerDeviceConfig={customerDeviceConfig} />;
-    if (route === "/kitchen") return <KitchenScreen state={state} updateState={updateState} apiState={kitchenApiState} onServe={serveKitchenItem} onCloseSession={closeKitchenSession} />;
+    if (route === "/kitchen") return <KitchenScreen state={state} updateState={updateState} apiState={kitchenApiState} checkoutState={kitchenCheckoutState} onServe={serveKitchenItem} onCloseSession={closeKitchenSession} onRefreshCheckouts={refreshKitchenCheckouts} onSaveCheckout={saveCheckout} onReadyCheckout={readyCheckout} onCancelCheckout={cancelCheckout} />;
     if (route === "/history") {
       const explicitDemo = window.WARUN_ORDER_MODE === "demo";
       const loadHistory = kitchenApiConfigured(window)
@@ -2417,7 +2642,7 @@ export function App() {
     if (route.startsWith("/admin/")) return <AdminScreen state={state} updateState={updateState} section={route.split("/")[2] || "menu"} />;
     if (route === "/devices") return <Launcher state={state} updateState={updateState} />;
     return <CustomerScreen state={state} updateState={updateState} deviceId="customer-03" orderClient={orderClient} customerDeviceConfig={customerDeviceConfig} />;
-  }, [route, state, orderClient, customerDeviceConfig, kitchenApiState, pairingError]);
+  }, [route, state, orderClient, customerDeviceConfig, kitchenApiState, pairingError, kitchenCheckoutState]);
 
   return content;
 }
