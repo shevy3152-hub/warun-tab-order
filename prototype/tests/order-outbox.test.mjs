@@ -9,6 +9,8 @@ import {
   createMemoryOutbox,
   createOrderOutbox,
   createOrderPayload,
+  fetchCustomerCheckout,
+  requestCustomerCheckout,
   fetchCustomerOrderHistory,
   resolveOrderApiConfig,
   retryDelayForAttempt,
@@ -499,4 +501,29 @@ test("demo mode remains local and immediately succeeds without IndexedDB", async
   assert.equal(client.mode, "demo");
   assert.equal(record.state, "synced");
   assert.deepEqual(await client.list(), []);
+});
+
+test("customer checkout client uses authenticated current/create contracts and hides staff details", async () => {
+  const calls = [];
+  const config = { enabled: true, baseUrl: "http://127.0.0.1:8787/v1", token: "customer-runtime-token" };
+  const checkoutRequestId = uuid(21);
+  const response = (body, headers = {}) => ({ ok: true, status: 200, headers: { get(name) { return headers[name] ?? null; } }, async json() { return body; } });
+  const fetchImpl = async (url, options) => {
+    calls.push({ url, options });
+    if (url.endsWith("/current")) return response({ checkout: { checkoutRequestId, status: "requested", receiptRequested: true, version: 1, requestedAtMs: 1, readyAtMs: null, orderedItemsTotalYen: 99999, adjustments: [] } });
+    return response({ checkoutRequestId, status: "requested", receiptRequested: true, version: 1, requestedAtMs: 1, readyAtMs: null, grandTotalYen: 99999 }, { "Idempotency-Result": "created" });
+  };
+  const current = await fetchCustomerCheckout({ config, fetchImpl });
+  assert.equal(current.status, "requested");
+  assert.equal("orderedItemsTotalYen" in current, false);
+  const created = await requestCustomerCheckout({ config, checkoutRequestId, receiptRequested: true, fetchImpl });
+  assert.equal(created.receiptRequested, true);
+  assert.equal(calls[0].options.headers.Authorization, "Bearer customer-runtime-token");
+  assert.deepEqual(JSON.parse(calls[1].options.body), { checkoutRequestId, receiptRequested: true });
+});
+
+test("customer checkout client preserves failure status without reporting success", async () => {
+  const config = { enabled: true, baseUrl: "http://127.0.0.1:8787/v1", token: "customer-runtime-token" };
+  const errorResponse = { ok: false, status: 409, async json() { return { error: { code: "CHECKOUT_CONFLICT" } }; } };
+  await assert.rejects(() => requestCustomerCheckout({ config, checkoutRequestId: uuid(22), receiptRequested: false, fetchImpl: async () => errorResponse }), (error) => error.status === 409 && error.code === "CHECKOUT_CONFLICT");
 });

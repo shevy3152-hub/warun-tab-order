@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { closeKitchenTableSession, fetchKitchenOrderHistory, fetchKitchenOrders, fetchKitchenSnapshot, kitchenApiConfigured, markKitchenItemServed } from "../src/kitchen-api.js";
+import { cancelKitchenCheckout, closeKitchenTableSession, fetchKitchenCheckoutRequests, fetchKitchenOrderHistory, fetchKitchenOrders, fetchKitchenSnapshot, kitchenApiConfigured, markKitchenItemServed, readyKitchenCheckout, saveKitchenCheckoutAdjustments } from "../src/kitchen-api.js";
 
 const TOKEN = "fixture-kitchen-runtime-token";
 
@@ -102,6 +102,58 @@ test("kitchen history uses the kitchen runtime token and SQLite API route", asyn
   assert.equal(orders[0].orderId, "completed-order-1");
   assert.equal(calls[0].url, "http://192.168.1.10:5173/v1/kitchen/order-history");
   assert.equal(calls[0].options.headers.Authorization, `Bearer ${TOKEN}`);
+});
+
+test("kitchen checkout API reads and mutates the authenticated v12 contract", async () => {
+  const calls = [];
+  const checkoutRequestId = "00000000-0000-4000-8000-000000000778";
+  const env = environment(async (url, options) => {
+    calls.push({ url, options });
+    return {
+      ok: true,
+      async json() {
+        if (url.endsWith("/checkout-requests")) return { checkouts: [{
+          checkoutRequestId,
+          status: "requested",
+          tableSessionId: "00000000-0000-4000-8000-000000000777",
+          receiptRequested: true,
+          orderedItemsTotalYen: 1800,
+          adjustmentsTotalYen: 500,
+          grandTotalYen: null,
+          version: 1,
+          requestedAtMs: 1786786940836,
+          readyAtMs: null,
+          updatedAtMs: 1786786940836,
+          adjustments: [{ adjustmentId: 1, checkoutRequestId, kind: "seat_charge", label: "席料", amountYen: 500, sortOrder: 0 }],
+        }] };
+        return {
+          checkoutRequestId,
+          status: url.endsWith("/ready") ? "ready" : url.endsWith("/cancel") ? "cancelled" : "requested",
+          tableSessionId: "00000000-0000-4000-8000-000000000777",
+          receiptRequested: true,
+          orderedItemsTotalYen: 1800,
+          adjustmentsTotalYen: 500,
+          grandTotalYen: url.endsWith("/ready") ? 2300 : null,
+          version: 2,
+          requestedAtMs: 1786786940836,
+          readyAtMs: url.endsWith("/ready") ? 1786787000000 : null,
+          updatedAtMs: 1786787000000,
+          adjustments: [{ adjustmentId: 1, checkoutRequestId, kind: "seat_charge", label: "席料", amountYen: 500, sortOrder: 0 }],
+        };
+      },
+    };
+  });
+  const list = await fetchKitchenCheckoutRequests({ env });
+  assert.equal(list[0].receiptRequested, true);
+  assert.equal(list[0].adjustments[0].amountYen, 500);
+  const saved = await saveKitchenCheckoutAdjustments({ env, checkoutRequestId, expectedVersion: 1, adjustments: [{ kind: "seat_charge", label: "席料", amountYen: 500 }] });
+  const ready = await readyKitchenCheckout({ env, checkoutRequestId, expectedVersion: saved.version });
+  await cancelKitchenCheckout({ env, checkoutRequestId, expectedVersion: ready.version });
+  assert.equal(calls[0].url, "http://192.168.1.10:5173/v1/kitchen/checkout-requests");
+  assert.equal(calls[1].options.method, "PUT");
+  assert.deepEqual(JSON.parse(calls[1].options.body), { expectedVersion: 1, adjustments: [{ kind: "seat_charge", label: "席料", amountYen: 500 }] });
+  assert.equal(calls[2].options.method, "POST");
+  assert.equal(calls[3].options.method, "POST");
 });
 
 test("kitchen API is not configured without an explicit runtime token", () => {

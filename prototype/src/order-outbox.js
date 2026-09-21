@@ -414,6 +414,73 @@ export async function fetchCustomerMenu({
   return body;
 }
 
+export class CustomerCheckoutError extends Error {
+  constructor(message, { status = 0, code = "CHECKOUT_API_ERROR" } = {}) {
+    super(message);
+    this.name = "CustomerCheckoutError";
+    this.status = status;
+    this.code = code;
+  }
+}
+
+async function checkoutResponseError(response, fallback) {
+  let body = null;
+  try { body = await response.json(); } catch { /* keep the stable status fallback */ }
+  const code = typeof body?.error?.code === "string" ? body.error.code : `HTTP_${response.status}`;
+  return new CustomerCheckoutError(fallback, { status: response.status, code });
+}
+
+function mapCustomerCheckout(checkout) {
+  if (!checkout) return null;
+  return {
+    checkoutRequestId: checkout.checkoutRequestId,
+    status: checkout.status,
+    receiptRequested: checkout.receiptRequested === true,
+    version: checkout.version,
+    requestedAtMs: checkout.requestedAtMs,
+    readyAtMs: checkout.readyAtMs ?? null,
+    ...(checkout.status === "ready" && Number.isSafeInteger(checkout.grandTotalYen) ? { grandTotalYen: checkout.grandTotalYen } : {}),
+  };
+}
+
+function requireCustomerCheckoutConfig(config, fetchImpl) {
+  if (!config?.enabled || !config.baseUrl || typeof fetchImpl !== "function") throw new CustomerCheckoutError("Customer checkout API is not configured.", { code: "API_UNAVAILABLE" });
+  return { endpoint: `${config.baseUrl}/customer/checkout-requests`, headers: { Accept: "application/json", Authorization: `Bearer ${config.token}` } };
+}
+
+export async function fetchCustomerCheckout({ config, fetchImpl = globalThis.fetch } = {}) {
+  const { endpoint, headers } = requireCustomerCheckoutConfig(config, fetchImpl);
+  let response;
+  try { response = await fetchImpl(`${endpoint}/current`, { method: "GET", headers }); }
+  catch { throw new CustomerCheckoutError("Customer checkout request failed.", { code: "NETWORK_ERROR" }); }
+  if (!response.ok) throw await checkoutResponseError(response, "会計状態を取得できません。");
+  let body;
+  try { body = await response.json(); } catch { throw new CustomerCheckoutError("会計状態の応答が不正です。", { code: "INVALID_RESPONSE" }); }
+  if (!body || (body.checkout !== null && typeof body.checkout !== "object")) throw new CustomerCheckoutError("会計状態の応答が不正です。", { code: "INVALID_RESPONSE" });
+  return mapCustomerCheckout(body.checkout);
+}
+
+export async function requestCustomerCheckout({ config, checkoutRequestId, receiptRequested, fetchImpl = globalThis.fetch } = {}) {
+  const { endpoint, headers } = requireCustomerCheckoutConfig(config, fetchImpl);
+  if (typeof checkoutRequestId !== "string" || !checkoutRequestId) throw new CustomerCheckoutError("Checkout request ID is required.", { code: "INVALID_REQUEST" });
+  let response;
+  try {
+    response = await fetchImpl(endpoint, {
+      method: "POST",
+      headers: { ...headers, "Content-Type": "application/json" },
+      body: JSON.stringify({ checkoutRequestId, receiptRequested: receiptRequested === true }),
+    });
+  } catch { throw new CustomerCheckoutError("会計依頼を送信できません。", { code: "NETWORK_ERROR" }); }
+  if (!response.ok) throw await checkoutResponseError(response, "会計依頼を送信できません。");
+  const idempotencyResult = response.headers?.get?.("Idempotency-Result")?.toLowerCase();
+  if (idempotencyResult !== "created" && idempotencyResult !== "replayed") throw new CustomerCheckoutError("会計依頼の応答が不正です。", { code: "INVALID_RESPONSE" });
+  let body;
+  try { body = await response.json(); } catch { throw new CustomerCheckoutError("会計依頼の応答が不正です。", { code: "INVALID_RESPONSE" }); }
+  const checkout = mapCustomerCheckout(body);
+  if (!checkout || checkout.status !== "requested") throw new CustomerCheckoutError("会計依頼の応答が不正です。", { code: "INVALID_RESPONSE" });
+  return checkout;
+}
+
 export function subscribeCustomerInvalidations({
   config,
   env = globalThis,
