@@ -65,6 +65,7 @@ function eventResource(eventType) {
   }
   if (eventType === 'business_hours.updated') return 'businessHours';
   if (eventType.startsWith('ride_guidance.')) return 'rideGuidance';
+  if (eventType.startsWith('checkout.')) return 'checkout';
   throw repositoryError(
     EVENT_ERROR_CODES.DATABASE_FAILURE,
     'The stored event type is unsupported.',
@@ -79,6 +80,7 @@ function canSeeEvent(row, device) {
     return resource === 'orders'
       || resource === 'menu'
       || resource === 'staffCalls'
+      || resource === 'checkout'
       || row.event_type === 'table.assignment_updated';
   }
 
@@ -87,6 +89,9 @@ function canSeeEvent(row, device) {
   }
   if (resource === 'staffCalls') {
     return row.call_customer_device_id === device.device_id;
+  }
+  if (resource === 'checkout') {
+    return row.checkout_customer_device_id === device.device_id;
   }
   if (resource === 'menu') return true;
   if (row.event_type === 'table.assignment_updated') {
@@ -99,6 +104,7 @@ function publicAggregateId(row, resource) {
   if (resource === 'orders' || resource === 'staffCalls') return row.aggregate_id;
   if (resource === 'menu') return 'menu';
   if (resource === 'businessHours') return 'business-hours';
+  if (resource === 'checkout') return row.aggregate_id;
   return 'device-config';
 }
 
@@ -190,13 +196,20 @@ export function createEventRepository({ database } = {}) {
       e.aggregate_id,
       e.created_at_ms,
       o.customer_device_id AS order_customer_device_id,
-      sc.customer_device_id AS call_customer_device_id
+      sc.customer_device_id AS call_customer_device_id,
+      checkout_table.assigned_customer_device_id AS checkout_customer_device_id
     `;
     const eventProjectionJoins = `
       LEFT JOIN orders AS o
         ON e.aggregate_type = 'order' AND o.order_id = e.aggregate_id
       LEFT JOIN staff_calls AS sc
         ON e.aggregate_type = 'staff_call' AND sc.staff_call_id = e.aggregate_id
+      LEFT JOIN checkout_requests AS cr
+        ON e.aggregate_type = 'checkout' AND cr.checkout_request_id = e.aggregate_id
+      LEFT JOIN table_sessions AS checkout_session
+        ON cr.table_session_id = checkout_session.session_id
+      LEFT JOIN tables AS checkout_table
+        ON checkout_session.table_id = checkout_table.table_id
     `;
 
     statements = {
