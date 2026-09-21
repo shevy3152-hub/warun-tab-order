@@ -22,6 +22,7 @@ tags:
   - name: StaffCalls
   - name: Admin
   - name: RideGuidance
+  - name: Checkout
   - name: Events
 security:
   - bearerAuth: []
@@ -473,6 +474,145 @@ paths:
         '403':
           $ref: '#/components/responses/PermissionDenied'
 
+  /v1/customer/checkout-requests:
+    post:
+      tags: [Checkout]
+      summary: 客席から会計を依頼する
+      operationId: createCheckoutRequest
+      description: 会計準備中は金額を返さず、ready後だけ確定合計を返す。再送はcheckoutRequestIdで冪等化する。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateCheckoutRequest'
+      responses:
+        '201':
+          description: 会計依頼を作成した
+          headers:
+            Idempotency-Result:
+              schema: { type: string, const: created }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PublicCheckoutResponse' }
+        '200':
+          description: 同一依頼IDの再送
+          headers:
+            Idempotency-Result:
+              schema: { type: string, const: replayed }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PublicCheckoutResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/AuthenticationFailed' }
+        '403': { $ref: '#/components/responses/PermissionDenied' }
+        '409': { $ref: '#/components/responses/CheckoutConflict' }
+
+  /v1/customer/checkout-requests/current:
+    get:
+      tags: [Checkout]
+      summary: 客席の現在会計状態を取得する
+      operationId: getCurrentCheckoutRequest
+      responses:
+        '200':
+          description: 現在の会計状態。内訳は含めない。
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CurrentCheckoutResponse' }
+        '401': { $ref: '#/components/responses/AuthenticationFailed' }
+        '403': { $ref: '#/components/responses/PermissionDenied' }
+
+  /v1/kitchen/checkout-requests:
+    get:
+      tags: [Checkout]
+      summary: 厨房のactive会計依頼一覧を取得する
+      operationId: listKitchenCheckoutRequests
+      responses:
+        '200':
+          description: requestedまたはreadyの会計依頼
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CheckoutListResponse' }
+        '401': { $ref: '#/components/responses/AuthenticationFailed' }
+        '403': { $ref: '#/components/responses/PermissionDenied' }
+
+  /v1/admin/checkout-requests:
+    get:
+      tags: [Checkout]
+      summary: 管理用のactive会計依頼一覧を取得する
+      operationId: listAdminCheckoutRequests
+      responses:
+        '200':
+          description: requestedまたはreadyの会計依頼
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CheckoutListResponse' }
+        '401': { $ref: '#/components/responses/AuthenticationFailed' }
+        '403': { $ref: '#/components/responses/PermissionDenied' }
+
+  /v1/{audience}/checkout-requests/{checkoutRequestId}/adjustments:
+    put:
+      tags: [Checkout]
+      summary: 会計の追加料金を保存する
+      operationId: saveCheckoutAdjustments
+      parameters:
+        - { $ref: '#/components/parameters/CheckoutAudience' }
+        - { $ref: '#/components/parameters/CheckoutRequestId' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SaveCheckoutAdjustmentsRequest' }
+      responses:
+        '200': { description: 更新後会計, content: { application/json: { schema: { $ref: '#/components/schemas/StaffCheckoutResponse' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/AuthenticationFailed' }
+        '403': { $ref: '#/components/responses/PermissionDenied' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/CheckoutConflict' }
+
+  /v1/{audience}/checkout-requests/{checkoutRequestId}/ready:
+    post:
+      tags: [Checkout]
+      summary: 会計金額を確定する
+      operationId: finalizeCheckoutRequest
+      parameters:
+        - { $ref: '#/components/parameters/CheckoutAudience' }
+        - { $ref: '#/components/parameters/CheckoutRequestId' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CheckoutVersionRequest' }
+      responses:
+        '200': { description: 確定後会計, content: { application/json: { schema: { $ref: '#/components/schemas/StaffCheckoutResponse' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/AuthenticationFailed' }
+        '403': { $ref: '#/components/responses/PermissionDenied' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/CheckoutConflict' }
+
+  /v1/{audience}/checkout-requests/{checkoutRequestId}/cancel:
+    post:
+      tags: [Checkout]
+      summary: 会計依頼をキャンセルする
+      operationId: cancelCheckoutRequest
+      parameters:
+        - { $ref: '#/components/parameters/CheckoutAudience' }
+        - { $ref: '#/components/parameters/CheckoutRequestId' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CheckoutVersionRequest' }
+      responses:
+        '200': { description: キャンセル後会計, content: { application/json: { schema: { $ref: '#/components/schemas/StaffCheckoutResponse' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/AuthenticationFailed' }
+        '403': { $ref: '#/components/responses/PermissionDenied' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
   /v1/kitchen/order-history:
     get:
       tags: [Orders]
@@ -917,6 +1057,19 @@ components:
       description: ペアリング時に一度だけ発行される256-bit以上の端末トークン
 
   parameters:
+    CheckoutAudience:
+      name: audience
+      in: path
+      required: true
+      schema:
+        type: string
+        enum: [kitchen, admin]
+    CheckoutRequestId:
+      name: checkoutRequestId
+      in: path
+      required: true
+      schema:
+        $ref: '#/components/schemas/Uuid'
     OrderId:
       name: orderId
       in: path
@@ -1142,6 +1295,12 @@ components:
               clientOrderId: 01912345-6789-4abc-8def-0123456789ab
     VersionConflict:
       description: expectedVersionが現在値と一致しない
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    CheckoutConflict:
+      description: 会計依頼の重複、状態不一致、またはexpectedVersion競合
       content:
         application/problem+json:
           schema:
@@ -1993,6 +2152,144 @@ components:
           type: integer
           minimum: 1
           maximum: 99
+    CreateCheckoutRequest:
+      type: object
+      additionalProperties: false
+      required: [checkoutRequestId, receiptRequested]
+      properties:
+        checkoutRequestId:
+          $ref: '#/components/schemas/Uuid'
+        receiptRequested:
+          type: boolean
+          description: 手書き領収書を希望するか
+    CheckoutVersionRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion]
+      properties:
+        expectedVersion:
+          type: integer
+          minimum: 1
+    CheckoutAdjustment:
+      type: object
+      additionalProperties: false
+      required: [kind, label, amountYen]
+      properties:
+        kind:
+          type: string
+          enum: [seat_charge, late_night_charge, extension_charge, other]
+        label:
+          type: string
+          minLength: 1
+          maxLength: 100
+        amountYen:
+          type: integer
+          minimum: 0
+    SaveCheckoutAdjustmentsRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion, adjustments]
+      properties:
+        expectedVersion:
+          type: integer
+          minimum: 1
+        adjustments:
+          type: array
+          maxItems: 20
+          items:
+            $ref: '#/components/schemas/CheckoutAdjustment'
+    PublicCheckoutResponse:
+      type: object
+      additionalProperties: false
+      required: [checkoutRequestId, status, receiptRequested, version, requestedAtMs, readyAtMs]
+      properties:
+        checkoutRequestId:
+          $ref: '#/components/schemas/Uuid'
+        status:
+          type: string
+          enum: [requested, ready, cancelled]
+        receiptRequested:
+          type: boolean
+        version:
+          type: integer
+          minimum: 1
+        requestedAtMs:
+          $ref: '#/components/schemas/TimestampMs'
+        readyAtMs:
+          $ref: '#/components/schemas/TimestampMs'
+        grandTotalYen:
+          type: integer
+          minimum: 0
+          description: ready時だけ返す。内訳は返さない。
+    CurrentCheckoutResponse:
+      type: object
+      additionalProperties: false
+      required: [checkout]
+      properties:
+        checkout:
+          oneOf:
+            - $ref: '#/components/schemas/PublicCheckoutResponse'
+            - type: 'null'
+    StaffCheckout:
+      type: object
+      additionalProperties: false
+      required: [checkoutRequestId, tableSessionId, status, receiptRequested, orderedItemsTotalYen, adjustmentsTotalYen, grandTotalYen, version, requestedAtMs, readyAtMs, updatedAtMs, adjustments]
+      properties:
+        checkoutRequestId:
+          $ref: '#/components/schemas/Uuid'
+        tableSessionId:
+          $ref: '#/components/schemas/Uuid'
+        status:
+          type: string
+          enum: [requested, ready, cancelled]
+        receiptRequested:
+          type: boolean
+        orderedItemsTotalYen:
+          type: integer
+          minimum: 0
+        adjustmentsTotalYen:
+          type: integer
+          minimum: 0
+        grandTotalYen:
+          type: integer
+          nullable: true
+          minimum: 0
+        version:
+          type: integer
+          minimum: 1
+        requestedAtMs:
+          $ref: '#/components/schemas/TimestampMs'
+        readyAtMs:
+          $ref: '#/components/schemas/TimestampMs'
+        updatedAtMs:
+          $ref: '#/components/schemas/TimestampMs'
+        adjustments:
+          type: array
+          items:
+            allOf:
+              - $ref: '#/components/schemas/CheckoutAdjustment'
+              - type: object
+                required: [adjustmentId, checkoutRequestId, sortOrder]
+                properties:
+                  adjustmentId:
+                    type: integer
+                    minimum: 1
+                  checkoutRequestId:
+                    $ref: '#/components/schemas/Uuid'
+                  sortOrder:
+                    type: integer
+                    minimum: 0
+    StaffCheckoutResponse:
+      $ref: '#/components/schemas/StaffCheckout'
+    CheckoutListResponse:
+      type: object
+      additionalProperties: false
+      required: [checkouts]
+      properties:
+        checkouts:
+          type: array
+          items:
+            $ref: '#/components/schemas/StaffCheckout'
     CreateOrderRequest:
       type: object
       additionalProperties: false

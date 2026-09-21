@@ -3,7 +3,7 @@ import { HTTP_ERROR_CODES, createHttpError } from './http-errors.mjs';
 const DEVICE_ROLES = new Set(['customer', 'kitchen', 'admin']);
 const ORDER_STATUSES = new Set(['new', 'active', 'completed']);
 const STAFF_CALL_STATUSES = new Set(['open', 'resolved']);
-const EVENT_RESOURCES = new Set(['orders', 'menu', 'staffCalls', 'deviceConfig', 'businessHours', 'rideGuidance']);
+const EVENT_RESOURCES = new Set(['orders', 'menu', 'staffCalls', 'deviceConfig', 'businessHours', 'rideGuidance', 'checkout']);
 const EVENT_TYPES_BY_ROLE = Object.freeze({
   customer: new Set([
     'order.created',
@@ -24,6 +24,7 @@ const EVENT_TYPES_BY_ROLE = Object.freeze({
     'menu.sold_out_updated',
     'staff_call.created',
     'staff_call.resolved',
+    'checkout.requested', 'checkout.adjustments_updated', 'checkout.ready', 'checkout.cancelled',
     'table.assignment_updated',
   ]),
   admin: new Set([
@@ -40,10 +41,11 @@ const EVENT_TYPES_BY_ROLE = Object.freeze({
     'ride_guidance.pickup_updated', 'ride_guidance.contact_created',
     'ride_guidance.contact_updated', 'ride_guidance.contact_deleted',
     'ride_guidance.contacts_reordered',
+    'checkout.requested', 'checkout.adjustments_updated', 'checkout.ready', 'checkout.cancelled',
     'table.assignment_updated',
   ]),
 });
-const SUPPORTED_SCHEMA_VERSION = 11;
+const SUPPORTED_SCHEMA_VERSION = 12;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const OPAQUE_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
 
@@ -406,6 +408,8 @@ function mapEvent(event, audience, eventEpoch, previousEventId, lastEventId) {
           ? 'businessHours'
         : type.startsWith('ride_guidance.')
           ? 'rideGuidance'
+          : type.startsWith('checkout.')
+            ? 'checkout'
         : 'deviceConfig';
   const resource = requireOneOf(payload.resource, EVENT_RESOURCES);
   if (resource !== expectedResource || requireBoolean(payload.refreshRequired) !== true) {
@@ -552,6 +556,46 @@ export function mapRideGuidanceWriteResponse(result) {
   if (Object.hasOwn(result, 'contacts')) response.contacts = requireArray(result.contacts).map((contact) => mapRideGuidanceContact(contact, { admin: true }));
   if (Object.hasOwn(result, 'id')) response.id = requireOpaqueId(result.id);
   return response;
+}
+
+function mapCheckoutBase(request) {
+  requireObject(request);
+  return {
+    checkoutRequestId: requireUuid(request.checkoutRequestId),
+    status: requireOneOf(request.status, new Set(['requested', 'ready', 'cancelled'])),
+    receiptRequested: requireBoolean(request.receiptRequested),
+    version: requireInteger(request.version, 1),
+    requestedAtMs: requireInteger(request.requestedAtMs),
+    readyAtMs: request.readyAtMs === null ? null : requireInteger(request.readyAtMs),
+  };
+}
+
+export function mapCheckoutPublicResponse(request) {
+  const response = mapCheckoutBase(request);
+  if (request.status === 'ready') response.grandTotalYen = requireInteger(request.grandTotalYen);
+  return response;
+}
+
+export function mapCheckoutStaffResponse(request) {
+  const response = mapCheckoutBase(request);
+  response.tableSessionId = requireUuid(request.tableSessionId);
+  response.orderedItemsTotalYen = requireInteger(request.orderedItemsTotalYen);
+  response.adjustmentsTotalYen = requireInteger(request.adjustmentsTotalYen);
+  response.grandTotalYen = request.grandTotalYen === null ? null : requireInteger(request.grandTotalYen);
+  response.updatedAtMs = requireInteger(request.updatedAtMs);
+  response.adjustments = requireArray(request.adjustments).map((adjustment) => ({
+    adjustmentId: requireInteger(adjustment.adjustmentId, 1),
+    checkoutRequestId: requireUuid(adjustment.checkoutRequestId),
+    kind: requireString(adjustment.kind),
+    label: requireString(adjustment.label),
+    amountYen: requireInteger(adjustment.amountYen),
+    sortOrder: requireInteger(adjustment.sortOrder),
+  }));
+  return response;
+}
+
+export function mapCheckoutStaffListResponse(requests) {
+  return { checkouts: requireArray(requests).map(mapCheckoutStaffResponse) };
 }
 
 export function mapCatalogWriteResponse(result) {

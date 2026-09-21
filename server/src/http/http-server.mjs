@@ -37,6 +37,10 @@ import {
   isOrderRepositoryError,
 } from '../orders/order-errors.mjs';
 import {
+  CHECKOUT_ERROR_CODES,
+  isCheckoutRepositoryError,
+} from '../checkout/checkout-errors.mjs';
+import {
   HTTP_ERROR_CODES,
   createHttpError,
   isReadOnlyHttpError,
@@ -58,6 +62,9 @@ import {
   mapOrderHistoryResponse,
   mapOrderReceiptResponse,
   mapTableSessionCloseResponse,
+  mapCheckoutPublicResponse,
+  mapCheckoutStaffResponse,
+  mapCheckoutStaffListResponse,
   mapSnapshotResponse,
   mapPairingPreflightResponse,
   writeJsonResponse,
@@ -77,10 +84,14 @@ const ROUTE_METHODS = new Map([
   ['/v1/menu', 'GET'],
   ['/v1/orders', 'POST'],
   ['/v1/customer/order-history', 'GET'],
+  ['/v1/customer/checkout-requests', 'POST'],
+  ['/v1/customer/checkout-requests/current', 'GET'],
+  ['/v1/kitchen/checkout-requests', 'GET'],
   ['/v1/kitchen/order-items/serve', 'POST'],
   ['/v1/tables/sessions/close', 'POST'],
   ['/v1/kitchen/order-history', 'GET'],
   ['/v1/admin/order-history', 'GET'],
+  ['/v1/admin/checkout-requests', 'GET'],
   ['/v1/admin/diagnostics', 'GET'],
   ['/v1/admin/pairing-preflight', 'GET'],
   ['/v1/snapshot', 'GET'],
@@ -609,6 +620,16 @@ function mapApplicationError(error) {
     return createHttpError(HTTP_ERROR_CODES.INTERNAL_ERROR);
   }
 
+  if (isCheckoutRepositoryError(error)) {
+    if (error.code === CHECKOUT_ERROR_CODES.INVALID_CHECKOUT_REQUEST) return createHttpError(HTTP_ERROR_CODES.INVALID_CHECKOUT_REQUEST);
+    if (error.code === CHECKOUT_ERROR_CODES.CHECKOUT_CONFLICT) return createHttpError(HTTP_ERROR_CODES.CHECKOUT_CONFLICT);
+    if (error.code === CHECKOUT_ERROR_CODES.VERSION_CONFLICT) return createHttpError(HTTP_ERROR_CODES.CHECKOUT_VERSION_CONFLICT);
+    if (error.code === CHECKOUT_ERROR_CODES.CHECKOUT_NOT_FOUND) return createHttpError(HTTP_ERROR_CODES.CHECKOUT_NOT_FOUND);
+    if (error.code === CHECKOUT_ERROR_CODES.SESSION_NOT_FOUND) return createHttpError(HTTP_ERROR_CODES.CHECKOUT_SESSION_NOT_FOUND);
+    if (error.code === CHECKOUT_ERROR_CODES.DATABASE_FAILURE && hasBusyCause(error)) return createHttpError(HTTP_ERROR_CODES.SERVICE_UNAVAILABLE);
+    return createHttpError(HTTP_ERROR_CODES.INTERNAL_ERROR);
+  }
+
   if (isEventRepositoryError(error)) {
     if (
       error.code === EVENT_ERROR_CODES.AUTHENTICATION_REQUIRED
@@ -808,6 +829,7 @@ function createConfiguredHttpServer({
   menuDiagnosticRecorder = undefined,
   businessHours = undefined,
   rideGuidance = undefined,
+  checkout = undefined,
 } = {}, { integrated }) {
   if (
     !authenticator
@@ -866,6 +888,9 @@ function createConfiguredHttpServer({
       let configuredMethods = routeMethods.get(target.path);
       if (!configuredMethods && integrated && /^\/v1\/admin\/ride-guidance\/contacts\/[A-Za-z0-9_-]{1,64}$/.test(target.path)) {
         configuredMethods = new Set(['PUT', 'DELETE']);
+      }
+      if (!configuredMethods && integrated && /^\/v1\/(kitchen|admin)\/checkout-requests\/[0-9a-f-]{36}\/(adjustments|ready|cancel)$/.test(target.path)) {
+        configuredMethods = target.path.endsWith('/adjustments') ? 'PUT' : 'POST';
       }
       if (!configuredMethods) {
         drainRequest(request);
@@ -1189,6 +1214,59 @@ function createConfiguredHttpServer({
           statusCode: 200,
           body: mapCustomerOrderHistoryResponse(orders.getCustomerHistory(principal)),
           requestId,
+        });
+        return;
+      }
+
+      if (target.path === '/v1/customer/checkout-requests') {
+        authorizeDeviceRole(principal, ['customer']);
+        const body = await readJsonBody(request);
+        const result = requireService(checkout, 'createCheckout').createCheckout({
+          principal,
+          checkoutRequestId: body?.checkoutRequestId,
+          receiptRequested: body?.receiptRequested,
+        });
+        await notifyCommittedSafely(sseHub, result);
+        writeJsonResponse(response, {
+          statusCode: result.idempotencyResult === 'created' ? 201 : 200,
+          body: mapCheckoutPublicResponse(result.request),
+          requestId,
+          headers: { 'Idempotency-Result': result.idempotencyResult },
+        });
+        return;
+      }
+
+      if (target.path === '/v1/customer/checkout-requests/current') {
+        authorizeDeviceRole(principal, ['customer']);
+        drainRequest(request);
+        const current = requireService(checkout, 'getCustomerCheckout').getCustomerCheckout(principal);
+        writeJsonResponse(response, { statusCode: 200, body: { checkout: current ? mapCheckoutPublicResponse(current) : null }, requestId });
+        return;
+      }
+
+      if (target.path === '/v1/kitchen/checkout-requests' || target.path === '/v1/admin/checkout-requests') {
+        authorizeDeviceRole(principal, target.path.startsWith('/v1/kitchen/') ? ['kitchen', 'admin'] : ['admin']);
+        drainRequest(request);
+        const list = requireService(checkout, 'listActive').listActive({ principal });
+        writeJsonResponse(response, { statusCode: 200, body: mapCheckoutStaffListResponse(list), requestId });
+        return;
+      }
+
+      const checkoutMutation = target.path.match(/^\/v1\/(kitchen|admin)\/checkout-requests\/([0-9a-f-]{36})\/(adjustments|ready|cancel)$/);
+      if (checkoutMutation) {
+        const [, audience, checkoutRequestId, operation] = checkoutMutation;
+        authorizeDeviceRole(principal, audience === 'kitchen' ? ['kitchen', 'admin'] : ['admin']);
+        const body = await readJsonBody(request);
+        const repository = requireService(checkout, operation === 'adjustments' ? 'saveAdjustments' : operation);
+        const result = operation === 'adjustments'
+          ? repository.saveAdjustments({ principal, checkoutRequestId, expectedVersion: body?.expectedVersion, adjustments: body?.adjustments })
+          : repository[operation]({ principal, checkoutRequestId, expectedVersion: body?.expectedVersion });
+        await notifyCommittedSafely(sseHub, result);
+        writeJsonResponse(response, {
+          statusCode: 200,
+          body: mapCheckoutStaffResponse(result.request),
+          requestId,
+          headers: { 'Idempotency-Result': result.idempotencyResult },
         });
         return;
       }

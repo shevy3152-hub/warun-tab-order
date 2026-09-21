@@ -10,6 +10,11 @@ export const HTTP_ERROR_CODES = Object.freeze({
   CATALOG_CONFLICT: 'CATALOG_CONFLICT',
   BUSINESS_HOURS_CONFLICT: 'BUSINESS_HOURS_CONFLICT',
   RIDE_GUIDANCE_CONFLICT: 'RIDE_GUIDANCE_CONFLICT',
+  CHECKOUT_CONFLICT: 'CHECKOUT_CONFLICT',
+  CHECKOUT_NOT_FOUND: 'CHECKOUT_NOT_FOUND',
+  CHECKOUT_VERSION_CONFLICT: 'CHECKOUT_VERSION_CONFLICT',
+  INVALID_CHECKOUT_REQUEST: 'INVALID_CHECKOUT_REQUEST',
+  CHECKOUT_SESSION_NOT_FOUND: 'CHECKOUT_SESSION_NOT_FOUND',
   ORDER_NOT_FOUND: 'ORDER_NOT_FOUND',
   SESSION_NOT_FOUND: 'SESSION_NOT_FOUND',
   SESSION_CONFLICT: 'SESSION_CONFLICT',
@@ -75,6 +80,26 @@ const DEFINITIONS = Object.freeze({
   [HTTP_ERROR_CODES.RIDE_GUIDANCE_CONFLICT]: Object.freeze({
     statusCode: 409,
     message: 'Ride guidance conflicts with a newer version.',
+  }),
+  [HTTP_ERROR_CODES.CHECKOUT_CONFLICT]: Object.freeze({
+    statusCode: 409,
+    message: 'Checkout conflicts with an existing request.',
+  }),
+  [HTTP_ERROR_CODES.CHECKOUT_VERSION_CONFLICT]: Object.freeze({
+    statusCode: 409,
+    message: 'Checkout conflicts with a newer version.',
+  }),
+  [HTTP_ERROR_CODES.INVALID_CHECKOUT_REQUEST]: Object.freeze({
+    statusCode: 400,
+    message: 'Invalid checkout request.',
+  }),
+  [HTTP_ERROR_CODES.CHECKOUT_SESSION_NOT_FOUND]: Object.freeze({
+    statusCode: 404,
+    message: 'The current table session was not found.',
+  }),
+  [HTTP_ERROR_CODES.CHECKOUT_NOT_FOUND]: Object.freeze({
+    statusCode: 404,
+    message: 'Checkout request was not found.',
   }),
   [HTTP_ERROR_CODES.ORDER_NOT_FOUND]: Object.freeze({
     statusCode: 404,

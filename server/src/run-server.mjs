@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 
 import { createDeviceAuthenticator } from "./auth/device-auth.mjs";
 import { createCatalogRepository } from "./catalog/catalog-repository.mjs";
+import { createCheckoutRepository } from "./checkout/checkout-repository.mjs";
 import { createBusinessHoursRepository } from "./business-hours/business-hours-repository.mjs";
 import { createRideGuidanceRepository } from "./ride-guidance/ride-guidance-repository.mjs";
 import { initializeDatabase } from "./db/database.mjs";
@@ -109,6 +110,7 @@ export function createWarunServer({ databasePath, runtimeInfo = undefined, now =
   const catalog = createCatalogRepository({ database });
   const businessHours = createBusinessHoursRepository({ database, now });
   const rideGuidance = createRideGuidanceRepository({ database, now });
+  const checkout = createCheckoutRepository({ database, now });
   const eventRepository = createEventRepository({ database });
   const orderRepository = createOrderRepository({ database, now });
   const pairingService = createPairingService({ database, now });
@@ -143,6 +145,7 @@ export function createWarunServer({ databasePath, runtimeInfo = undefined, now =
     menuDiagnosticRecorder,
     businessHours,
     rideGuidance,
+    checkout,
   });
 
   const closeDependencies = () => {
@@ -151,6 +154,7 @@ export function createWarunServer({ databasePath, runtimeInfo = undefined, now =
     catalog.close();
     businessHours.close();
     rideGuidance.close();
+    checkout.close();
     eventRepository.close();
     orderRepository.close();
     snapshotService.close?.();
