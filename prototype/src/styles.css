@@ -653,6 +653,12 @@ h1, h2, h3, p { margin: 0; }
 .history-table th { height: 55px; text-align: left; font-size: 12px; letter-spacing: .06em; }
 .history-table th, .history-table td { padding: 12px 14px; border-bottom: 1px solid var(--line); vertical-align: top; }
 .history-table td { font-size: 13px; }
+.history-session + .history-session { margin-top: 18px; }
+.history-session-divider { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 16px; background: var(--ink); color: var(--paper); border-radius: 12px 12px 0 0; }
+.history-session-divider div { display: flex; align-items: baseline; gap: 14px; }
+.history-session-divider span { color: rgba(255, 255, 255, .76); font-size: 13px; }
+.history-session-divider strong { color: var(--accent); white-space: nowrap; }
+.history-session .history-table { border-radius: 0 0 12px 12px; }
 .table-pill { display: inline-grid; place-items: center; min-width: 42px; height: 42px; background: var(--red); color: #fff; font-weight: 900; }
 .history-items { display: grid; gap: 5px; }
 .history-items span { display: grid; grid-template-columns: minmax(120px, 1fr) 40px 70px; }

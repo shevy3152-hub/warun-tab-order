@@ -452,6 +452,8 @@ test('admin order history reads completed SQLite orders without exposing interna
     assert.equal(response.statusCode, 200);
     assert.equal(response.json.orders.length, 1);
     assert.equal(response.json.orders[0].clientOrderId, clientOrderId);
+    assert.match(response.json.orders[0].sessionId, /^[0-9a-f-]{36}$/);
+    assert.equal(typeof response.json.orders[0].sessionOpenedAtMs, 'number');
     assert.equal(response.json.orders[0].items.length, 1);
     assert.doesNotMatch(response.rawBody, /requestFingerprint|canonicalRequest|authenticatedDeviceId|token/i);
 

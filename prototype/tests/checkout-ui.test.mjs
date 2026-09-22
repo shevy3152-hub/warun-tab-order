@@ -32,5 +32,12 @@ test("kitchen history starts with today's completed orders and can reveal past o
   assert.match(appSource, /過去の注文も表示/);
   assert.match(appSource, /本日の注文だけ表示/);
   assert.match(appSource, /本日提供完了した注文はありません/);
+  assert.match(appSource, /sessionGroups/);
+  assert.match(appSource, /history-session-divider/);
+  assert.match(appSource, /会計済み/);
+  assert.match(appSource, /終了・会計記録なし/);
+  assert.match(appSource, /会計前/);
+  assert.match(appSource, /record\.status === "paid"/);
   assert.match(styles, /\.history-past-notice/);
+  assert.match(styles, /\.history-session-divider/);
 });

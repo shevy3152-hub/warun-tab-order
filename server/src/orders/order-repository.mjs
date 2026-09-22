@@ -239,6 +239,8 @@ function mapOrderRow(row, items) {
     items,
   };
   if (row.session_id !== null && row.session_id !== undefined) order.sessionId = row.session_id;
+  if (row.session_opened_at_ms !== undefined) order.sessionOpenedAtMs = row.session_opened_at_ms;
+  if (row.session_closed_at_ms !== undefined) order.sessionClosedAtMs = row.session_closed_at_ms;
   return order;
 }
 
@@ -329,22 +331,25 @@ export function createOrderRepository({ database, now = Date.now, idFactory = ra
       `),
       findHistoryOrders: database.prepare(`
         SELECT
-          order_id,
-          client_order_id,
-          request_fingerprint,
-          canonical_request_json,
-          customer_device_id,
-          table_id,
-          session_id,
-          table_number_snapshot,
-          status,
-          total_amount_yen,
-          accepted_at_ms,
-          completed_at_ms,
-          version
+          orders.order_id,
+          orders.client_order_id,
+          orders.request_fingerprint,
+          orders.canonical_request_json,
+          orders.customer_device_id,
+          orders.table_id,
+          orders.session_id,
+          orders.table_number_snapshot,
+          orders.status,
+          orders.total_amount_yen,
+          orders.accepted_at_ms,
+          orders.completed_at_ms,
+          orders.version,
+          table_sessions.opened_at_ms AS session_opened_at_ms,
+          table_sessions.closed_at_ms AS session_closed_at_ms
         FROM orders
+        LEFT JOIN table_sessions ON table_sessions.session_id = orders.session_id
         WHERE status = 'completed'
-        ORDER BY completed_at_ms DESC, order_id DESC
+        ORDER BY orders.completed_at_ms DESC, orders.order_id DESC
       `),
       findCustomerHistoryOrders: database.prepare(`
         SELECT

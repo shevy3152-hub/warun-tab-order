@@ -312,6 +312,8 @@ function mapStaffOrder(order) {
     items: items.map(mapStaffOrderItem),
   };
   if (Object.hasOwn(order, 'sessionId')) response.sessionId = requireUuid(order.sessionId);
+  if (Object.hasOwn(order, 'sessionOpenedAtMs') && order.sessionOpenedAtMs !== null) response.sessionOpenedAtMs = requireInteger(order.sessionOpenedAtMs);
+  if (Object.hasOwn(order, 'sessionClosedAtMs') && order.sessionClosedAtMs !== null) response.sessionClosedAtMs = requireInteger(order.sessionClosedAtMs);
   if (Object.hasOwn(order, 'completedAtMs') && order.completedAtMs !== null) {
     response.completedAtMs = requireInteger(order.completedAtMs);
   }

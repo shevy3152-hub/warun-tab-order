@@ -1618,6 +1618,9 @@ function HistoryScreen({ state, apiMode = false, loadHistory = null, loadPayment
     completedAt: order.completedAtMs ? new Date(order.completedAtMs).toISOString() : null,
     status: order.status,
     totalAmount: order.totalAmountYen,
+    sessionId: order.sessionId || null,
+    sessionOpenedAtMs: order.sessionOpenedAtMs || null,
+    sessionClosedAtMs: order.sessionClosedAtMs || null,
     items: order.items.map((item) => ({
       id: String(item.orderItemId),
       nameSnapshot: item.formalNameSnapshot,
@@ -1636,6 +1639,24 @@ function HistoryScreen({ state, apiMode = false, loadHistory = null, loadPayment
   const pastCompleted = completed.length - completedToday.length;
   const visibleCompleted = showPastOrders ? completed : completedToday;
   const todayTotal = completedToday.reduce((sum, order) => sum + order.totalAmount, 0);
+  const sessionGroups = [...visibleCompleted.reduce((groups, order) => {
+    const sessionId = order.sessionId || `order-${order.id}`;
+    const existing = groups.get(sessionId) || {
+      sessionId,
+      tableId: order.tableId,
+      openedAtMs: order.sessionOpenedAtMs || new Date(order.createdAt).getTime(),
+      closedAtMs: order.sessionClosedAtMs || null,
+      orders: [],
+    };
+    existing.orders.push(order);
+    if (!existing.openedAtMs && order.sessionOpenedAtMs) existing.openedAtMs = order.sessionOpenedAtMs;
+    if (!existing.closedAtMs && order.sessionClosedAtMs) existing.closedAtMs = order.sessionClosedAtMs;
+    groups.set(sessionId, existing);
+    return groups;
+  }, new Map()).values()].map((group) => {
+    const payment = paymentRemoteState.payments.find((record) => record.tableSessionId === group.sessionId && record.status === "paid");
+    return { ...group, paymentStatus: payment ? "会計済み" : group.closedAtMs ? "終了・会計記録なし" : "会計前" };
+  });
   return (
     <StaffShell route="/history" title="提供済み（履歴）" subtitle="完了した注文を、注文時点の品名と単価で確認できます。" state={state} right={<ConnectionBadge online />}>
       <section className="history-content">
@@ -1645,11 +1666,14 @@ function HistoryScreen({ state, apiMode = false, loadHistory = null, loadPayment
         {(!apiMode || (!remoteState.loading && !remoteState.error)) && completed.length === 0 ? <div className="empty-state"><p>注文履歴はありません。</p></div> : null}
         {(!apiMode || (!remoteState.loading && !remoteState.error)) && completed.length > 0 && completedToday.length === 0 && !showPastOrders ? <div className="history-past-notice"><p>本日提供完了した注文はありません。</p><p>過去の注文を確認する場合は、下のボタンを押してください。</p></div> : null}
         {(!apiMode || (!remoteState.loading && !remoteState.error)) && pastCompleted > 0 ? <div className="history-past-actions"><button type="button" className="button button--outline" onClick={() => setShowPastOrders((current) => !current)}>{showPastOrders ? "本日の注文だけ表示" : "過去の注文も表示"}</button>{showPastOrders ? <span>過去の注文を含めて表示中です。</span> : null}</div> : null}
-        {(!apiMode || (!remoteState.loading && !remoteState.error)) && visibleCompleted.length > 0 && <div className="history-table-wrap">
-          <table className="history-table">
-            <thead><tr><th>注文番号</th><th>テーブル</th><th>受付</th><th>完了</th><th>品目</th><th>合計</th></tr></thead>
-            <tbody>{visibleCompleted.map((order) => <tr key={order.id}><td><b>{order.id}</b></td><td><span className="table-pill">T{order.tableId}</span></td><td>{formatDateTime(order.createdAt)}</td><td>{formatDateTime(order.completedAt)}</td><td><div className="history-items">{order.items.map((item) => <span key={item.id}>{selectionDisplayName({ name: item.nameSnapshot }, item)} <b>{item.quantity}点</b> <small>{yen(item.unitPriceSnapshot)}</small></span>)}</div></td><td className="history-total">{yen(order.totalAmount)}</td></tr>)}</tbody>
-          </table>
+        {(!apiMode || (!remoteState.loading && !remoteState.error)) && sessionGroups.length > 0 && <div className="history-table-wrap">
+          {sessionGroups.map((group) => <section className="history-session" key={group.sessionId}>
+            <header className="history-session-divider"><div><b>テーブル {group.tableId}</b><span>来店日時 {formatDateTime(new Date(group.openedAtMs))}</span></div><strong>{group.paymentStatus}</strong></header>
+            <table className="history-table">
+              <thead><tr><th>注文番号</th><th>テーブル</th><th>受付</th><th>完了</th><th>品目</th><th>合計</th></tr></thead>
+              <tbody>{group.orders.map((order) => <tr key={order.id}><td><b>{order.id}</b></td><td><span className="table-pill">T{order.tableId}</span></td><td>{formatDateTime(order.createdAt)}</td><td>{formatDateTime(order.completedAt)}</td><td><div className="history-items">{order.items.map((item) => <span key={item.id}>{selectionDisplayName({ name: item.nameSnapshot }, item)} <b>{item.quantity}点</b> <small>{yen(item.unitPriceSnapshot)}</small></span>)}</div></td><td className="history-total">{yen(order.totalAmount)}</td></tr>)}</tbody>
+            </table>
+          </section>)}
         </div>}
         <section className="payment-history" aria-labelledby="payment-history-title">
           <div className="payment-history__heading"><div><span className="section-kicker">PAYMENT HISTORY</span><h2 id="payment-history-title">会計履歴</h2><p>支払確認後に保存した記録です。席リセットだけの操作は含みません。</p></div></div>
