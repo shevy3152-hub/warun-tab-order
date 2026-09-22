@@ -68,6 +68,11 @@ test('checkout HTTP contract enforces roles and hides customer breakdown', async
     assert.equal(created.json.status, 'requested');
     assert.equal(Object.hasOwn(created.json, 'grandTotalYen'), false);
     assert.equal(Object.hasOwn(created.json, 'orderedItemsTotalYen'), false);
+    const kitchenList = await request({ port, token: KITCHEN_TOKEN, path: '/v1/kitchen/checkout-requests' });
+    assert.equal(kitchenList.statusCode, 200);
+    assert.equal(kitchenList.json.checkouts.length, 1);
+    assert.equal(kitchenList.json.checkouts[0].tableSessionId, SESSION);
+    assert.equal(kitchenList.json.checkouts[0].orderedItemsTotalYen, 700);
     const current = await request({ port, token: CUSTOMER_TOKEN, path: '/v1/customer/checkout-requests/current' });
     assert.equal(Object.hasOwn(current.json.checkout, 'adjustments'), false);
     const adjusted = await request({ port, token: KITCHEN_TOKEN, method: 'PUT', path: `/v1/kitchen/checkout-requests/${CHECKOUT}/adjustments`, body: { expectedVersion: 1, adjustments: [{ kind: 'seat_charge', label: '席料', amountYen: 300 }] } });

@@ -175,7 +175,8 @@ export function createCheckoutRepository({ database, now = Date.now, idFactory =
       if (active) throw error(CHECKOUT_ERROR_CODES.CHECKOUT_CONFLICT, 'An active checkout request already exists for this table session.');
       const requestedAtMs = timestamp();
       const eventEpoch = eventState();
-      database.prepare(`INSERT INTO checkout_requests (checkout_request_id, table_session_id, status, receipt_requested, ordered_items_total_yen, adjustments_total_yen, grand_total_yen, version, requested_at_ms, ready_at_ms, updated_at_ms) VALUES (?, ?, 'requested', ?, 0, 0, NULL, 1, ?, NULL, ?)`).run(id, session.session_id, receipt ? 1 : 0, requestedAtMs, requestedAtMs);
+      const orderedItemsTotalYen = orderTotal(session.session_id);
+      database.prepare(`INSERT INTO checkout_requests (checkout_request_id, table_session_id, status, receipt_requested, ordered_items_total_yen, adjustments_total_yen, grand_total_yen, version, requested_at_ms, ready_at_ms, updated_at_ms) VALUES (?, ?, 'requested', ?, ?, 0, NULL, 1, ?, NULL, ?)`).run(id, session.session_id, receipt ? 1 : 0, orderedItemsTotalYen, requestedAtMs, requestedAtMs);
       const event = appendEvent(eventEpoch, principal, 'checkout.requested', id, { receiptRequested: receipt }, requestedAtMs);
       return { request: hydrate(findRequest.get(id)), idempotencyResult: 'created', event };
     });
