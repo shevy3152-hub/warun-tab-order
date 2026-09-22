@@ -22,3 +22,15 @@ test("checkout panel keeps the order area independently usable and compact", () 
   assert.match(styles, /\.table-scroll \{[\s\S]*overflow-x: auto/);
   assert.match(styles, /\.checkout-adjustment-row \.checkout-amount-input \{[\s\S]*text-align: right/);
 });
+
+test("kitchen history starts with today's completed orders and can reveal past orders", () => {
+  assert.match(appSource, /function isSameLocalDate\(value, reference = new Date\(\)\)/);
+  assert.match(appSource, /showPastOrders, setShowPastOrders\] = useState\(false\)/);
+  assert.match(appSource, /const completedToday = completed\.filter\(\(order\) => isSameLocalDate\(order\.completedAt\)\)/);
+  assert.match(appSource, /const visibleCompleted = showPastOrders \? completed : completedToday/);
+  assert.match(appSource, /本日の注文商品合計/);
+  assert.match(appSource, /過去の注文も表示/);
+  assert.match(appSource, /本日の注文だけ表示/);
+  assert.match(appSource, /本日提供完了した注文はありません/);
+  assert.match(styles, /\.history-past-notice/);
+});

@@ -636,6 +636,11 @@ h1, h2, h3, p { margin: 0; }
 .history-summary > div + div { border-left: 1px solid var(--line); }
 .history-summary small { margin-right: auto; font-weight: 800; }
 .history-summary b { color: var(--red); font-size: 34px; }
+.history-past-actions { display: flex; align-items: center; gap: 14px; margin: 0 0 20px; }
+.history-past-actions span { color: #7b746a; font-size: 13px; }
+.history-past-notice { margin: 0 0 20px; padding: 18px 20px; border: 1px solid var(--line); color: #625b51; }
+.history-past-notice p { margin: 0; }
+.history-past-notice p + p { margin-top: 6px; font-size: 13px; }
 .history-table-wrap { border-top: 2px solid var(--red); overflow: auto; }
 .history-table { width: 100%; border-collapse: collapse; min-width: 1000px; }
 .history-table th { height: 55px; text-align: left; font-size: 12px; letter-spacing: .06em; }

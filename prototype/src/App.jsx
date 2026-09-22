@@ -1572,6 +1572,7 @@ function KitchenScreen({ state, updateState, apiState, checkoutState, onServe, o
 
 function HistoryScreen({ state, apiMode = false, loadHistory = null }) {
   const [remoteState, setRemoteState] = useState({ loading: apiMode, error: false, orders: [] });
+  const [showPastOrders, setShowPastOrders] = useState(false);
   useEffect(() => {
     if (!apiMode) return undefined;
     if (typeof loadHistory !== "function") {
@@ -1609,17 +1610,22 @@ function HistoryScreen({ state, apiMode = false, loadHistory = null }) {
   })) : state.orders;
   const completed = sourceOrders.filter((order) => order.status === "completed").sort((a, b) => new Date(b.completedAt) - new Date(a.completedAt));
   const completedToday = completed.filter((order) => isSameLocalDate(order.completedAt));
+  const pastCompleted = completed.length - completedToday.length;
+  const visibleCompleted = showPastOrders ? completed : completedToday;
+  const todayTotal = completedToday.reduce((sum, order) => sum + order.totalAmount, 0);
   return (
     <StaffShell route="/history" title="提供済み（履歴）" subtitle="完了した注文を、注文時点の品名と単価で確認できます。" state={state} right={<ConnectionBadge online />}>
       <section className="history-content">
-        <div className="history-summary"><div><small>本日の提供済み</small><b>{completedToday.length}</b><span>件</span></div><div><small>履歴合計</small><b>{yen(completed.reduce((sum, order) => sum + order.totalAmount, 0))}</b></div></div>
+        <div className="history-summary"><div><small>本日の提供済み注文</small><b>{completedToday.length}</b><span>件</span></div><div><small>本日の注文商品合計</small><b>{yen(todayTotal)}</b></div></div>
         {apiMode && remoteState.loading ? <div className="empty-state"><p>注文履歴を読み込み中です。</p></div> : null}
         {apiMode && remoteState.error ? <div className="empty-state"><p>注文履歴を取得できませんでした。</p></div> : null}
         {(!apiMode || (!remoteState.loading && !remoteState.error)) && completed.length === 0 ? <div className="empty-state"><p>注文履歴はありません。</p></div> : null}
-        {(!apiMode || (!remoteState.loading && !remoteState.error)) && completed.length > 0 && <div className="history-table-wrap">
+        {(!apiMode || (!remoteState.loading && !remoteState.error)) && completed.length > 0 && completedToday.length === 0 && !showPastOrders ? <div className="history-past-notice"><p>本日提供完了した注文はありません。</p><p>過去の注文を確認する場合は、下のボタンを押してください。</p></div> : null}
+        {(!apiMode || (!remoteState.loading && !remoteState.error)) && pastCompleted > 0 ? <div className="history-past-actions"><button type="button" className="button button--outline" onClick={() => setShowPastOrders((current) => !current)}>{showPastOrders ? "本日の注文だけ表示" : "過去の注文も表示"}</button>{showPastOrders ? <span>過去の注文を含めて表示中です。</span> : null}</div> : null}
+        {(!apiMode || (!remoteState.loading && !remoteState.error)) && visibleCompleted.length > 0 && <div className="history-table-wrap">
           <table className="history-table">
             <thead><tr><th>注文番号</th><th>テーブル</th><th>受付</th><th>完了</th><th>品目</th><th>合計</th></tr></thead>
-            <tbody>{completed.map((order) => <tr key={order.id}><td><b>{order.id}</b></td><td><span className="table-pill">T{order.tableId}</span></td><td>{formatDateTime(order.createdAt)}</td><td>{formatDateTime(order.completedAt)}</td><td><div className="history-items">{order.items.map((item) => <span key={item.id}>{selectionDisplayName({ name: item.nameSnapshot }, item)} <b>{item.quantity}点</b> <small>{yen(item.unitPriceSnapshot)}</small></span>)}</div></td><td className="history-total">{yen(order.totalAmount)}</td></tr>)}</tbody>
+            <tbody>{visibleCompleted.map((order) => <tr key={order.id}><td><b>{order.id}</b></td><td><span className="table-pill">T{order.tableId}</span></td><td>{formatDateTime(order.createdAt)}</td><td>{formatDateTime(order.completedAt)}</td><td><div className="history-items">{order.items.map((item) => <span key={item.id}>{selectionDisplayName({ name: item.nameSnapshot }, item)} <b>{item.quantity}点</b> <small>{yen(item.unitPriceSnapshot)}</small></span>)}</div></td><td className="history-total">{yen(order.totalAmount)}</td></tr>)}</tbody>
           </table>
         </div>}
       </section>
