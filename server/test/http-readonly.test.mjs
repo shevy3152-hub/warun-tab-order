@@ -265,7 +265,7 @@ test('01 health is public and returns 200', async () => {
     assert.equal(response.statusCode, 200);
     assert.equal(response.json.status, 'ready');
     assert.equal(response.json.db, 'ready');
-  assert.equal(response.json.schemaVersion, 12);
+  assert.equal(response.json.schemaVersion, 13);
   }, { now: () => 1_786_300_000_000 });
 });
 

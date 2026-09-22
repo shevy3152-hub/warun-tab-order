@@ -6,7 +6,7 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
-$TargetSchemaVersion = 12
+$TargetSchemaVersion = 13
 
 $ProjectRoot = if ([string]::IsNullOrWhiteSpace($ProjectRoot)) {
   Split-Path -Parent $PSScriptRoot

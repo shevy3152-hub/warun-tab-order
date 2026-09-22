@@ -84,6 +84,25 @@ test('checkout HTTP contract enforces roles and hides customer breakdown', async
     const publicReady = await request({ port, token: CUSTOMER_TOKEN, path: '/v1/customer/checkout-requests/current' });
     assert.deepEqual(Object.keys(publicReady.json.checkout).sort(), ['checkoutRequestId', 'grandTotalYen', 'readyAtMs', 'receiptRequested', 'requestedAtMs', 'status', 'version'].sort());
     assert.equal(publicReady.json.checkout.grandTotalYen, 1000);
+    const customerHistory = await request({ port, token: CUSTOMER_TOKEN, path: '/v1/kitchen/payment-history' });
+    assert.equal(customerHistory.statusCode, 403);
+    const paid = await request({ port, token: KITCHEN_TOKEN, method: 'POST', path: `/v1/kitchen/checkout-requests/${CHECKOUT}/pay`, body: { expectedVersion: 3, paymentMethod: 'cash' } });
+    assert.equal(paid.statusCode, 200);
+    assert.equal(paid.json.status, 'paid');
+    assert.equal(paid.json.confirmedTotalYen, 1000);
+    assert.equal(paid.json.orderItems[0].lineTotalYen, 700);
+    assert.equal(paid.json.adjustments[0].amountYen, 300);
+    const replay = await request({ port, token: KITCHEN_TOKEN, method: 'POST', path: `/v1/kitchen/checkout-requests/${CHECKOUT}/pay`, body: { expectedVersion: 999, paymentMethod: 'card' } });
+    assert.equal(replay.statusCode, 200);
+    assert.equal(replay.json.paymentRecordId, paid.json.paymentRecordId);
+    const history = await request({ port, token: KITCHEN_TOKEN, path: '/v1/kitchen/payment-history' });
+    assert.equal(history.statusCode, 200);
+    assert.equal(history.json.payments.length, 1);
+    assert.equal(history.json.payments[0].tableSessionId, SESSION);
+    const voided = await request({ port, token: KITCHEN_TOKEN, method: 'POST', path: `/v1/kitchen/payment-records/${paid.json.paymentRecordId}/void`, body: { expectedVersion: paid.json.version, reason: '架空テスト取消' } });
+    assert.equal(voided.statusCode, 200);
+    assert.equal(voided.json.status, 'voided');
+    assert.equal(voided.json.voidReason, '架空テスト取消');
   } finally {
     await new Promise((resolve) => server.close(resolve));
     checkout.close();

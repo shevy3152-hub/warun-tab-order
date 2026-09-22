@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { cancelKitchenCheckout, closeKitchenTableSession, fetchKitchenCheckoutRequests, fetchKitchenOrderHistory, fetchKitchenOrders, fetchKitchenSnapshot, kitchenApiConfigured, markKitchenItemServed, readyKitchenCheckout, saveKitchenCheckoutAdjustments } from "../src/kitchen-api.js";
+import { cancelKitchenCheckout, closeKitchenTableSession, fetchKitchenCheckoutRequests, fetchKitchenOrderHistory, fetchKitchenOrders, fetchKitchenPaymentHistory, fetchKitchenSnapshot, kitchenApiConfigured, markKitchenItemServed, payKitchenCheckout, readyKitchenCheckout, saveKitchenCheckoutAdjustments, voidKitchenPayment } from "../src/kitchen-api.js";
 
 const TOKEN = "fixture-kitchen-runtime-token";
 
@@ -40,6 +40,25 @@ test("kitchen API uses the runtime token and maps active snapshot orders", async
   assert.equal(orders[0].items[0].temperatureSnapshot, "冷酒");
   assert.equal(calls[0].url, "http://192.168.1.10:5173/v1/snapshot");
   assert.equal(calls[0].options.headers.Authorization, `Bearer ${TOKEN}`);
+});
+
+test("kitchen payment API keeps payment confirmation and void contracts explicit", async () => {
+  const calls = [];
+  const env = environment(async (url, options) => {
+    calls.push({ url, options });
+    return { ok: true, async json() { return url.endsWith("payment-history") ? { payments: [] } : { paymentRecordId: "payment-1", status: url.endsWith("/void") ? "voided" : "paid", version: 2 }; } };
+  });
+  const paid = await payKitchenCheckout({ env, checkoutRequestId: "checkout-1", expectedVersion: 3, paymentMethod: "cash" });
+  const history = await fetchKitchenPaymentHistory({ env });
+  const voided = await voidKitchenPayment({ env, paymentRecordId: "payment-1", expectedVersion: paid.version, reason: "入力誤り" });
+  assert.equal(paid.status, "paid");
+  assert.deepEqual(history, []);
+  assert.equal(voided.status, "voided");
+  assert.equal(calls[0].url, "http://192.168.1.10:5173/v1/kitchen/checkout-requests/checkout-1/pay");
+  assert.deepEqual(JSON.parse(calls[0].options.body), { expectedVersion: 3, paymentMethod: "cash" });
+  assert.equal(calls[1].url, "http://192.168.1.10:5173/v1/kitchen/payment-history");
+  assert.equal(calls[2].url, "http://192.168.1.10:5173/v1/kitchen/payment-records/payment-1/void");
+  assert.deepEqual(JSON.parse(calls[2].options.body), { expectedVersion: 2, reason: "入力誤り" });
 });
 
 test("kitchen serving update uses the same runtime token", async () => {

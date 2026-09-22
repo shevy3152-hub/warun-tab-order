@@ -692,8 +692,8 @@ test("kitchen API state changes reach the memoized screen", () => {
 test("kitchen exposes the current session reset action without deleting order data", () => {
   const kitchenScreen = appSource.slice(appSource.indexOf("function KitchenScreen"), appSource.indexOf("function HistoryScreen"));
   assert.match(kitchenScreen, /openSessions|apiState\.sessions/);
-  assert.match(kitchenScreen, /会計完了・席をリセット/);
-  assert.match(kitchenScreen, /注文データは削除されませんが、客席端末には表示されなくなります。/);
+  assert.match(kitchenScreen, /席をリセット（支払記録なし）/);
+  assert.match(kitchenScreen, /支払済み記録を作成しません/);
   assert.match(kitchenScreen, /onCloseSession\(resetTarget\)/);
 });
 

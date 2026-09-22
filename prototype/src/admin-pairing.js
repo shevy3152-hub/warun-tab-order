@@ -164,6 +164,32 @@ export async function fetchAdminOrderHistory({ env = globalThis, fetchImpl = env
   return body.orders;
 }
 
+export async function fetchAdminPaymentHistory({ env = globalThis, fetchImpl = env.fetch } = {}) {
+  const token = configuredAdminToken(env);
+  const base = apiBase(env);
+  if (!token || !base || typeof fetchImpl !== "function") throw new Error("Admin payment history is not configured.");
+  const response = await fetchImpl(`${base}/admin/payment-history`, { headers: { Accept: "application/json", Authorization: `Bearer ${token}` } });
+  if (!response.ok) throw new Error("Payment history could not be loaded.");
+  const body = await response.json();
+  if (!Array.isArray(body?.payments)) throw new Error("Payment history response was invalid.");
+  return body.payments;
+}
+
+export async function voidAdminPayment({ env = globalThis, paymentRecordId, expectedVersion, reason, fetchImpl = env.fetch } = {}) {
+  const token = configuredAdminToken(env);
+  const base = apiBase(env);
+  if (!token || !base || typeof fetchImpl !== "function") throw new Error("Admin payment history is not configured.");
+  const response = await fetchImpl(`${base}/admin/payment-records/${encodeURIComponent(paymentRecordId)}/void`, {
+    method: "POST",
+    headers: { Accept: "application/json", "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ expectedVersion, reason }),
+  });
+  if (!response.ok) throw new Error("Payment record could not be voided.");
+  const body = await response.json();
+  if (!body?.paymentRecordId || body.status !== "voided") throw new Error("Payment void response was invalid.");
+  return body;
+}
+
 export async function fetchAdminMenu({ env = globalThis, fetchImpl = env.fetch } = {}) {
   const token = configuredAdminToken(env);
   const base = apiBase(env);

@@ -24,7 +24,7 @@ const EVENT_TYPES_BY_ROLE = Object.freeze({
     'menu.sold_out_updated',
     'staff_call.created',
     'staff_call.resolved',
-    'checkout.requested', 'checkout.adjustments_updated', 'checkout.ready', 'checkout.cancelled',
+    'checkout.requested', 'checkout.adjustments_updated', 'checkout.ready', 'checkout.cancelled', 'checkout.paid', 'checkout.voided',
     'table.assignment_updated',
   ]),
   admin: new Set([
@@ -41,11 +41,11 @@ const EVENT_TYPES_BY_ROLE = Object.freeze({
     'ride_guidance.pickup_updated', 'ride_guidance.contact_created',
     'ride_guidance.contact_updated', 'ride_guidance.contact_deleted',
     'ride_guidance.contacts_reordered',
-    'checkout.requested', 'checkout.adjustments_updated', 'checkout.ready', 'checkout.cancelled',
+    'checkout.requested', 'checkout.adjustments_updated', 'checkout.ready', 'checkout.cancelled', 'checkout.paid', 'checkout.voided',
     'table.assignment_updated',
   ]),
 });
-const SUPPORTED_SCHEMA_VERSION = 12;
+const SUPPORTED_SCHEMA_VERSION = 13;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const OPAQUE_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
 
@@ -596,6 +596,48 @@ export function mapCheckoutStaffResponse(request) {
 
 export function mapCheckoutStaffListResponse(requests) {
   return { checkouts: requireArray(requests).map(mapCheckoutStaffResponse) };
+}
+
+export function mapPaymentRecordResponse(record) {
+  requireObject(record);
+  return {
+    paymentRecordId: requireUuid(record.paymentRecordId),
+    checkoutRequestId: requireUuid(record.checkoutRequestId),
+    tableSessionId: requireUuid(record.tableSessionId),
+    tableId: requireInteger(record.tableId, 1),
+    paymentMethod: requireOneOf(record.paymentMethod, new Set(['cash', 'card', 'qr', 'other'])),
+    confirmedTotalYen: requireInteger(record.confirmedTotalYen),
+    paidAtMs: requireInteger(record.paidAtMs),
+    status: requireOneOf(record.status, new Set(['paid', 'voided'])),
+    voidedAtMs: record.voidedAtMs === null ? null : requireInteger(record.voidedAtMs),
+    voidReason: record.voidReason === null ? null : requireString(record.voidReason),
+    version: requireInteger(record.version, 1),
+    createdAtMs: requireInteger(record.createdAtMs),
+    updatedAtMs: requireInteger(record.updatedAtMs),
+    orderItems: requireArray(record.orderItems).map((item) => ({
+      orderId: requireUuid(item.orderId),
+      orderItemId: requireInteger(item.orderItemId, 1),
+      formalNameSnapshot: requireString(item.formalNameSnapshot),
+      variantNameSnapshot: item.variantNameSnapshot === null ? null : requireString(item.variantNameSnapshot),
+      variantVolumeSnapshot: item.variantVolumeSnapshot === null ? null : requireString(item.variantVolumeSnapshot),
+      temperatureSnapshot: item.temperatureSnapshot === null ? null : requireString(item.temperatureSnapshot),
+      servingOptionNameSnapshot: item.servingOptionNameSnapshot === null ? null : requireString(item.servingOptionNameSnapshot),
+      unitPriceYenSnapshot: requireInteger(item.unitPriceYenSnapshot),
+      quantity: requireInteger(item.quantity, 1),
+      lineTotalYen: requireInteger(item.lineTotalYen),
+      sortOrder: requireInteger(item.sortOrder),
+    })),
+    adjustments: requireArray(record.adjustments).map((item) => ({
+      kind: requireString(item.kind),
+      label: requireString(item.label),
+      amountYen: requireInteger(item.amountYen),
+      sortOrder: requireInteger(item.sortOrder),
+    })),
+  };
+}
+
+export function mapPaymentRecordListResponse(records) {
+  return { payments: requireArray(records).map(mapPaymentRecordResponse) };
 }
 
 export function mapCatalogWriteResponse(result) {

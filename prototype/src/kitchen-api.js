@@ -92,6 +92,41 @@ export function cancelKitchenCheckout({ checkoutRequestId, expectedVersion, ...o
   return checkoutMutation({ ...options, checkoutRequestId, operation: "cancel", body: { expectedVersion } });
 }
 
+export async function payKitchenCheckout({ env = globalThis, checkoutRequestId, expectedVersion, paymentMethod, fetchImpl = env.fetch } = {}) {
+  const { base, requestHeaders } = checkoutBase(env, fetchImpl);
+  const response = await fetchImpl(`${base}/kitchen/checkout-requests/${encodeURIComponent(checkoutRequestId)}/pay`, {
+    method: "POST",
+    headers: { ...requestHeaders, "Content-Type": "application/json" },
+    body: JSON.stringify({ expectedVersion, paymentMethod }),
+  });
+  if (!response.ok) throw await responseError(response, "会計済み記録を保存できません。");
+  const body = await response.json();
+  if (!body?.paymentRecordId || body.status !== "paid") throw new KitchenApiError("会計済みレスポンスが不正です。", { code: "INVALID_RESPONSE" });
+  return body;
+}
+
+export async function fetchKitchenPaymentHistory({ env = globalThis, fetchImpl = env.fetch } = {}) {
+  const { base, requestHeaders } = checkoutBase(env, fetchImpl);
+  const response = await fetchImpl(`${base}/kitchen/payment-history`, { headers: requestHeaders });
+  if (!response.ok) throw await responseError(response, "会計履歴を取得できません。");
+  const body = await response.json();
+  if (!Array.isArray(body?.payments)) throw new KitchenApiError("会計履歴レスポンスが不正です。", { code: "INVALID_RESPONSE" });
+  return body.payments;
+}
+
+export async function voidKitchenPayment({ env = globalThis, paymentRecordId, expectedVersion, reason, fetchImpl = env.fetch } = {}) {
+  const { base, requestHeaders } = checkoutBase(env, fetchImpl);
+  const response = await fetchImpl(`${base}/kitchen/payment-records/${encodeURIComponent(paymentRecordId)}/void`, {
+    method: "POST",
+    headers: { ...requestHeaders, "Content-Type": "application/json" },
+    body: JSON.stringify({ expectedVersion, reason }),
+  });
+  if (!response.ok) throw await responseError(response, "会計済み記録を取消できません。");
+  const body = await response.json();
+  if (!body?.paymentRecordId || !["paid", "voided"].includes(body.status)) throw new KitchenApiError("会計取消レスポンスが不正です。", { code: "INVALID_RESPONSE" });
+  return body;
+}
+
 export function subscribeKitchenInvalidations({ env = globalThis, fetchImpl = env.fetch, onEvent } = {}) {
   const base = apiBase(env);
   const requestHeaders = headers(env);

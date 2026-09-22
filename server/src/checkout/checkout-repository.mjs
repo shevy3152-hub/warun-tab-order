@@ -6,6 +6,7 @@ import { CHECKOUT_ERROR_CODES, CheckoutRepositoryError } from './checkout-errors
 const UUID_V4_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const BILLABLE_ORDER_STATUSES = Object.freeze(['new', 'active', 'completed']);
 const ADJUSTMENT_KINDS = new Set(['seat_charge', 'late_night_charge', 'extension_charge', 'other']);
+const PAYMENT_METHODS = new Set(['cash', 'card', 'qr', 'other']);
 
 function error(code, message, options = undefined) {
   return new CheckoutRepositoryError(code, message, options);
@@ -35,6 +36,17 @@ function requireText(value, fieldName, max) {
 function requireAmount(value, fieldName) {
   if (!Number.isSafeInteger(value) || value < 0) throw error(CHECKOUT_ERROR_CODES.INVALID_CHECKOUT_REQUEST, `${fieldName} must be a non-negative integer.`);
   return value;
+}
+
+function requirePaymentMethod(value) {
+  if (typeof value !== 'string' || !PAYMENT_METHODS.has(value)) throw error(CHECKOUT_ERROR_CODES.INVALID_PAYMENT_REQUEST, 'paymentMethod is unsupported.');
+  return value;
+}
+
+function requireReason(value) {
+  if (typeof value !== 'string' || value.trim() === '' || [...value.trim()].length > 300) throw error(CHECKOUT_ERROR_CODES.INVALID_PAYMENT_REQUEST, 'reason must be non-empty text of at most 300 characters.');
+  if (/<\/?[A-Za-z][^>]*>/.test(value)) throw error(CHECKOUT_ERROR_CODES.INVALID_PAYMENT_REQUEST, 'reason must be plain text.');
+  return value.trim();
 }
 
 function mapAdjustment(row) {
@@ -78,6 +90,51 @@ function publicRequest(request) {
   return result;
 }
 
+function mapPaymentOrderItem(row) {
+  return {
+    orderId: row.order_id,
+    orderItemId: Number(row.order_item_id),
+    formalNameSnapshot: row.formal_name_snapshot,
+    variantNameSnapshot: row.variant_name_snapshot ?? null,
+    variantVolumeSnapshot: row.variant_volume_snapshot ?? null,
+    temperatureSnapshot: row.temperature_snapshot ?? null,
+    servingOptionNameSnapshot: row.serving_option_name_snapshot ?? null,
+    unitPriceYenSnapshot: Number(row.unit_price_yen_snapshot),
+    quantity: Number(row.quantity),
+    lineTotalYen: Number(row.line_total_yen),
+    sortOrder: Number(row.sort_order),
+  };
+}
+
+function mapPaymentAdjustment(row) {
+  return {
+    kind: row.kind,
+    label: row.label,
+    amountYen: Number(row.amount_yen),
+    sortOrder: Number(row.sort_order),
+  };
+}
+
+function mapPaymentRecord(row, orderItems = [], adjustments = []) {
+  return {
+    paymentRecordId: row.payment_record_id,
+    checkoutRequestId: row.checkout_request_id,
+    tableSessionId: row.table_session_id,
+    tableId: Number(row.table_id),
+    paymentMethod: row.payment_method,
+    confirmedTotalYen: Number(row.confirmed_total_yen),
+    paidAtMs: Number(row.paid_at_ms),
+    status: row.status,
+    voidedAtMs: row.voided_at_ms === null ? null : Number(row.voided_at_ms),
+    voidReason: row.void_reason,
+    version: Number(row.version),
+    createdAtMs: Number(row.created_at_ms),
+    updatedAtMs: Number(row.updated_at_ms),
+    orderItems,
+    adjustments,
+  };
+}
+
 function normalizeAdjustments(adjustments) {
   if (!Array.isArray(adjustments) || adjustments.length > 20) throw error(CHECKOUT_ERROR_CODES.INVALID_CHECKOUT_REQUEST, 'adjustments must be an array of at most 20 items.');
   return adjustments.map((item, index) => {
@@ -98,6 +155,10 @@ export function createCheckoutRepository({ database, now = Date.now, idFactory =
   let closed = false;
   const findRequest = database.prepare('SELECT * FROM checkout_requests WHERE checkout_request_id = ?');
   const findAdjustments = database.prepare('SELECT * FROM checkout_adjustments WHERE checkout_request_id = ? ORDER BY sort_order, adjustment_id');
+  const findPayment = database.prepare('SELECT * FROM payment_records WHERE payment_record_id = ?');
+  const findPaymentByCheckout = database.prepare('SELECT * FROM payment_records WHERE checkout_request_id = ?');
+  const findPaymentItems = database.prepare('SELECT * FROM payment_order_items WHERE payment_record_id = ? ORDER BY sort_order, payment_order_item_id');
+  const findPaymentAdjustments = database.prepare('SELECT * FROM payment_adjustments WHERE payment_record_id = ? ORDER BY sort_order, payment_adjustment_id');
 
   function ensureOpen() { if (closed) throw error(CHECKOUT_ERROR_CODES.DATABASE_FAILURE, 'The checkout repository is closed.'); }
   function timestamp() {
@@ -118,6 +179,7 @@ export function createCheckoutRepository({ database, now = Date.now, idFactory =
     return { eventEpoch, eventId: Number(result.lastInsertRowid) };
   }
   function hydrate(row) { return row ? mapRequest(row, findAdjustments.all(row.checkout_request_id).map(mapAdjustment)) : null; }
+  function hydratePayment(row) { return row ? mapPaymentRecord(row, findPaymentItems.all(row.payment_record_id).map(mapPaymentOrderItem), findPaymentAdjustments.all(row.payment_record_id).map(mapPaymentAdjustment)) : null; }
   function currentCustomerSession(deviceId) {
     return database.prepare(`
       SELECT s.session_id, s.table_id
@@ -138,6 +200,25 @@ export function createCheckoutRepository({ database, now = Date.now, idFactory =
       WHERE o.session_id = ? AND o.status IN (${placeholders})
     `).get(sessionId, ...BILLABLE_ORDER_STATUSES);
     return Number(row?.total ?? 0);
+  }
+  function orderRows(sessionId) {
+    const placeholders = BILLABLE_ORDER_STATUSES.map(() => '?').join(', ');
+    return database.prepare(`
+      SELECT o.order_id, oi.order_item_id, oi.formal_name_snapshot, oi.variant_name_snapshot,
+             oi.variant_volume_snapshot, oi.temperature_snapshot, oi.serving_option_name_snapshot,
+             oi.unit_price_yen_snapshot, oi.quantity, oi.line_total_yen
+      FROM orders AS o
+      JOIN order_items AS oi ON oi.order_id = o.order_id
+      WHERE o.session_id = ? AND o.status IN (${placeholders})
+      ORDER BY o.accepted_at_ms, o.order_id, oi.line_index, oi.order_item_id
+    `).all(sessionId, ...BILLABLE_ORDER_STATUSES);
+  }
+  function orderFingerprint(sessionId) {
+    return JSON.stringify(orderRows(sessionId).map((row) => [
+      row.order_id, Number(row.order_item_id), row.formal_name_snapshot, row.variant_name_snapshot,
+      row.variant_volume_snapshot, row.temperature_snapshot, row.serving_option_name_snapshot,
+      Number(row.unit_price_yen_snapshot), Number(row.quantity), Number(row.line_total_yen),
+    ]));
   }
   function adjustmentTotal(checkoutRequestId) {
     const row = database.prepare('SELECT COALESCE(SUM(amount_yen), 0) AS total FROM checkout_adjustments WHERE checkout_request_id = ?').get(checkoutRequestId);
@@ -192,7 +273,7 @@ export function createCheckoutRepository({ database, now = Date.now, idFactory =
   function listActive({ principal }) {
     ensureOpen();
     authorizeDeviceRole(principal, ['kitchen', 'admin']);
-    return database.prepare("SELECT * FROM checkout_requests WHERE status IN ('requested', 'ready') ORDER BY requested_at_ms, checkout_request_id").all().map(hydrate);
+    return database.prepare("SELECT cr.* FROM checkout_requests AS cr LEFT JOIN payment_records AS pr ON pr.checkout_request_id = cr.checkout_request_id AND pr.status = 'paid' WHERE cr.status IN ('requested', 'ready') AND pr.payment_record_id IS NULL ORDER BY cr.requested_at_ms, cr.checkout_request_id").all().map(hydrate);
   }
   function saveAdjustments({ principal, checkoutRequestId, expectedVersion, adjustments }) {
     ensureOpen();
@@ -233,7 +314,7 @@ export function createCheckoutRepository({ database, now = Date.now, idFactory =
       const adjustmentsTotalYen = adjustmentTotal(id);
       const grandTotalYen = orderedItemsTotalYen + adjustmentsTotalYen;
       const readyAtMs = timestamp();
-      database.prepare('UPDATE checkout_requests SET status = \'ready\', ordered_items_total_yen = ?, adjustments_total_yen = ?, grand_total_yen = ?, version = version + 1, ready_at_ms = ?, updated_at_ms = ? WHERE checkout_request_id = ? AND version = ?').run(orderedItemsTotalYen, adjustmentsTotalYen, grandTotalYen, readyAtMs, readyAtMs, id, version);
+      database.prepare('UPDATE checkout_requests SET status = \'ready\', ordered_items_total_yen = ?, adjustments_total_yen = ?, grand_total_yen = ?, ready_order_fingerprint = ?, version = version + 1, ready_at_ms = ?, updated_at_ms = ? WHERE checkout_request_id = ? AND version = ?').run(orderedItemsTotalYen, adjustmentsTotalYen, grandTotalYen, orderFingerprint(current.table_session_id), readyAtMs, readyAtMs, id, version);
       const event = appendEvent(eventState(), principal, 'checkout.ready', id, { version: version + 1 }, readyAtMs);
       return { request: hydrate(findRequest.get(id)), idempotencyResult: 'created', event };
     });
@@ -257,7 +338,79 @@ export function createCheckoutRepository({ database, now = Date.now, idFactory =
       return { request: hydrate(findRequest.get(id)), idempotencyResult: 'created', event };
     });
   }
-  return { createCheckout, getCustomerCheckout, listActive, saveAdjustments, ready, cancel, close() { closed = true; } };
+  function pay({ principal, checkoutRequestId, expectedVersion, paymentMethod }) {
+    ensureOpen();
+    authorizeDeviceRole(principal, ['kitchen', 'admin']);
+    const id = requireUuid(checkoutRequestId, 'checkoutRequestId');
+    const version = requireVersion(expectedVersion);
+    const method = requirePaymentMethod(paymentMethod);
+    return withTransaction(() => {
+      const current = findRequest.get(id);
+      if (!current) throw error(CHECKOUT_ERROR_CODES.CHECKOUT_NOT_FOUND, 'Checkout request was not found.');
+      const existing = findPaymentByCheckout.get(id);
+      if (existing?.status === 'paid') {
+        return { payment: hydratePayment(existing), idempotencyResult: 'replayed', event: null };
+      }
+      if (current.status !== 'ready') throw error(CHECKOUT_ERROR_CODES.PAYMENT_CONFLICT, 'Only a ready checkout can be recorded as paid.');
+      if (Number(current.version) !== version) throw error(CHECKOUT_ERROR_CODES.VERSION_CONFLICT, 'Checkout request has changed since it was read.');
+      const session = database.prepare('SELECT session_id, table_id, closed_at_ms, version FROM table_sessions WHERE session_id = ?').get(current.table_session_id);
+      if (!session || session.closed_at_ms !== null) throw error(CHECKOUT_ERROR_CODES.PAYMENT_CONFLICT, 'The table session is already closed.');
+      const activeOrders = database.prepare("SELECT COUNT(*) AS count FROM orders WHERE session_id = ? AND status IN ('new', 'active')").get(current.table_session_id);
+      if (Number(activeOrders.count) > 0) throw error(CHECKOUT_ERROR_CODES.PAYMENT_CONFLICT, 'All orders must be provided before payment is recorded.');
+      const currentOrderTotal = orderTotal(current.table_session_id);
+      const currentFingerprint = orderFingerprint(current.table_session_id);
+      if (currentOrderTotal !== Number(current.ordered_items_total_yen)
+        || (current.ready_order_fingerprint !== null && current.ready_order_fingerprint !== currentFingerprint)) {
+        throw error(CHECKOUT_ERROR_CODES.PAYMENT_ORDER_CHANGED, 'The order changed after ready; confirm the current total before recording payment.');
+      }
+      const adjustmentsTotalYen = adjustmentTotal(id);
+      const confirmedTotalYen = currentOrderTotal + adjustmentsTotalYen;
+      if (adjustmentsTotalYen !== Number(current.adjustments_total_yen) || confirmedTotalYen !== Number(current.grand_total_yen)) {
+        throw error(CHECKOUT_ERROR_CODES.PAYMENT_ORDER_CHANGED, 'The checkout amount changed after ready; confirm the current total before recording payment.');
+      }
+      const paidAtMs = timestamp();
+      const paymentRecordId = idFactory();
+      const eventEpoch = eventState();
+      database.prepare(`INSERT INTO payment_records (payment_record_id, checkout_request_id, table_session_id, table_id, payment_method, confirmed_total_yen, paid_at_ms, status, version, created_at_ms, updated_at_ms) VALUES (?, ?, ?, ?, ?, ?, ?, 'paid', 1, ?, ?)`).run(paymentRecordId, id, current.table_session_id, session.table_id, method, confirmedTotalYen, paidAtMs, paidAtMs, paidAtMs);
+      const insertItem = database.prepare(`INSERT INTO payment_order_items (payment_record_id, order_id, order_item_id, formal_name_snapshot, variant_name_snapshot, variant_volume_snapshot, temperature_snapshot, serving_option_name_snapshot, unit_price_yen_snapshot, quantity, line_total_yen, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+      for (const [index, row] of orderRows(current.table_session_id).entries()) insertItem.run(paymentRecordId, row.order_id, row.order_item_id, row.formal_name_snapshot, row.variant_name_snapshot, row.variant_volume_snapshot, row.temperature_snapshot, row.serving_option_name_snapshot, row.unit_price_yen_snapshot, row.quantity, row.line_total_yen, index);
+      const insertAdjustment = database.prepare('INSERT INTO payment_adjustments (payment_record_id, kind, label, amount_yen, sort_order) VALUES (?, ?, ?, ?, ?)');
+      for (const [index, row] of findAdjustments.all(id).entries()) insertAdjustment.run(paymentRecordId, row.kind, row.label, row.amount_yen, index);
+      const closedAtMs = paidAtMs;
+      const closed = database.prepare('UPDATE table_sessions SET closed_at_ms = ?, version = version + 1, updated_at_ms = ? WHERE session_id = ? AND closed_at_ms IS NULL AND version = ?').run(closedAtMs, closedAtMs, current.table_session_id, session.version);
+      if (Number(closed.changes) !== 1) throw error(CHECKOUT_ERROR_CODES.PAYMENT_CONFLICT, 'The table session changed while recording payment.');
+      const sessionEvent = database.prepare(`INSERT INTO event_log (event_epoch, event_type, aggregate_type, aggregate_id, actor_device_id, payload_json, created_at_ms) VALUES (?, 'table.assignment_updated', 'table', ?, ?, ?, ?)`).run(eventEpoch, String(session.table_id), principal.deviceId, JSON.stringify({ tableId: session.table_id, sessionId: current.table_session_id, closedAtMs }), closedAtMs);
+      database.prepare('UPDATE checkout_requests SET version = version + 1, updated_at_ms = ? WHERE checkout_request_id = ? AND version = ?').run(paidAtMs, id, version);
+      const event = appendEvent(eventEpoch, principal, 'checkout.paid', id, { paymentRecordId, confirmedTotalYen }, paidAtMs);
+      return { payment: hydratePayment(findPayment.get(paymentRecordId)), idempotencyResult: 'created', event, sessionEvent: { eventEpoch, eventId: Number(sessionEvent.lastInsertRowid) } };
+    });
+  }
+  function listPaymentHistory({ principal }) {
+    ensureOpen();
+    authorizeDeviceRole(principal, ['kitchen', 'admin']);
+    return database.prepare('SELECT * FROM payment_records ORDER BY paid_at_ms DESC, payment_record_id DESC').all().map(hydratePayment);
+  }
+  function voidPayment({ principal, paymentRecordId, expectedVersion, reason }) {
+    ensureOpen();
+    authorizeDeviceRole(principal, ['kitchen', 'admin']);
+    const id = requireUuid(paymentRecordId, 'paymentRecordId');
+    const version = requireVersion(expectedVersion);
+    const normalizedReason = requireReason(reason);
+    return withTransaction(() => {
+      const current = findPayment.get(id);
+      if (!current) throw error(CHECKOUT_ERROR_CODES.PAYMENT_NOT_FOUND, 'Payment record was not found.');
+      if (current.status === 'voided') {
+        if (Number(current.version) !== version) throw error(CHECKOUT_ERROR_CODES.PAYMENT_VERSION_CONFLICT, 'Payment record has changed since it was read.');
+        return { payment: hydratePayment(current), idempotencyResult: 'replayed', event: null };
+      }
+      if (Number(current.version) !== version) throw error(CHECKOUT_ERROR_CODES.PAYMENT_VERSION_CONFLICT, 'Payment record has changed since it was read.');
+      const voidedAtMs = timestamp();
+      database.prepare('UPDATE payment_records SET status = \'voided\', voided_at_ms = ?, void_reason = ?, version = version + 1, updated_at_ms = ? WHERE payment_record_id = ? AND version = ?').run(voidedAtMs, normalizedReason, voidedAtMs, id, version);
+      const event = appendEvent(eventState(), principal, 'checkout.voided', current.checkout_request_id, { paymentRecordId: id, reason: normalizedReason }, voidedAtMs);
+      return { payment: hydratePayment(findPayment.get(id)), idempotencyResult: 'created', event };
+    });
+  }
+  return { createCheckout, getCustomerCheckout, listActive, saveAdjustments, ready, cancel, pay, listPaymentHistory, voidPayment, close() { closed = true; } };
 }
 
 export { publicRequest };

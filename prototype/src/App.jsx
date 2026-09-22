@@ -23,8 +23,8 @@ import {
 import { createClientOrderId, createCustomerOrderClient, CustomerCheckoutError, resolveOrderApiConfig } from "./order-outbox.js";
 import { claimCustomerDevice, createIndexedDbCredentialStore, loadOrCreateCustomerDevice, pairingClaimErrorMessage, runtimeForCustomerCredentials } from "./device-credentials.js";
 import { customerOrderErrorCategory, customerOrderNoticeFromOutboxEvent } from "./customer-order-notice.js";
-import { AdminPairingError, configuredAdminToken, createAdminRideGuidanceContact, deleteAdminRideGuidanceContact, fetchAdminBusinessHours, fetchAdminDiagnostics, fetchAdminMenu, fetchAdminOrderHistory, fetchAdminPairingPreflight, fetchAdminRideGuidance, issueCustomerPairingCode, revokeAdminDevice, saveAdminBusinessHours, saveAdminImageLayouts, saveAdminCategory, saveAdminMenuItem, saveAdminMenuOrdering, saveAdminRideGuidanceOrdering, saveAdminRideGuidancePickup, updateAdminRideGuidanceContact } from "./admin-pairing.js";
-import { cancelKitchenCheckout, closeKitchenTableSession, fetchKitchenCheckoutRequests, fetchKitchenOrderHistory, fetchKitchenSnapshot, kitchenApiConfigured, KitchenApiError, markKitchenItemServed, readyKitchenCheckout, saveKitchenCheckoutAdjustments, subscribeKitchenInvalidations } from "./kitchen-api.js";
+import { AdminPairingError, configuredAdminToken, createAdminRideGuidanceContact, deleteAdminRideGuidanceContact, fetchAdminBusinessHours, fetchAdminDiagnostics, fetchAdminMenu, fetchAdminOrderHistory, fetchAdminPaymentHistory, fetchAdminPairingPreflight, fetchAdminRideGuidance, issueCustomerPairingCode, revokeAdminDevice, saveAdminBusinessHours, saveAdminImageLayouts, saveAdminCategory, saveAdminMenuItem, saveAdminMenuOrdering, saveAdminRideGuidanceOrdering, saveAdminRideGuidancePickup, updateAdminRideGuidanceContact, voidAdminPayment } from "./admin-pairing.js";
+import { cancelKitchenCheckout, closeKitchenTableSession, fetchKitchenCheckoutRequests, fetchKitchenOrderHistory, fetchKitchenPaymentHistory, fetchKitchenSnapshot, kitchenApiConfigured, KitchenApiError, markKitchenItemServed, payKitchenCheckout, readyKitchenCheckout, saveKitchenCheckoutAdjustments, subscribeKitchenInvalidations, voidKitchenPayment } from "./kitchen-api.js";
 import { bootstrapCustomerOrderClient } from "./customer-bootstrap.js";
 import { taxExcludedYen } from "./pricing.js";
 import { pairingCodeQrSvg } from "./qr-code.js";
@@ -1425,6 +1425,8 @@ function checkoutStatusLabel(status) {
 
 function checkoutErrorMessage(error, fallback) {
   if (error instanceof KitchenApiError) {
+    if (error.code === "PAYMENT_ORDER_CHANGED") return "ready後に注文または金額が変わりました。会計済みにせず、最新内容を再確認してください。";
+    if (error.code === "PAYMENT_CONFLICT") return "会計済みにできません。支払状態と席の状態を再確認してください。";
     if (error.status === 409 || error.code === "CHECKOUT_VERSION_CONFLICT") return "他の端末で更新されました。最新状態を再取得してください。";
     if (error.status === 400) return "入力内容を確認してください。";
     if (error.status === 401) return "認証が切れました。厨房画面を開き直してください。";
@@ -1439,13 +1441,14 @@ function CheckoutAdjustmentInput({ label, value, onChange, disabled, onDelete = 
   </div>;
 }
 
-function KitchenCheckoutPanel({ checkouts, sessions, loading, error, onRefresh, onSave, onReady, onCancel }) {
+function KitchenCheckoutPanel({ checkouts, sessions, loading, error, onRefresh, onSave, onReady, onCancel, onPay }) {
   const [selectedId, setSelectedId] = useState(null);
   const [drafts, setDrafts] = useState({});
   const [busy, setBusy] = useState("");
   const [message, setMessage] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
   const [confirmAction, setConfirmAction] = useState(null);
+  const [paymentMethod, setPaymentMethod] = useState("cash");
   const active = checkouts.filter((checkout) => checkout.status === "requested" || checkout.status === "ready");
   const selected = active.find((checkout) => checkout.checkoutRequestId === selectedId) || active[0] || null;
   const sessionTable = (checkout) => sessions.find((session) => session.sessionId === checkout?.tableSessionId)?.tableId || "—";
@@ -1485,6 +1488,17 @@ function KitchenCheckoutPanel({ checkouts, sessions, loading, error, onRefresh, 
       await onRefresh().catch(() => {});
     } finally { setBusy(""); setConfirmAction(null); }
   };
+  const runPay = async () => {
+    setBusy("pay"); setMessage(""); setErrorMessage("");
+    try {
+      const result = await onPay(selected, paymentMethod);
+      setMessage(`会計済み（${yen(result.confirmedTotalYen)}）として保存し、席をリセットしました。`);
+      await onRefresh();
+    } catch (actionError) {
+      setErrorMessage(checkoutErrorMessage(actionError, "会計済み記録を保存できませんでした。注文内容と金額を再確認してください。"));
+      await onRefresh().catch(() => {});
+    } finally { setBusy(""); setConfirmAction(null); }
+  };
   return <section className="checkout-panel" aria-labelledby="checkout-panel-title">
     <header className="checkout-panel__header"><div><span className="section-kicker">CHECKOUT</span><h2 id="checkout-panel-title">会計依頼</h2></div><span className="checkout-panel__count">{active.length}件</span></header>
     {loading ? <div className="checkout-empty">会計依頼を読み込み中です。</div> : error ? <div className="checkout-empty" role="alert">会計依頼を取得できません。<button type="button" className="button button--quiet" onClick={onRefresh}>再読み込み</button></div> : !active.length ? <div className="checkout-empty">現在、会計依頼はありません。</div> : <div className="checkout-list">
@@ -1496,14 +1510,14 @@ function KitchenCheckoutPanel({ checkouts, sessions, loading, error, onRefresh, 
         <div className="checkout-breakdown"><div className="checkout-breakdown__line"><span>注文済み商品合計</span><b>{yen(selected.orderedItemsTotalYen)}</b></div><div className="checkout-adjustments"><h4>追加料金合計</h4>{CHECKOUT_ADJUSTMENT_TYPES.map(([kind, label]) => <CheckoutAdjustmentInput key={kind} label={label} value={draftFor(selected)[kind]} disabled={selected.status !== "requested" || Boolean(busy)} onChange={(value) => setDraft(selected, { ...draftFor(selected), [kind]: value })} />)}{draftFor(selected).other.map((value, index) => <CheckoutAdjustmentInput key={`other-${index}`} value={value} optional disabled={selected.status !== "requested" || Boolean(busy)} onChange={(next) => setDraft(selected, { ...draftFor(selected), other: draftFor(selected).other.map((item, itemIndex) => itemIndex === index ? next : item) })} onDelete={() => setDraft(selected, { ...draftFor(selected), other: draftFor(selected).other.filter((_, itemIndex) => itemIndex !== index) })} />)}{selected.status === "requested" ? <button type="button" className="button button--quiet checkout-add-other" onClick={() => setDraft(selected, { ...draftFor(selected), other: [...draftFor(selected).other, { label: "", amount: "0" }] })} disabled={Boolean(busy)}><Plus size={18} weight="bold" /> 任意料金を追加</button> : null}</div><div className="checkout-total-preview"><span>確認用合計</span><b>{yen(previewTotal(selected))}</b></div></div>
         {selected.status === "requested" && hasDraftError(selected) ? <p className="checkout-feedback checkout-feedback--error" role="alert">入力未完了の料金は保存できません。単価と人数、任意料金を確認してください。</p> : null}
         {errorMessage ? <p className="checkout-feedback checkout-feedback--error" role="alert">{errorMessage}</p> : null}{message ? <p className="checkout-feedback" role="status">{message}</p> : null}
-        {selected.status === "requested" ? <div className="checkout-editor__actions"><button type="button" className="button button--quiet" onClick={() => setConfirmAction("cancel")} disabled={Boolean(busy)}>会計依頼を取り消す</button><button type="button" className="button button--quiet" onClick={() => void runAction("save", "追加料金を保存できませんでした。")} disabled={Boolean(busy)}>{busy === "save" ? "保存中…" : "追加料金を保存"}</button><button type="button" className="button button--primary" onClick={() => setConfirmAction("ready")} disabled={Boolean(busy) || hasDraftError(selected) || hasUnsavedDraft(selected)}>{busy === "ready" ? "確定中…" : "合計金額を確定"}</button></div> : <div className="checkout-ready-note">正式合計 <b>{yen(selected.grandTotalYen)}</b>・この依頼は操作できません</div>}
+        {selected.status === "requested" ? <div className="checkout-editor__actions"><button type="button" className="button button--quiet" onClick={() => setConfirmAction("cancel")} disabled={Boolean(busy)}>会計依頼を取り消す</button><button type="button" className="button button--quiet" onClick={() => void runAction("save", "追加料金を保存できませんでした。")} disabled={Boolean(busy)}>{busy === "save" ? "保存中…" : "追加料金を保存"}</button><button type="button" className="button button--primary" onClick={() => setConfirmAction("ready")} disabled={Boolean(busy) || hasDraftError(selected) || hasUnsavedDraft(selected)}>{busy === "ready" ? "確定中…" : "合計金額を確定"}</button></div> : selected.status === "ready" ? <div className="checkout-editor__actions checkout-editor__actions--payment"><span className="checkout-payment-note">readyは金額確定のみ。実際の支払い確認後に操作してください。</span><button type="button" className="button button--primary" onClick={() => setConfirmAction("pay")} disabled={Boolean(busy)}>{busy === "pay" ? "記録中…" : "支払を確認して会計済みにする"}</button></div> : <div className="checkout-ready-note">正式合計 <b>{yen(selected.grandTotalYen)}</b>・この依頼は操作できません</div>}
       </div> : null}
     </div>}
-    {confirmAction ? <Modal title={confirmAction === "ready" ? "合計金額を確定しますか？" : "会計依頼を取り消しますか？"} onClose={() => { if (!busy) setConfirmAction(null); }}><p className="modal-lead">{confirmAction === "ready" ? `サーバーで注文履歴を再計算し、${yen(selected ? previewTotal(selected) : 0)}を確認用として確定します。` : "この会計依頼を取り消します。客席側には会計準備完了として表示されません。"}</p><div className="modal-actions"><button type="button" className="button button--quiet" onClick={() => setConfirmAction(null)} disabled={Boolean(busy)}>戻る</button><button type="button" className="button button--primary button--large" onClick={() => void runAction(confirmAction, confirmAction === "ready" ? "会計を確定できませんでした。" : "会計依頼を取り消せませんでした。")} disabled={Boolean(busy)}>{busy ? "処理中…" : confirmAction === "ready" ? "確定する" : "取り消す"}</button></div></Modal> : null}
+    {confirmAction ? <Modal title={confirmAction === "ready" ? "合計金額を確定しますか？" : confirmAction === "pay" ? "支払いを確認して会計済みにしますか？" : "会計依頼を取り消しますか？"} onClose={() => { if (!busy) setConfirmAction(null); }}><p className="modal-lead">{confirmAction === "ready" ? `readyは金額確定のみです。${yen(selected ? previewTotal(selected) : 0)}で確認用金額を確定します。` : confirmAction === "pay" ? "実際の支払いを確認済みであることを確認してください。注文内容・金額を再検証し、支払記録と席リセットを一括で保存します。" : "この会計依頼を取り消します。客席側には会計準備完了として表示されません。"}</p>{confirmAction === "pay" ? <label className="checkout-payment-method"><span>支払方法</span><select value={paymentMethod} onChange={(event) => setPaymentMethod(event.target.value)} disabled={Boolean(busy)}><option value="cash">現金</option><option value="card">クレジットカード</option><option value="qr">QR決済</option><option value="other">その他</option></select></label> : null}<div className="modal-actions"><button type="button" className="button button--quiet" onClick={() => setConfirmAction(null)} disabled={Boolean(busy)}>戻る</button><button type="button" className="button button--primary button--large" onClick={() => confirmAction === "pay" ? void runPay() : void runAction(confirmAction, confirmAction === "ready" ? "会計を確定できませんでした。" : "会計依頼を取り消せませんでした。")} disabled={Boolean(busy)}>{busy ? "処理中…" : confirmAction === "ready" ? "確定する" : confirmAction === "pay" ? "会計済みにする" : "取り消す"}</button></div></Modal> : null}
   </section>;
 }
 
-function KitchenScreen({ state, updateState, apiState, checkoutState, onServe, onCloseSession, onRefreshCheckouts, onSaveCheckout, onReadyCheckout, onCancelCheckout }) {
+function KitchenScreen({ state, updateState, apiState, checkoutState, onServe, onCloseSession, onRefreshCheckouts, onSaveCheckout, onReadyCheckout, onCancelCheckout, onPayCheckout }) {
   const [callPanel, setCallPanel] = useState(false);
   const apiMode = Boolean(apiState);
   const sourceOrders = apiMode ? apiState.orders : state.orders;
@@ -1539,7 +1553,7 @@ function KitchenScreen({ state, updateState, apiState, checkoutState, onServe, o
   return (
     <StaffShell route="/kitchen" title="新着注文" subtitle="新しいご注文を確認してください。提供済みのテーブルは自動的に履歴へ移動します。" state={state} newOrderCount={activeOrders.length} right={<div className="staff-topbar__right"><button className="staff-call-button" onClick={() => setCallPanel(true)}><Bell size={26} weight="fill" /> スタッフ呼出 {activeCalls.length ? <b>{activeCalls.length}</b> : null}</button><ConnectionBadge online /><time className="kitchen-clock">{formatTime(new Date())}</time></div>}>
       <section className="kitchen-content">
-        {apiMode ? <KitchenCheckoutPanel checkouts={checkoutState?.checkouts || []} sessions={sessions} loading={checkoutState?.loading} error={checkoutState?.error} onRefresh={onRefreshCheckouts} onSave={onSaveCheckout} onReady={onReadyCheckout} onCancel={onCancelCheckout} /> : null}
+        {apiMode ? <KitchenCheckoutPanel checkouts={checkoutState?.checkouts || []} sessions={sessions} loading={checkoutState?.loading} error={checkoutState?.error} onRefresh={onRefreshCheckouts} onSave={onSaveCheckout} onReady={onReadyCheckout} onCancel={onCancelCheckout} onPay={onPayCheckout} /> : null}
         <div className="table-scroll">
           {apiMode && apiState.loading ? <div className="kitchen-empty"><p>注文を読み込み中です。</p></div> : apiMode && apiState.error ? <div className="kitchen-empty"><p>注文情報を取得できません。</p></div> : tables.length ? tables.map((tableId) => {
             const orders = activeOrders.filter((order) => order.tableId === tableId);
@@ -1557,22 +1571,30 @@ function KitchenScreen({ state, updateState, apiState, checkoutState, onServe, o
                   {rows.filter((row) => row.isServed).map((row) => <button className="order-item is-served" key={row.id} onClick={() => toggleServed(row.orderId, row.id)}><span><b>{kitchenMenuName(row, kitchenAliases)}</b><small>{row.quantity}点</small></span><i><Check size={19} weight="bold" /></i></button>)}
                   {!rows.length ? <div className="empty-state"><p>現在の注文はありません。</p></div> : null}
                 </div>
-                <footer><span>合計</span><b>{yen(total)}</b>{apiMode && sessionId ? <button className="button button--quiet table-panel__reset" onClick={() => { setResetError(false); setResetTarget({ tableId, sessionId }); }}>会計完了・席をリセット</button> : null}</footer>
+                <footer><span>合計</span><b>{yen(total)}</b>{apiMode && sessionId ? <button className="button button--quiet table-panel__reset" onClick={() => { setResetError(false); setResetTarget({ tableId, sessionId }); }}>席をリセット（支払記録なし）</button> : null}</footer>
               </article>
             );
           }) : <div className="kitchen-empty"><CheckCircle size={72} weight="thin" /><h2>すべて提供済みです</h2><p>新しい注文が届くと、ここにテーブルごとに表示されます。</p></div>}
         </div>
         <div className="horizontal-hint"><ArrowLeft size={20} /><span></span><ArrowRight size={20} /></div>
       </section>
-      {resetTarget ? <Modal title="会計完了・席をリセット" onClose={() => { if (!resetting) setResetTarget(null); }}><p className="modal-lead">テーブル{resetTarget.tableId}の現在の来店を終了します。注文データは削除されませんが、客席端末には表示されなくなります。</p>{resetError ? <p role="alert">席のリセットに失敗しました。未提供の注文がないか確認してください。</p> : null}<div className="modal-actions"><button className="button button--quiet" onClick={() => setResetTarget(null)} disabled={resetting}>戻る</button><button className="button button--primary button--large" onClick={async () => { setResetting(true); setResetError(false); try { await onCloseSession(resetTarget); setResetTarget(null); } catch { setResetError(true); } finally { setResetting(false); } }} disabled={resetting}>{resetting ? "処理中" : "会計完了・席をリセット"}</button></div></Modal> : null}
+      {resetTarget ? <Modal title="席をリセット（支払記録なし）" onClose={() => { if (!resetting) setResetTarget(null); }}><p className="modal-lead">テーブル{resetTarget.tableId}の席だけをリセットします。これは支払済み記録を作成しません。実際の支払いは会計依頼の「支払を確認して会計済みにする」から記録してください。</p>{resetError ? <p role="alert">席のリセットに失敗しました。未提供の注文がないか確認してください。</p> : null}<div className="modal-actions"><button className="button button--quiet" onClick={() => setResetTarget(null)} disabled={resetting}>戻る</button><button className="button button--primary button--large" onClick={async () => { setResetting(true); setResetError(false); try { await onCloseSession(resetTarget); setResetTarget(null); } catch { setResetError(true); } finally { setResetting(false); } }} disabled={resetting}>{resetting ? "処理中" : "席をリセット（支払記録なし）"}</button></div></Modal> : null}
       {callPanel ? <Modal title="スタッフ呼び出し" onClose={() => setCallPanel(false)} wide><div className="call-list">{activeCalls.length ? activeCalls.map((call) => <article key={call.id}><Bell size={28} weight="fill" /><div><b>テーブル {call.tableId}</b><span>{formatTime(call.createdAt)} に呼び出し</span></div><button className="button button--primary" onClick={() => resolveCall(call.id)}>対応済みにする</button></article>) : <div className="empty-state"><Bell size={42} /><p>未対応の呼び出しはありません。</p></div>}</div></Modal> : null}
     </StaffShell>
   );
 }
 
-function HistoryScreen({ state, apiMode = false, loadHistory = null }) {
+function paymentMethodLabel(method) {
+  return { cash: "現金", card: "クレジットカード", qr: "QR決済", other: "その他" }[method] || method;
+}
+
+function HistoryScreen({ state, apiMode = false, loadHistory = null, loadPaymentHistory = null, onVoidPayment = null }) {
   const [remoteState, setRemoteState] = useState({ loading: apiMode, error: false, orders: [] });
+  const [paymentRemoteState, setPaymentRemoteState] = useState({ loading: apiMode, error: false, payments: [] });
   const [showPastOrders, setShowPastOrders] = useState(false);
+  const [voidTarget, setVoidTarget] = useState(null);
+  const [voidReason, setVoidReason] = useState("");
+  const [voidError, setVoidError] = useState("");
   useEffect(() => {
     if (!apiMode) return undefined;
     if (typeof loadHistory !== "function") {
@@ -1581,13 +1603,14 @@ function HistoryScreen({ state, apiMode = false, loadHistory = null }) {
     }
     let cancelled = false;
     setRemoteState({ loading: true, error: false, orders: [] });
-    void loadHistory({ env: window }).then((orders) => {
-      if (!cancelled) setRemoteState({ loading: false, error: false, orders });
+    setPaymentRemoteState({ loading: true, error: false, payments: [] });
+    void Promise.all([loadHistory({ env: window }), typeof loadPaymentHistory === "function" ? loadPaymentHistory({ env: window }) : Promise.reject(new Error("payment history unavailable"))]).then(([orders, payments]) => {
+      if (!cancelled) { setRemoteState({ loading: false, error: false, orders }); setPaymentRemoteState({ loading: false, error: false, payments }); }
     }).catch(() => {
-      if (!cancelled) setRemoteState({ loading: false, error: true, orders: [] });
+      if (!cancelled) { setRemoteState({ loading: false, error: true, orders: [] }); setPaymentRemoteState({ loading: false, error: true, payments: [] }); }
     });
     return () => { cancelled = true; };
-  }, [apiMode, loadHistory]);
+  }, [apiMode, loadHistory, loadPaymentHistory]);
   const sourceOrders = apiMode ? remoteState.orders.map((order) => ({
     id: order.orderId,
     tableId: String(order.tableId),
@@ -1628,7 +1651,14 @@ function HistoryScreen({ state, apiMode = false, loadHistory = null }) {
             <tbody>{visibleCompleted.map((order) => <tr key={order.id}><td><b>{order.id}</b></td><td><span className="table-pill">T{order.tableId}</span></td><td>{formatDateTime(order.createdAt)}</td><td>{formatDateTime(order.completedAt)}</td><td><div className="history-items">{order.items.map((item) => <span key={item.id}>{selectionDisplayName({ name: item.nameSnapshot }, item)} <b>{item.quantity}点</b> <small>{yen(item.unitPriceSnapshot)}</small></span>)}</div></td><td className="history-total">{yen(order.totalAmount)}</td></tr>)}</tbody>
           </table>
         </div>}
+        <section className="payment-history" aria-labelledby="payment-history-title">
+          <div className="payment-history__heading"><div><span className="section-kicker">PAYMENT HISTORY</span><h2 id="payment-history-title">会計履歴</h2><p>支払確認後に保存した記録です。席リセットだけの操作は含みません。</p></div></div>
+          {apiMode && paymentRemoteState.loading ? <div className="empty-state"><p>会計履歴を読み込み中です。</p></div> : null}
+          {apiMode && paymentRemoteState.error ? <div className="empty-state"><p>会計履歴を取得できませんでした。</p></div> : null}
+          {!apiMode || (!paymentRemoteState.loading && !paymentRemoteState.error) ? paymentRemoteState.payments.length ? <div className="payment-history-list">{paymentRemoteState.payments.map((payment) => <article className={`payment-history-card payment-history-card--${payment.status}`} key={payment.paymentRecordId}><header><div><b>テーブル {payment.tableId}</b><span>{formatDateTime(new Date(payment.paidAtMs))}・{paymentMethodLabel(payment.paymentMethod)}</span></div><strong>{yen(payment.confirmedTotalYen)}</strong></header><p className="payment-history-card__meta">会計記録 {payment.paymentRecordId}・session {payment.tableSessionId}</p><details><summary>注文商品・追加料金の内訳</summary><div className="payment-history-card__details"><h4>注文商品</h4>{payment.orderItems.map((item) => <div key={`${payment.paymentRecordId}-${item.orderItemId}`}><span>{item.formalNameSnapshot}{item.variantNameSnapshot ? ` ${item.variantNameSnapshot}` : ""} × {item.quantity}</span><b>{yen(item.lineTotalYen)}</b></div>)}{payment.adjustments.length ? <><h4>追加料金</h4>{payment.adjustments.map((item) => <div key={`${payment.paymentRecordId}-${item.sortOrder}`}><span>{item.label}</span><b>{yen(item.amountYen)}</b></div>)}</> : null}</div></details>{payment.status === "voided" ? <p className="payment-history-card__void">取消済み：{payment.voidReason}</p> : onVoidPayment ? <button type="button" className="button button--quiet" onClick={() => { setVoidError(""); setVoidReason(""); setVoidTarget(payment); }}>誤記録として取消</button> : null}</article>)}</div> : <div className="empty-state"><p>会計履歴はありません。</p></div> : null}
+        </section>
       </section>
+      {voidTarget ? <Modal title="会計記録を取消" onClose={() => setVoidTarget(null)}><p className="modal-lead">この記録は物理削除せず、取消理由を残して無効化します。</p><label className="payment-void-form"><span>取消理由</span><textarea value={voidReason} onChange={(event) => setVoidReason(event.target.value)} maxLength={300} placeholder="例：支払方法の選択誤り" /></label>{voidError ? <p className="checkout-feedback checkout-feedback--error" role="alert">{voidError}</p> : null}<div className="modal-actions"><button type="button" className="button button--quiet" onClick={() => setVoidTarget(null)}>戻る</button><button type="button" className="button button--primary" onClick={async () => { try { const updated = await onVoidPayment(voidTarget, voidReason); setPaymentRemoteState((current) => ({ ...current, payments: current.payments.map((item) => item.paymentRecordId === updated.paymentRecordId ? updated : item) })); setVoidTarget(null); } catch (error) { setVoidError(error.message || "取消できませんでした。"); } }} disabled={!voidReason.trim()}>取消を保存</button></div></Modal> : null}
     </StaffShell>
   );
 }
@@ -2557,6 +2587,19 @@ export function App() {
     return result;
   };
 
+  const payCheckout = async (checkout, paymentMethod) => {
+    const result = await payKitchenCheckout({ env: window, checkoutRequestId: checkout.checkoutRequestId, expectedVersion: checkout.version, paymentMethod });
+    await refreshKitchenCheckouts();
+    const snapshot = await fetchKitchenSnapshot({ env: window });
+    setKitchenApiState({ loading: false, error: false, orders: snapshot.orders, sessions: snapshot.sessions });
+    return result;
+  };
+
+  const voidPayment = async (payment, reason) => {
+    if (kitchenApiConfigured(window)) return voidKitchenPayment({ env: window, paymentRecordId: payment.paymentRecordId, expectedVersion: payment.version, reason });
+    return voidAdminPayment({ env: window, paymentRecordId: payment.paymentRecordId, expectedVersion: payment.version, reason });
+  };
+
   const closeKitchenSession = async ({ tableId, sessionId }) => {
     await closeKitchenTableSession({ env: window, tableId, sessionId });
     const snapshot = await fetchKitchenSnapshot({ env: window });
@@ -2637,13 +2680,18 @@ export function App() {
     if (isCustomerRoute && !orderClient) return <PairingScreen onClaim={claim} error={pairingError} />;
     if (route === "/") return <CustomerScreen state={state} updateState={updateState} deviceId="customer-03" orderClient={orderClient} customerDeviceConfig={customerDeviceConfig} />;
     if (route.startsWith("/customer/")) return <CustomerScreen state={state} updateState={updateState} deviceId={route.split("/")[2]} orderClient={orderClient} customerDeviceConfig={customerDeviceConfig} />;
-    if (route === "/kitchen") return <KitchenScreen state={state} updateState={updateState} apiState={kitchenApiState} checkoutState={kitchenCheckoutState} onServe={serveKitchenItem} onCloseSession={closeKitchenSession} onRefreshCheckouts={refreshKitchenCheckouts} onSaveCheckout={saveCheckout} onReadyCheckout={readyCheckout} onCancelCheckout={cancelCheckout} />;
+    if (route === "/kitchen") return <KitchenScreen state={state} updateState={updateState} apiState={kitchenApiState} checkoutState={kitchenCheckoutState} onServe={serveKitchenItem} onCloseSession={closeKitchenSession} onRefreshCheckouts={refreshKitchenCheckouts} onSaveCheckout={saveCheckout} onReadyCheckout={readyCheckout} onCancelCheckout={cancelCheckout} onPayCheckout={payCheckout} />;
     if (route === "/history") {
       const explicitDemo = window.WARUN_ORDER_MODE === "demo";
-      const loadHistory = kitchenApiConfigured(window)
+      const kitchenConfigured = kitchenApiConfigured(window);
+      const adminConfigured = configuredAdminToken(window);
+      const loadHistory = kitchenConfigured
         ? fetchKitchenOrderHistory
-        : configuredAdminToken(window) ? fetchAdminOrderHistory : null;
-      return <HistoryScreen state={state} apiMode={!explicitDemo} loadHistory={loadHistory} />;
+        : adminConfigured ? fetchAdminOrderHistory : null;
+      const loadPaymentHistory = kitchenConfigured
+        ? fetchKitchenPaymentHistory
+        : adminConfigured ? fetchAdminPaymentHistory : null;
+      return <HistoryScreen state={state} apiMode={!explicitDemo} loadHistory={loadHistory} loadPaymentHistory={loadPaymentHistory} onVoidPayment={!explicitDemo && (kitchenConfigured || adminConfigured) ? voidPayment : null} />;
     }
     if (route.startsWith("/admin/")) return <AdminScreen state={state} updateState={updateState} section={route.split("/")[2] || "menu"} />;
     if (route === "/devices") return <Launcher state={state} updateState={updateState} />;

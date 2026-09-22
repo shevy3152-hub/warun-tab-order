@@ -5,7 +5,7 @@ import { DatabaseSync } from 'node:sqlite';
 
 export const LEGACY_SCHEMA_VERSION = 1;
 export const SESSION_SCHEMA_VERSION = 2;
-export const SCHEMA_VERSION = 12;
+export const SCHEMA_VERSION = 13;
 
 export const REQUIRED_TABLES = Object.freeze([
   'system_state',
@@ -127,6 +127,14 @@ export const DEFAULT_V11_MIGRATION_PATH = resolve(
 );
 export const DEFAULT_V12_MIGRATION_PATH = resolve(
   moduleDirectory, '..', '..', '..', 'docs', 'schema-v12-migration.sql',
+);
+export const DEFAULT_V13_MIGRATION_PATH = resolve(
+  moduleDirectory,
+  '..',
+  '..',
+  '..',
+  'docs',
+  'schema-v13-migration.sql',
 );
 
 export class DatabaseInitializationError extends Error {
@@ -467,6 +475,14 @@ function migrateSchemaV11ToV12(database, migrationPath) {
   }
 }
 
+function migrateSchemaV12ToV13(database, migrationPath) {
+  try { database.exec(readFileSync(migrationPath, 'utf8')); }
+  catch (error) {
+    try { if (database.isTransaction) database.exec('ROLLBACK;'); } catch {}
+    throw new DatabaseInitializationError('MIGRATION_FAILED', 'The payment history schema migration failed.', { cause: error });
+  }
+}
+
 function migrateSchemaV1ToV2(database) {
   let transactionOpen = false;
   try {
@@ -683,7 +699,7 @@ function validateSchema(database) {
   );
   assertRequiredNames(
     tableColumns(database, 'checkout_requests'),
-    ['checkout_request_id', 'table_session_id', 'status', 'receipt_requested', 'ordered_items_total_yen', 'adjustments_total_yen', 'grand_total_yen', 'version', 'requested_at_ms', 'ready_at_ms', 'updated_at_ms'],
+    ['checkout_request_id', 'table_session_id', 'status', 'receipt_requested', 'ordered_items_total_yen', 'adjustments_total_yen', 'grand_total_yen', 'version', 'requested_at_ms', 'ready_at_ms', 'updated_at_ms', 'ready_order_fingerprint'],
     'checkout request columns',
   );
   assertRequiredNames(
@@ -691,6 +707,10 @@ function validateSchema(database) {
     ['adjustment_id', 'checkout_request_id', 'kind', 'label', 'amount_yen', 'sort_order'],
     'checkout adjustment columns',
   );
+  assertRequiredNames(tableColumns(database, 'payment_records'), ['payment_record_id', 'checkout_request_id', 'table_session_id', 'table_id', 'payment_method', 'confirmed_total_yen', 'paid_at_ms', 'status', 'voided_at_ms', 'void_reason', 'version', 'created_at_ms', 'updated_at_ms'], 'payment record columns');
+  assertRequiredNames(tableColumns(database, 'payment_order_items'), ['payment_order_item_id', 'payment_record_id', 'order_id', 'order_item_id', 'formal_name_snapshot', 'unit_price_yen_snapshot', 'quantity', 'line_total_yen', 'sort_order'], 'payment order item columns');
+  assertRequiredNames(tableColumns(database, 'payment_adjustments'), ['payment_adjustment_id', 'payment_record_id', 'kind', 'label', 'amount_yen', 'sort_order'], 'payment adjustment columns');
+  assertRequiredNames(schemaObjectNames(database, 'index'), ['idx_payment_records_paid_at', 'idx_payment_records_session', 'idx_payment_order_items_record_sort', 'idx_payment_adjustments_record_sort'], 'indexes');
 
   const state = database
     .prepare(`
@@ -775,6 +795,7 @@ export function initializeDatabase({
   v10MigrationPath = DEFAULT_V10_MIGRATION_PATH,
   v11MigrationPath = DEFAULT_V11_MIGRATION_PATH,
   v12MigrationPath = DEFAULT_V12_MIGRATION_PATH,
+  v13MigrationPath = DEFAULT_V13_MIGRATION_PATH,
 } = {}) {
   const resolvedDatabasePath = resolveFilePath(databasePath, 'databasePath');
   const resolvedSchemaPath = resolveFilePath(schemaPath, 'schemaPath');
@@ -788,6 +809,7 @@ export function initializeDatabase({
   const resolvedV10MigrationPath = resolveFilePath(v10MigrationPath, 'v10MigrationPath');
   const resolvedV11MigrationPath = resolveFilePath(v11MigrationPath, 'v11MigrationPath');
   const resolvedV12MigrationPath = resolveFilePath(v12MigrationPath, 'v12MigrationPath');
+  const resolvedV13MigrationPath = resolveFilePath(v13MigrationPath, 'v13MigrationPath');
 
   mkdirSync(dirname(resolvedDatabasePath), { recursive: true });
 
@@ -861,6 +883,11 @@ export function initializeDatabase({
     }
     if (currentVersion === 11) {
       migrateSchemaV11ToV12(database, resolvedV12MigrationPath);
+      enableWriteAheadLogging(database);
+      currentVersion = 12;
+    }
+    if (currentVersion === 12) {
+      migrateSchemaV12ToV13(database, resolvedV13MigrationPath);
       enableWriteAheadLogging(database);
       currentVersion = SCHEMA_VERSION;
     }

@@ -28,6 +28,9 @@ const OTHER_SESSION = uuid(14);
 const OTHER_CUSTOMER = uuid(15);
 const POST_REQUEST_ORDER = uuid(16);
 const POST_REQUEST_CLIENT_ORDER = uuid(17);
+const PAYMENT = uuid(18);
+const PAYMENT_CHANGED_ORDER = uuid(19);
+const PAYMENT_CHANGED_CLIENT_ORDER = uuid(20);
 const CUSTOMER_TOKEN = Buffer.alloc(32, 1).toString('base64url');
 const KITCHEN_TOKEN = Buffer.alloc(32, 2).toString('base64url');
 const tokenHash = (token) => createHash('sha256').update(token, 'utf8').digest('hex');
@@ -144,5 +147,49 @@ test('checkout staff listing excludes cancelled requests and customer cannot man
     repository.createCheckout({ principal: customer, checkoutRequestId: CHECKOUT, receiptRequested: false });
     assert.equal(repository.listActive({ principal: kitchen }).length, 1);
     assert.throws(() => repository.saveAdjustments({ principal: customer, checkoutRequestId: CHECKOUT, expectedVersion: 1, adjustments: [] }), /Device authorization failed/);
+  });
+});
+
+test('payment records are idempotent, snapshot details, close the session atomically, and can be voided', async () => {
+  await withFixture(({ database, repository, customer, kitchen }) => {
+    repository.createCheckout({ principal: customer, checkoutRequestId: CHECKOUT, receiptRequested: false });
+    repository.saveAdjustments({ principal: kitchen, checkoutRequestId: CHECKOUT, expectedVersion: 1, adjustments: [{ kind: 'seat_charge', label: '席料（500円×2名）', amountYen: 1000 }] });
+    const ready = repository.ready({ principal: kitchen, checkoutRequestId: CHECKOUT, expectedVersion: 2 });
+    const paid = repository.pay({ principal: kitchen, checkoutRequestId: CHECKOUT, expectedVersion: ready.request.version, paymentMethod: 'cash' });
+    assert.equal(paid.idempotencyResult, 'created');
+    assert.equal(paid.payment.confirmedTotalYen, 2000);
+    assert.equal(paid.payment.orderItems[0].formalNameSnapshot, '架空商品');
+    assert.deepEqual(paid.payment.adjustments.map((item) => [item.label, item.amountYen]), [['席料（500円×2名）', 1000]]);
+    assert.equal(database.prepare('SELECT closed_at_ms FROM table_sessions WHERE session_id = ?').get(SESSION).closed_at_ms, 1000);
+    assert.equal(repository.listActive({ principal: kitchen }).length, 0);
+    assert.equal(repository.pay({ principal: kitchen, checkoutRequestId: CHECKOUT, expectedVersion: 999, paymentMethod: 'card' }).idempotencyResult, 'replayed');
+    assert.equal(database.prepare('SELECT COUNT(*) AS count FROM payment_records').get().count, 1);
+
+    const voided = repository.voidPayment({ principal: kitchen, paymentRecordId: paid.payment.paymentRecordId, expectedVersion: 1, reason: '支払方法の選択誤り' });
+    assert.equal(voided.payment.status, 'voided');
+    assert.equal(voided.payment.voidReason, '支払方法の選択誤り');
+    assert.equal(database.prepare('SELECT COUNT(*) AS count FROM payment_records').get().count, 1);
+  });
+});
+
+test('payment stops when a ready checkout order changes and leaves no partial record or reset', async () => {
+  await withFixture(({ database, repository, customer, kitchen }) => {
+    repository.createCheckout({ principal: customer, checkoutRequestId: CHECKOUT, receiptRequested: false });
+    const ready = repository.ready({ principal: kitchen, checkoutRequestId: CHECKOUT, expectedVersion: 1 });
+    insertCompletedOrder(database, { orderId: PAYMENT_CHANGED_ORDER, clientOrderId: PAYMENT_CHANGED_CLIENT_ORDER, sessionId: SESSION, tableId: 1, orderItemId: 99, amountYen: 300, timestamp: 40 });
+    assert.throws(() => repository.pay({ principal: kitchen, checkoutRequestId: CHECKOUT, expectedVersion: ready.request.version, paymentMethod: 'cash' }), (error) => error.code === CHECKOUT_ERROR_CODES.PAYMENT_ORDER_CHANGED);
+    assert.equal(database.prepare('SELECT COUNT(*) AS count FROM payment_records').get().count, 0);
+    assert.equal(database.prepare('SELECT closed_at_ms FROM table_sessions WHERE session_id = ?').get(SESSION).closed_at_ms, null);
+  });
+});
+
+test('payment is not recorded while the session still has active orders', async () => {
+  await withFixture(({ database, repository, customer, kitchen }) => {
+    database.prepare("UPDATE orders SET status = 'active', completed_at_ms = NULL WHERE order_id = ?").run(ORDER);
+    repository.createCheckout({ principal: customer, checkoutRequestId: CHECKOUT, receiptRequested: false });
+    const ready = repository.ready({ principal: kitchen, checkoutRequestId: CHECKOUT, expectedVersion: 1 });
+    assert.throws(() => repository.pay({ principal: kitchen, checkoutRequestId: CHECKOUT, expectedVersion: ready.request.version, paymentMethod: 'qr' }), (error) => error.code === CHECKOUT_ERROR_CODES.PAYMENT_CONFLICT);
+    assert.equal(database.prepare('SELECT COUNT(*) AS count FROM payment_records').get().count, 0);
+    assert.equal(database.prepare('SELECT closed_at_ms FROM table_sessions WHERE session_id = ?').get(SESSION).closed_at_ms, null);
   });
 });
