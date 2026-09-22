@@ -31,6 +31,7 @@ import { pairingCodeQrSvg } from "./qr-code.js";
 import { CUSTOMER_TEST_THEME, normalizeCustomerTheme } from "./customer-theme.js";
 import { DEFAULT_BUSINESS_HOURS, businessHoursDisplay, businessHoursHourLabel, combineBusinessHoursTime, normalizeBusinessHours, splitBusinessHoursTime } from "./business-hours.js";
 import { DEFAULT_BUSINESS_HOURS_NOTICE, withBusinessHoursNotice } from "./business-hours-notice.js";
+import { CHECKOUT_ADJUSTMENT_TYPES, checkoutAdjustmentTotal, normalizeCheckoutAdjustments, parseFixedAdjustment } from "./checkout-adjustments.js";
 
 const STORAGE_KEY = "izakaya-order-prototype-v3";
 
@@ -1418,12 +1419,6 @@ function StaffShell({ route, title, subtitle, state, children, right, newOrderCo
   );
 }
 
-const CHECKOUT_ADJUSTMENT_TYPES = [
-  ["seat_charge", "席料"],
-  ["late_night_charge", "深夜チャージ"],
-  ["extension_charge", "延長料金"],
-];
-
 function checkoutStatusLabel(status) {
   return status === "ready" ? "会計準備完了" : status === "cancelled" ? "取消済み" : "会計依頼";
 }
@@ -1439,9 +1434,7 @@ function checkoutErrorMessage(error, fallback) {
 
 function CheckoutAdjustmentInput({ label, value, onChange, disabled, onDelete = null, optional = false }) {
   return <div className="checkout-adjustment-row">
-    <label>{label ? <span>{label}</span> : <input aria-label="任意料金の項目名" value={value.label} onChange={(event) => onChange({ ...value, label: event.target.value })} placeholder="項目名" maxLength={100} disabled={disabled} />}
-      <input aria-label={`${label || "任意料金"}の金額`} className="checkout-amount-input" inputMode="numeric" pattern="[0-9]*" value={value.amount} onChange={(event) => { if (/^\d*$/.test(event.target.value)) onChange({ ...value, amount: event.target.value }); }} placeholder="0" disabled={disabled} /> <small>円</small>
-    </label>
+    {label ? <><span className="checkout-adjustment-label">{label}</span><div className="checkout-adjustment-fields"><label><span>1人分</span><input aria-label={`${label}の1人分`} className="checkout-unit-input" inputMode="numeric" pattern="[0-9]*" value={value.unitAmount} onChange={(event) => { if (/^\d*$/.test(event.target.value)) onChange({ ...value, unitAmount: event.target.value }); }} placeholder="0" disabled={disabled} /><small>円</small></label><label><span>人数</span><input aria-label={`${label}の人数`} className="checkout-people-input" inputMode="numeric" pattern="[0-9]*" min="1" max="99" value={value.people} onChange={(event) => { if (/^\d*$/.test(event.target.value)) onChange({ ...value, people: event.target.value }); }} placeholder="1" disabled={disabled} /><small>名</small></label><output aria-label={`${label}の金額`}>{Number.isInteger(Number(value.unitAmount)) && Number.isInteger(Number(value.people)) ? yen(Number(value.unitAmount) * Number(value.people)) : "入力確認"}</output></div></> : <label className="checkout-other-fields"><span>任意料金</span><input aria-label="任意料金の項目名" value={value.label} onChange={(event) => onChange({ ...value, label: event.target.value })} placeholder="項目名" maxLength={100} disabled={disabled} /><input aria-label="任意料金の金額" className="checkout-amount-input" inputMode="numeric" pattern="[0-9]*" value={value.amount} onChange={(event) => { if (/^\d*$/.test(event.target.value)) onChange({ ...value, amount: event.target.value }); }} placeholder="0" disabled={disabled} /><small>円</small></label>}
     {optional && onDelete ? <button type="button" className="button button--quiet checkout-adjustment-delete" onClick={onDelete} disabled={disabled}>削除</button> : null}
   </div>;
 }
@@ -1459,30 +1452,36 @@ function KitchenCheckoutPanel({ checkouts, sessions, loading, error, onRefresh, 
   const draftFor = (checkout) => {
     const current = drafts[checkout.checkoutRequestId];
     if (current) return current;
-    const fixed = Object.fromEntries(CHECKOUT_ADJUSTMENT_TYPES.map(([kind, label]) => [kind, { label, amount: String(checkout.adjustments.find((item) => item.kind === kind)?.amountYen ?? 0) }]));
+    const fixed = Object.fromEntries(CHECKOUT_ADJUSTMENT_TYPES.map(([kind, label]) => [kind, parseFixedAdjustment(checkout.adjustments.find((item) => item.kind === kind), label)]));
     const other = checkout.adjustments.filter((item) => item.kind === "other").map((item) => ({ label: item.label, amount: String(item.amountYen) }));
     return { ...fixed, other };
   };
   const setDraft = (checkout, next) => setDrafts((current) => ({ ...current, [checkout.checkoutRequestId]: next }));
   const normalizedAdjustments = (checkout) => {
     const draft = draftFor(checkout);
-    return [
-      ...CHECKOUT_ADJUSTMENT_TYPES.map(([kind]) => ({ kind, label: draft[kind].label, amountYen: Number(draft[kind].amount || 0) })),
-      ...draft.other.map((item) => ({ kind: "other", label: item.label.trim(), amountYen: Number(item.amount || 0) })),
-    ];
+    return normalizeCheckoutAdjustments(draft);
   };
-  const previewTotal = (checkout) => checkout.orderedItemsTotalYen + normalizedAdjustments(checkout).reduce((sum, item) => sum + item.amountYen, 0);
+  const previewTotal = (checkout) => checkout.orderedItemsTotalYen + (checkoutAdjustmentTotal(draftFor(checkout)) ?? 0);
+  const hasDraftError = (checkout) => !normalizeCheckoutAdjustments(draftFor(checkout)).ok;
+  const hasUnsavedDraft = (checkout) => {
+    const draft = draftFor(checkout);
+    const saved = { ...Object.fromEntries(CHECKOUT_ADJUSTMENT_TYPES.map(([kind, label]) => [kind, parseFixedAdjustment(checkout.adjustments.find((item) => item.kind === kind), label)])), other: checkout.adjustments.filter((item) => item.kind === "other").map((item) => ({ label: item.label, amount: String(item.amountYen) })) };
+    return JSON.stringify(draft) !== JSON.stringify(saved);
+  };
   const runAction = async (action, fallback) => {
     setBusy(action); setMessage(""); setErrorMessage("");
     try {
-      const result = await ({ save: onSave, ready: onReady, cancel: onCancel }[action])(selected, action === "save" ? normalizedAdjustments(selected) : undefined);
+      if (action === "ready" && hasUnsavedDraft(selected)) throw new Error("保存前確認");
+      const normalized = action === "save" ? normalizedAdjustments(selected) : undefined;
+      if (action === "save" && !normalized.ok) throw new Error(normalized.error);
+      const result = await ({ save: onSave, ready: onReady, cancel: onCancel }[action])(selected, action === "save" ? normalized.adjustments : undefined);
       if (action === "ready") setMessage(`合計${yen(result.grandTotalYen)}で会計準備完了です。`);
       else if (action === "cancel") setMessage("会計依頼を取り消しました。");
       else setMessage("追加料金を保存しました。");
       await onRefresh();
       if (result?.status === "cancelled") setSelectedId(null);
     } catch (actionError) {
-      setErrorMessage(checkoutErrorMessage(actionError, fallback));
+      setErrorMessage(actionError.message === "保存前確認" ? "変更内容を保存してから、合計金額を確定してください。" : actionError.message || checkoutErrorMessage(actionError, fallback));
       await onRefresh().catch(() => {});
     } finally { setBusy(""); setConfirmAction(null); }
   };
@@ -1494,9 +1493,10 @@ function KitchenCheckoutPanel({ checkouts, sessions, loading, error, onRefresh, 
       </button>)}</div>
       {selected ? <div className="checkout-editor">
         <div className="checkout-editor__title"><div><h3>テーブル {sessionTable(selected)} の会計</h3><p>{formatTime(selected.requestedAt)} 依頼・{checkoutStatusLabel(selected.status)}</p></div>{selected.receiptRequested ? <strong className="receipt-notice"><Receipt size={24} weight="fill" /> 手書き領収書希望</strong> : null}</div>
-        <div className="checkout-breakdown"><div className="checkout-breakdown__line"><span>注文済み商品合計</span><b>{yen(selected.orderedItemsTotalYen)}</b></div><div className="checkout-adjustments"><h4>追加料金</h4>{CHECKOUT_ADJUSTMENT_TYPES.map(([kind, label]) => <CheckoutAdjustmentInput key={kind} label={label} value={draftFor(selected)[kind]} disabled={selected.status !== "requested" || Boolean(busy)} onChange={(value) => setDraft(selected, { ...draftFor(selected), [kind]: value })} />)}{draftFor(selected).other.map((value, index) => <CheckoutAdjustmentInput key={`other-${index}`} value={value} optional disabled={selected.status !== "requested" || Boolean(busy)} onChange={(next) => setDraft(selected, { ...draftFor(selected), other: draftFor(selected).other.map((item, itemIndex) => itemIndex === index ? next : item) })} onDelete={() => setDraft(selected, { ...draftFor(selected), other: draftFor(selected).other.filter((_, itemIndex) => itemIndex !== index) })} />)}{selected.status === "requested" ? <button type="button" className="button button--quiet checkout-add-other" onClick={() => setDraft(selected, { ...draftFor(selected), other: [...draftFor(selected).other, { label: "", amount: "0" }] })} disabled={Boolean(busy)}><Plus size={18} weight="bold" /> 任意料金を追加</button> : null}</div><div className="checkout-total-preview"><span>確認用合計</span><b>{yen(previewTotal(selected))}</b></div></div>
+        <div className="checkout-breakdown"><div className="checkout-breakdown__line"><span>注文済み商品合計</span><b>{yen(selected.orderedItemsTotalYen)}</b></div><div className="checkout-adjustments"><h4>追加料金合計</h4>{CHECKOUT_ADJUSTMENT_TYPES.map(([kind, label]) => <CheckoutAdjustmentInput key={kind} label={label} value={draftFor(selected)[kind]} disabled={selected.status !== "requested" || Boolean(busy)} onChange={(value) => setDraft(selected, { ...draftFor(selected), [kind]: value })} />)}{draftFor(selected).other.map((value, index) => <CheckoutAdjustmentInput key={`other-${index}`} value={value} optional disabled={selected.status !== "requested" || Boolean(busy)} onChange={(next) => setDraft(selected, { ...draftFor(selected), other: draftFor(selected).other.map((item, itemIndex) => itemIndex === index ? next : item) })} onDelete={() => setDraft(selected, { ...draftFor(selected), other: draftFor(selected).other.filter((_, itemIndex) => itemIndex !== index) })} />)}{selected.status === "requested" ? <button type="button" className="button button--quiet checkout-add-other" onClick={() => setDraft(selected, { ...draftFor(selected), other: [...draftFor(selected).other, { label: "", amount: "0" }] })} disabled={Boolean(busy)}><Plus size={18} weight="bold" /> 任意料金を追加</button> : null}</div><div className="checkout-total-preview"><span>確認用合計</span><b>{yen(previewTotal(selected))}</b></div></div>
+        {selected.status === "requested" && hasDraftError(selected) ? <p className="checkout-feedback checkout-feedback--error" role="alert">入力未完了の料金は保存できません。単価と人数、任意料金を確認してください。</p> : null}
         {errorMessage ? <p className="checkout-feedback checkout-feedback--error" role="alert">{errorMessage}</p> : null}{message ? <p className="checkout-feedback" role="status">{message}</p> : null}
-        {selected.status === "requested" ? <div className="checkout-editor__actions"><button type="button" className="button button--quiet" onClick={() => setConfirmAction("cancel")} disabled={Boolean(busy)}>会計依頼を取り消す</button><button type="button" className="button button--quiet" onClick={() => void runAction("save", "追加料金を保存できませんでした。")} disabled={Boolean(busy)}>{busy === "save" ? "保存中…" : "追加料金を保存"}</button><button type="button" className="button button--primary" onClick={() => setConfirmAction("ready")} disabled={Boolean(busy)}>{busy === "ready" ? "確定中…" : "合計金額を確定"}</button></div> : <div className="checkout-ready-note">正式合計 <b>{yen(selected.grandTotalYen)}</b>・この依頼は操作できません</div>}
+        {selected.status === "requested" ? <div className="checkout-editor__actions"><button type="button" className="button button--quiet" onClick={() => setConfirmAction("cancel")} disabled={Boolean(busy)}>会計依頼を取り消す</button><button type="button" className="button button--quiet" onClick={() => void runAction("save", "追加料金を保存できませんでした。")} disabled={Boolean(busy)}>{busy === "save" ? "保存中…" : "追加料金を保存"}</button><button type="button" className="button button--primary" onClick={() => setConfirmAction("ready")} disabled={Boolean(busy) || hasDraftError(selected) || hasUnsavedDraft(selected)}>{busy === "ready" ? "確定中…" : "合計金額を確定"}</button></div> : <div className="checkout-ready-note">正式合計 <b>{yen(selected.grandTotalYen)}</b>・この依頼は操作できません</div>}
       </div> : null}
     </div>}
     {confirmAction ? <Modal title={confirmAction === "ready" ? "合計金額を確定しますか？" : "会計依頼を取り消しますか？"} onClose={() => { if (!busy) setConfirmAction(null); }}><p className="modal-lead">{confirmAction === "ready" ? `サーバーで注文履歴を再計算し、${yen(selected ? previewTotal(selected) : 0)}を確認用として確定します。` : "この会計依頼を取り消します。客席側には会計準備完了として表示されません。"}</p><div className="modal-actions"><button type="button" className="button button--quiet" onClick={() => setConfirmAction(null)} disabled={Boolean(busy)}>戻る</button><button type="button" className="button button--primary button--large" onClick={() => void runAction(confirmAction, confirmAction === "ready" ? "会計を確定できませんでした。" : "会計依頼を取り消せませんでした。")} disabled={Boolean(busy)}>{busy ? "処理中…" : confirmAction === "ready" ? "確定する" : "取り消す"}</button></div></Modal> : null}
