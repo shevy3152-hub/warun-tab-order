@@ -526,6 +526,16 @@ h1, h2, h3, p { margin: 0; }
 .kitchen-empty { min-width: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; color: #7b746a; gap: 10px; }
 .horizontal-hint { min-height: 28px; display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 12px; }
 .horizontal-hint span { height: 7px; border-radius: 6px; background: #d8d3cb; }
+.table-panel__orders { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 10px 12px 14px; }
+.table-panel__state { color: var(--muted); font-size: 13px; font-weight: 800; }
+.kitchen-order-card { margin-bottom: 12px; padding: 8px 10px 4px; border: 1px solid #c9c0b4; background: #fffdf8; }
+.kitchen-order-card.is-drink-order { border-left: 5px solid var(--red); }
+.kitchen-order-card > header { min-height: 30px; padding: 0 0 5px; display: flex; align-items: center; gap: 10px; border-bottom: 1px solid #ded8cf; }
+.kitchen-order-card > header b { font-size: 14px; }
+.kitchen-order-card > header time { margin-left: auto; color: var(--muted); font: 700 13px/1 var(--font-display); }
+.kitchen-order-card > header small { color: var(--muted); font-size: 12px; font-weight: 800; }
+.table-panel__completed-note { padding: 18px 8px; color: var(--muted); font-size: 14px; font-weight: 800; line-height: 1.5; }
+.table-panel.is-completed-side { background: #f3f0ea; }
 
 /* checkout */
 .checkout-panel { flex: 0 0 auto; max-height: 300px; margin: 0 0 14px; border: 2px solid var(--red); background: #fffaf2; display: flex; flex-direction: column; min-height: 0; }
@@ -628,6 +638,57 @@ h1, h2, h3, p { margin: 0; }
 .staff-app--kitchen .table-panel > footer span { font-size: 24px; font-weight: 900; }
 .staff-app--kitchen .table-panel > footer b { font-size: 38px; line-height: 1.15; }
 .staff-app--kitchen .staff-footer { font-size: 18px; color: var(--ink); }
+
+/* Kitchen board: compact the upper shell and give each table a scrollable order stack. */
+.staff-app.staff-app--kitchen { height: 100dvh; min-height: 0; grid-template-columns: 250px minmax(0, 1fr); }
+.staff-app--kitchen .staff-sidebar { min-height: 0; padding: 8px 0 10px; overflow-y: auto; }
+.staff-app--kitchen .staff-sidebar .brand { margin: 4px 18px 8px; }
+.staff-app--kitchen .kitchen-sidebar__store { min-height: 42px; margin: 0 12px; padding: 0 8px; border: 1px solid rgb(255 255 255 / 75%); display: flex; align-items: center; gap: 8px; }
+.staff-app--kitchen .kitchen-sidebar__store b { min-width: 0; font-size: 15px; white-space: nowrap; }
+.staff-app--kitchen .kitchen-sidebar__status .staff-topbar__right { padding: 8px 12px; display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 6px 10px; }
+.staff-app--kitchen .kitchen-sidebar__status .staff-call-button { grid-column: 1 / -1; min-height: 42px; margin: 0; padding: 0 10px; justify-content: center; font-size: 15px; }
+.staff-app--kitchen .kitchen-sidebar__status .connection { min-width: 0; gap: 5px; font-size: 13px; }
+.staff-app--kitchen .kitchen-sidebar__status .connection small { display: none; }
+.staff-app--kitchen .kitchen-sidebar__status .connection svg { width: 18px; height: 18px; }
+.staff-app--kitchen .kitchen-clock { justify-self: end; margin: 0; font-size: 21px; }
+.staff-app--kitchen .staff-sidebar nav button { min-height: 58px; grid-template-columns: 28px 1fr auto; gap: 8px; padding-inline: 14px; font-size: 16px; }
+.staff-app--kitchen .staff-sidebar nav button svg { width: 24px; height: 24px; }
+.staff-app--kitchen .staff-sidebar .hours { margin: auto 12px 0; padding: 8px 10px; gap: 2px; }
+.staff-app--kitchen .staff-sidebar .hours b,
+.staff-app--kitchen .staff-sidebar .hours small { font-size: 11px; }
+.staff-app--kitchen .staff-sidebar .hours span { font-size: 15px; }
+.staff-app--kitchen .kitchen-heading { min-height: 58px; padding: 8px 20px; gap: 18px; }
+.staff-app--kitchen .kitchen-heading h1 { flex: 0 0 auto; font-size: 30px; }
+.staff-app--kitchen .kitchen-heading p { max-width: none; font-size: 13px; line-height: 1.35; }
+.staff-app--kitchen .kitchen-content { min-height: 0; padding: 0 14px 8px; }
+.staff-app--kitchen .table-scroll { overflow-x: auto; overflow-y: hidden; align-items: stretch; }
+.staff-app--kitchen .table-panel { width: max(310px, calc((100% - 28px) / 3)); min-height: 0; }
+.staff-app--kitchen .table-panel > header { min-height: 58px; padding: 8px 14px; }
+.staff-app--kitchen .table-panel > header h2 { font-size: 21px; }
+.staff-app--kitchen .table-panel > header h2 b { font-size: 30px; }
+.staff-app--kitchen .table-panel__orders { overflow-y: auto; }
+.staff-app--kitchen .order-item { min-height: 48px; padding-block: 5px; }
+.staff-app--kitchen .order-item b { font-size: 18px; line-height: 1.2; }
+.staff-app--kitchen .order-item small { font-size: 14px; }
+.staff-app--kitchen .table-panel > footer { min-height: 60px; padding: 8px 12px; gap: 8px; flex-wrap: wrap; }
+.staff-app--kitchen .table-panel > footer span { font-size: 14px; }
+.staff-app--kitchen .table-panel > footer b { font-size: 24px; }
+.staff-app--kitchen .table-panel__reset { flex: 1 0 100%; min-height: 42px; margin: 0; font-size: 13px; }
+.staff-app--kitchen .staff-footer { min-height: 42px; padding-inline: 18px; gap: 20px; font-size: 12px; }
+
+@media (min-width: 900px) and (max-height: 650px) {
+  .staff-app--kitchen .staff-sidebar .brand { margin-block: 0 4px; }
+  .staff-app--kitchen .staff-sidebar .brand__eyebrow { font-size: 10px; }
+  .staff-app--kitchen .staff-sidebar .brand__lockup strong { font-size: 23px; }
+  .staff-app--kitchen .staff-sidebar .brand__lockup small { font-size: 9px; }
+  .staff-app--kitchen .kitchen-sidebar__status .staff-topbar__right { padding-block: 4px; }
+  .staff-app--kitchen .staff-sidebar nav button { min-height: 50px; }
+  .staff-app--kitchen .staff-sidebar .hours { display: none; }
+  .staff-app--kitchen .kitchen-heading { min-height: 48px; padding-block: 5px; }
+  .staff-app--kitchen .kitchen-heading h1 { font-size: 26px; }
+  .staff-app--kitchen .checkout-panel { max-height: 280px; margin-bottom: 8px; }
+  .staff-app--kitchen .horizontal-hint { min-height: 20px; }
+}
 
 .call-list { display: grid; gap: 12px; }
 .call-list article { min-height: 80px; border: 1px solid var(--line); padding: 14px; display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 16px; }

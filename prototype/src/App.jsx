@@ -25,6 +25,7 @@ import { claimCustomerDevice, createIndexedDbCredentialStore, loadOrCreateCustom
 import { customerOrderErrorCategory, customerOrderNoticeFromOutboxEvent } from "./customer-order-notice.js";
 import { AdminPairingError, configuredAdminToken, createAdminRideGuidanceContact, deleteAdminRideGuidanceContact, fetchAdminBusinessHours, fetchAdminDiagnostics, fetchAdminMenu, fetchAdminOrderHistory, fetchAdminPaymentHistory, fetchAdminPairingPreflight, fetchAdminRideGuidance, issueCustomerPairingCode, revokeAdminDevice, saveAdminBusinessHours, saveAdminImageLayouts, saveAdminCategory, saveAdminMenuItem, saveAdminMenuOrdering, saveAdminRideGuidanceOrdering, saveAdminRideGuidancePickup, updateAdminRideGuidanceContact, voidAdminPayment } from "./admin-pairing.js";
 import { cancelKitchenCheckout, closeKitchenTableSession, fetchKitchenCheckoutRequests, fetchKitchenOrderHistory, fetchKitchenPaymentHistory, fetchKitchenSnapshot, kitchenApiConfigured, KitchenApiError, markKitchenItemServed, payKitchenCheckout, readyKitchenCheckout, saveKitchenCheckoutAdjustments, subscribeKitchenInvalidations, voidKitchenPayment } from "./kitchen-api.js";
+import { buildKitchenTableGroups } from "./kitchen-order-board.js";
 import { bootstrapCustomerOrderClient } from "./customer-bootstrap.js";
 import { taxExcludedYen } from "./pricing.js";
 import { pairingCodeQrSvg } from "./qr-code.js";
@@ -1393,16 +1394,12 @@ function StaffShell({ route, title, subtitle, state, children, right, newOrderCo
   return (
     <div className={`staff-app ${isKitchen ? "staff-app--kitchen" : ""} ${isAdmin ? "staff-app--admin" : ""}`}>
       <aside className="staff-sidebar">
-        <Brand />
+        {isKitchen ? <><Brand /><div className="kitchen-sidebar__store"><ClipboardText size={25} weight="bold" /><b>大衆酒場 一番星</b></div><div className="kitchen-sidebar__status">{right}</div></> : <Brand />}
         <nav>{navItems.map((item) => <button key={item.route} className={route.startsWith(item.route) ? "is-active" : ""} onClick={() => navigate(item.route)}><item.icon size={30} weight="bold" /><span>{item.label}</span>{item.route === "/kitchen" && newOrderCount ? <b className="badge">{newOrderCount}</b> : null}</button>)}</nav>
         <BusinessHoursText settings={businessHours} className="hours" />
       </aside>
       <main className="staff-main">
         {isKitchen ? <>
-          <header className="staff-topbar staff-topbar--kitchen">
-            <div className="restaurant-name"><ClipboardText size={34} weight="bold" /><b>大衆酒場 一番星</b></div>
-            {right}
-          </header>
           <div className="kitchen-heading"><h1>{title}</h1><p>{subtitle}</p></div>
         </> : isAdmin ? <header className="staff-topbar staff-topbar--admin">
           <div className="staff-title staff-title--admin"><ClipboardText size={58} weight="bold" /><div><h1>{title}</h1><p>{subtitle}</p></div></div>
@@ -1523,7 +1520,7 @@ function KitchenScreen({ state, updateState, apiState, checkoutState, onServe, o
   const sourceOrders = apiMode ? apiState.orders : state.orders;
   const sessions = apiMode ? apiState.sessions : [];
   const activeOrders = sourceOrders.filter((order) => order.status === "new" || order.status === "active");
-  const tables = [...new Set([...activeOrders.map((order) => order.tableId), ...sessions.map((session) => session.tableId)])].sort((a, b) => Number(a) - Number(b));
+  const tables = buildKitchenTableGroups({ orders: sourceOrders, sessions, menuItems: state.menuItems, drinkCategoryIds: CUSTOMER_DRINK_CATEGORY_IDS });
   const activeCalls = state.staffCalls.filter((call) => !call.resolvedAt);
   const kitchenAliases = Object.fromEntries(state.menuItems.map((item) => [item.id, item.kitchenAlias?.trim()]));
   const [resetTarget, setResetTarget] = useState(null);
@@ -1551,27 +1548,30 @@ function KitchenScreen({ state, updateState, apiState, checkoutState, onServe, o
   const resolveCall = (callId) => updateState((current) => ({ ...current, staffCalls: current.staffCalls.map((call) => call.id === callId ? { ...call, resolvedAt: new Date().toISOString() } : call) }));
 
   return (
-    <StaffShell route="/kitchen" title="新着注文" subtitle="新しいご注文を確認してください。提供済みのテーブルは自動的に履歴へ移動します。" state={state} newOrderCount={activeOrders.length} right={<div className="staff-topbar__right"><button className="staff-call-button" onClick={() => setCallPanel(true)}><Bell size={26} weight="fill" /> スタッフ呼出 {activeCalls.length ? <b>{activeCalls.length}</b> : null}</button><ConnectionBadge online /><time className="kitchen-clock">{formatTime(new Date())}</time></div>}>
+    <StaffShell route="/kitchen" title="新着注文" subtitle="未提供の注文をテーブルごとに表示します。提供完了後も来店・注文履歴は保持されます。" state={state} newOrderCount={activeOrders.length} right={<div className="staff-topbar__right"><button className="staff-call-button" onClick={() => setCallPanel(true)}><Bell size={26} weight="fill" /> スタッフ呼出 {activeCalls.length ? <b>{activeCalls.length}</b> : null}</button><ConnectionBadge online /><time className="kitchen-clock">{formatTime(new Date())}</time></div>}>
       <section className="kitchen-content">
         {apiMode ? <KitchenCheckoutPanel checkouts={checkoutState?.checkouts || []} sessions={sessions} loading={checkoutState?.loading} error={checkoutState?.error} onRefresh={onRefreshCheckouts} onSave={onSaveCheckout} onReady={onReadyCheckout} onCancel={onCancelCheckout} onPay={onPayCheckout} /> : null}
         <div className="table-scroll">
-          {apiMode && apiState.loading ? <div className="kitchen-empty"><p>注文を読み込み中です。</p></div> : apiMode && apiState.error ? <div className="kitchen-empty"><p>注文情報を取得できません。</p></div> : tables.length ? tables.map((tableId) => {
-            const orders = activeOrders.filter((order) => order.tableId === tableId);
-            const session = sessions.find((candidate) => candidate.tableId === tableId) ?? orders.find((order) => order.sessionId);
+          {apiMode && apiState.loading ? <div className="kitchen-empty"><p>注文を読み込み中です。</p></div> : apiMode && apiState.error ? <div className="kitchen-empty"><p>注文情報を取得できません。</p></div> : tables.length ? tables.map((table) => {
+            const { tableId, orders, session, isCompletedSide } = table;
             const sessionId = session?.sessionId;
-            const rows = orders.flatMap((order) => order.items.map((item) => ({ ...item, orderId: order.id, createdAt: order.createdAt }))).sort((a, b) => Number(a.isServed) - Number(b.isServed));
             const total = orders.reduce((sum, order) => sum + order.totalAmount, 0);
-            const oldest = orders.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt))[0] ?? { createdAt: session?.openedAt };
             return (
-              <article className="table-panel" key={tableId}>
-                <header><h2>テーブル <b>{tableId}</b></h2><time>{formatTime(oldest.createdAt)}</time></header>
-                <div className="table-panel__rows">
-                  {rows.filter((row) => !row.isServed).map((row) => <button className="order-item" key={row.id} onClick={() => toggleServed(row.orderId, row.id)}><span><b>{kitchenMenuName(row, kitchenAliases)}</b><small>{row.quantity}点</small></span><i><Check size={19} weight="bold" /></i></button>)}
-                  {rows.some((row) => row.isServed) ? <div className="served-divider"><span>提供済み</span></div> : null}
-                  {rows.filter((row) => row.isServed).map((row) => <button className="order-item is-served" key={row.id} onClick={() => toggleServed(row.orderId, row.id)}><span><b>{kitchenMenuName(row, kitchenAliases)}</b><small>{row.quantity}点</small></span><i><Check size={19} weight="bold" /></i></button>)}
-                  {!rows.length ? <div className="empty-state"><p>現在の注文はありません。</p></div> : null}
+              <article className={`table-panel ${isCompletedSide ? "is-completed-side" : ""}`} key={tableId}>
+                <header><h2>テーブル <b>{tableId}</b></h2><span className="table-panel__state">{isCompletedSide ? "提供完了" : `${orders.length}件の注文`}</span></header>
+                <div className="table-panel__orders">
+                  {orders.map((order) => {
+                    const unserved = order.items.filter((item) => !item.isServed);
+                    const served = order.items.filter((item) => item.isServed);
+                    return <section className={`kitchen-order-card ${order.isDrinkOrder ? "is-drink-order" : ""}`} key={order.id} aria-label={`${order.isDrinkOrder ? "ドリンク注文" : "注文"} ${formatTime(order.createdAt)}`}>
+                      <header><b>{order.isDrinkOrder ? "ドリンク注文" : "注文"}</b><time>{formatTime(order.createdAt)}</time><small>{order.items.length}品</small></header>
+                      {unserved.map((item) => <button className="order-item" key={item.id} onClick={() => toggleServed(order.id, item.id)}><span><b>{kitchenMenuName(item, kitchenAliases)}</b><small>{item.quantity}点</small></span><i><Check size={19} weight="bold" /></i></button>)}
+                      {served.length ? <><div className="served-divider"><span>提供済み</span></div>{served.map((item) => <button className="order-item is-served" key={item.id} onClick={() => toggleServed(order.id, item.id)}><span><b>{kitchenMenuName(item, kitchenAliases)}</b><small>{item.quantity}点</small></span><i><Check size={19} weight="bold" /></i></button>)}</> : null}
+                    </section>;
+                  })}
+                  {isCompletedSide ? <div className="table-panel__completed-note">この来店の注文は提供完了です。履歴とsessionは保持されています。</div> : null}
                 </div>
-                <footer><span>合計</span><b>{yen(total)}</b>{apiMode && sessionId ? <button className="button button--quiet table-panel__reset" onClick={() => { setResetError(false); setResetTarget({ tableId, sessionId }); }}>席をリセット（支払記録なし）</button> : null}</footer>
+                <footer><span>{isCompletedSide ? "状態" : "注文商品合計"}</span><b>{isCompletedSide ? "提供完了" : yen(total)}</b>{apiMode && sessionId ? <button className="button button--quiet table-panel__reset" onClick={() => { setResetError(false); setResetTarget({ tableId, sessionId }); }}>席をリセット（支払記録なし）</button> : null}</footer>
               </article>
             );
           }) : <div className="kitchen-empty"><CheckCircle size={72} weight="thin" /><h2>すべて提供済みです</h2><p>新しい注文が届くと、ここにテーブルごとに表示されます。</p></div>}
