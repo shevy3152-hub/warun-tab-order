@@ -208,7 +208,12 @@ export async function fetchKitchenSnapshot({ env = globalThis, fetchImpl = env.f
         temperatureSnapshot: item.temperatureSnapshot,
         servingOptionId: item.servingOptionId,
         servingOptionNameSnapshot: item.servingOptionNameSnapshot,
+        unitPriceYenSnapshot: item.unitPriceYenSnapshot,
+        adjustedUnitPriceYen: item.adjustedUnitPriceYen ?? null,
+        currentUnitPriceYen: item.currentUnitPriceYen ?? item.unitPriceYenSnapshot,
         quantity: item.quantity,
+        lineTotalYen: item.lineTotalYen,
+        lineTotalYenSnapshot: item.lineTotalYenSnapshot ?? item.lineTotalYen,
         isServed: item.isServed,
         servedAt: item.servedAtMs ? new Date(item.servedAtMs).toISOString() : null,
       })),
@@ -247,6 +252,19 @@ export async function markKitchenItemServed({ env = globalThis, orderId, orderIt
     body: JSON.stringify({ orderId, orderItemId: Number(orderItemId) }),
   });
   if (!response.ok) throw new Error("Serving update failed.");
+}
+
+export async function adjustKitchenItemUnitPrice({ env = globalThis, orderId, orderItemId, unitPriceYen, fetchImpl = env.fetch } = {}) {
+  const { base, requestHeaders } = checkoutBase(env, fetchImpl);
+  const response = await fetchImpl(`${base}/kitchen/order-items/price`, {
+    method: "POST",
+    headers: { ...requestHeaders, "Content-Type": "application/json" },
+    body: JSON.stringify({ orderId, orderItemId: Number(orderItemId), unitPriceYen: Number(unitPriceYen) }),
+  });
+  if (!response.ok) throw await responseError(response, "単価を変更できませんでした。");
+  const body = await response.json();
+  if (!Array.isArray(body?.orders) || body.orders[0]?.orderId !== orderId) throw new KitchenApiError("単価変更レスポンスが不正です。", { code: "INVALID_RESPONSE" });
+  return body.orders[0];
 }
 
 export async function closeKitchenTableSession({ env = globalThis, tableId, sessionId, fetchImpl = env.fetch } = {}) {

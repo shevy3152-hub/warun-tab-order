@@ -14,6 +14,9 @@ Build app UI in `src/`. Keep `.openai/hosting.json`, `worker/index.js`, `scripts
 - Customer devices are fixed to tables 1 through 4 and never expose a table selector to guests.
 - Customer menu cards show a derived tax-exclusive price with the tax-included master price. Customer carts and customer order history never show subtotals or totals.
 - Kitchen order cards keep unserved items above served items and move an order to history immediately after its final item is checked.
+- Kitchen tables use one horizontal row of fixed-width table slots; each slot is an independently vertically scrollable receipt containing that table's checkout and orders. Keep additional tables reachable with horizontal scrolling rather than wrapping slots into another row, and prioritize tables with active checkout requests.
+- Keep the kitchen page focused on real-time work: let its horizontal table-slot row fill available vertical space and keep completed-order/payment-history panels in the existing history route. Completed orders still appear inside an active table's receipt when needed for a live checkout/session; serving alone never closes a session or resets a table.
+- Keep seat, late-night, and extension charge inputs inside each table's checkout receipt under a clear “追加料金合計／入力・編集” disclosure. When a checkout request appears, show the inputs expanded by default to avoid an extra step; staff can collapse them with the disclosure summary. Keep checkout slots independent so concurrent requests for different tables remain visible together.
 - Payment, taxi booking, QR mirroring, menu imagery, sound, and completion animation remain outside this prototype.
 - 客席の商品行は番号／画像／商品情報／価格／操作の固定列を基本とし、商品情報だけを可変幅にする。商品名の下は「タップで明細」を優先し、長い売り文句やフリガナは詳細画面へ置く。画像を表示しない商品は画像列・枠を描画せず、価格と操作の間隔と操作列の固定タップ領域を守る。
 - 客席一覧画像は日本酒の既存表示と、明示設定または既存互換がある焼酎表示を維持し、その他カテゴリは一覧画像表示設定がONのときだけ表示する。商品画像URIと詳細画像URIは既存の分離構造を使い、文章を画像へ焼き込まない。

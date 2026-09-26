@@ -45,7 +45,7 @@ const EVENT_TYPES_BY_ROLE = Object.freeze({
     'table.assignment_updated',
   ]),
 });
-const SUPPORTED_SCHEMA_VERSION = 13;
+const SUPPORTED_SCHEMA_VERSION = 14;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const OPAQUE_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
 
@@ -279,8 +279,11 @@ function mapStaffOrderItem(item) {
     formalNameSnapshot: requireString(item.formalNameSnapshot),
     kitchenAliasSnapshot: requireString(item.kitchenAliasSnapshot),
     unitPriceYenSnapshot: requireInteger(item.unitPriceYenSnapshot),
+    currentUnitPriceYen: requireInteger(item.currentUnitPriceYen ?? item.unitPriceYenSnapshot),
+    adjustedUnitPriceYen: item.adjustedUnitPriceYen == null ? null : requireInteger(item.adjustedUnitPriceYen),
     quantity: requireInteger(item.quantity, 1),
     lineTotalYen: requireInteger(item.lineTotalYen),
+    lineTotalYenSnapshot: requireInteger(item.lineTotalYenSnapshot ?? item.lineTotalYen),
     isServed: requireBoolean(item.isServed),
   };
   if (response.quantity > 99) throw invalidDto();
@@ -625,6 +628,8 @@ export function mapPaymentRecordResponse(record) {
       temperatureSnapshot: item.temperatureSnapshot === null ? null : requireString(item.temperatureSnapshot),
       servingOptionNameSnapshot: item.servingOptionNameSnapshot === null ? null : requireString(item.servingOptionNameSnapshot),
       unitPriceYenSnapshot: requireInteger(item.unitPriceYenSnapshot),
+      adjustedUnitPriceYen: item.adjustedUnitPriceYen === null ? null : requireInteger(item.adjustedUnitPriceYen),
+      currentUnitPriceYen: requireInteger(item.currentUnitPriceYen ?? item.unitPriceYenSnapshot),
       quantity: requireInteger(item.quantity, 1),
       lineTotalYen: requireInteger(item.lineTotalYen),
       sortOrder: requireInteger(item.sortOrder),

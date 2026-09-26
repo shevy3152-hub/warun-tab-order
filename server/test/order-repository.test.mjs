@@ -9,6 +9,7 @@ import { once } from 'node:events';
 
 import { createDeviceAuthenticator } from '../src/auth/device-auth.mjs';
 import { initializeDatabase } from '../src/db/database.mjs';
+import { createCheckoutRepository } from '../src/checkout/checkout-repository.mjs';
 import {
   ORDER_ERROR_CODES,
   OrderRepositoryError,
@@ -313,6 +314,46 @@ test('creates a new order and returns created', async () => {
     assert.equal(result.idempotencyResult, 'created');
     assert.equal(result.order.orderId, ORDER_A);
     assert.equal(result.order.status, 'new');
+  });
+});
+
+test('per-line price adjustments obey the order snapshot ceiling, persist, and update a requested checkout total', async () => {
+  await withFixture(({ database, openAdditionalConnection }) => {
+    const customer = issuePrincipal(database, DEVICE_A, 1).principal;
+    const kitchen = issuePrincipal(database, DEVICE_KITCHEN, 5).principal;
+    const orders = makeRepository(database);
+    const created = orders.createOrder(orderRequest({ items: [{ menuItemId: 'edamame', quantity: 3 }] })).order;
+    const itemId = created.items[0].orderItemId;
+    database.prepare("UPDATE menu_items SET price_yen = 900 WHERE menu_item_id = 'edamame'").run();
+    const laterOrder = orders.createOrder(orderRequest({ clientOrderId: CLIENT_ORDER_B, items: [{ menuItemId: 'edamame', quantity: 1 }] })).order;
+    assert.equal(laterOrder.items[0].unitPriceYenSnapshot, 900);
+    assert.equal(laterOrder.items[0].currentUnitPriceYen, 900);
+    const checkout = createCheckoutRepository({ database, now: () => FIXED_NOW });
+    checkout.createCheckout({ principal: customer, checkoutRequestId: uuid(901), receiptRequested: false });
+
+    const atCeiling = orders.adjustItemUnitPrice({ principal: kitchen, orderId: created.orderId, orderItemId: itemId, unitPriceYen: 380 });
+    assert.equal(atCeiling.order.items[0].currentUnitPriceYen, 380);
+    assert.equal(atCeiling.order.items[0].lineTotalYen, 1140);
+    assert.equal(atCeiling.order.items[0].lineTotalYenSnapshot, 1140);
+    assert.throws(() => orders.adjustItemUnitPrice({ principal: kitchen, orderId: created.orderId, orderItemId: itemId, unitPriceYen: 500 }), (error) => error.code === ORDER_ERROR_CODES.PRICE_CEILING_EXCEEDED);
+    const lowered = orders.adjustItemUnitPrice({ principal: kitchen, orderId: created.orderId, orderItemId: itemId, unitPriceYen: 300 });
+    assert.equal(lowered.order.items[0].lineTotalYen, 900);
+    assert.equal(lowered.order.totalAmountYen, 900);
+    assert.equal(database.prepare('SELECT unit_price_yen_snapshot, line_total_yen, adjusted_unit_price_yen FROM order_items WHERE order_item_id = ?').get(itemId).unit_price_yen_snapshot, 380);
+    assert.equal(database.prepare('SELECT COUNT(*) AS count FROM order_item_price_adjustments WHERE order_item_id = ?').get(itemId).count, 1);
+    assert.equal(database.prepare('SELECT price_yen FROM menu_items WHERE menu_item_id = ?').get('edamame').price_yen, 900);
+    assert.equal(database.prepare('SELECT ordered_items_total_yen FROM checkout_requests WHERE checkout_request_id = ?').get(uuid(901)).ordered_items_total_yen, 1800);
+    assert.equal(database.prepare('SELECT adjusted_unit_price_yen FROM order_items WHERE order_item_id = ?').get(laterOrder.items[0].orderItemId).adjusted_unit_price_yen, null);
+
+    orders.markItemServed({ principal: kitchen, orderId: created.orderId, orderItemId: itemId });
+    const reopened = openAdditionalConnection();
+    const reopenedOrders = makeRepository(reopened);
+    const persisted = reopenedOrders.getHistory(kitchen).find((order) => order.orderId === created.orderId);
+    assert.equal(persisted.items[0].currentUnitPriceYen, 300);
+    assert.equal(persisted.items[0].lineTotalYen, 900);
+    reopenedOrders.close();
+    checkout.close();
+    orders.close();
   });
 });
 

@@ -100,6 +100,8 @@ function mapPaymentOrderItem(row) {
     temperatureSnapshot: row.temperature_snapshot ?? null,
     servingOptionNameSnapshot: row.serving_option_name_snapshot ?? null,
     unitPriceYenSnapshot: Number(row.unit_price_yen_snapshot),
+    adjustedUnitPriceYen: row.adjusted_unit_price_yen == null ? null : Number(row.adjusted_unit_price_yen),
+    currentUnitPriceYen: Number(row.current_unit_price_yen ?? row.unit_price_yen_snapshot),
     quantity: Number(row.quantity),
     lineTotalYen: Number(row.line_total_yen),
     sortOrder: Number(row.sort_order),
@@ -194,7 +196,7 @@ export function createCheckoutRepository({ database, now = Date.now, idFactory =
   function orderTotal(sessionId) {
     const placeholders = BILLABLE_ORDER_STATUSES.map(() => '?').join(', ');
     const row = database.prepare(`
-      SELECT COALESCE(SUM(oi.unit_price_yen_snapshot * oi.quantity), 0) AS total
+      SELECT COALESCE(SUM(COALESCE(oi.adjusted_unit_price_yen, oi.unit_price_yen_snapshot) * oi.quantity), 0) AS total
       FROM orders AS o
       JOIN order_items AS oi ON oi.order_id = o.order_id
       WHERE o.session_id = ? AND o.status IN (${placeholders})
@@ -206,7 +208,9 @@ export function createCheckoutRepository({ database, now = Date.now, idFactory =
     return database.prepare(`
       SELECT o.order_id, oi.order_item_id, oi.formal_name_snapshot, oi.variant_name_snapshot,
              oi.variant_volume_snapshot, oi.temperature_snapshot, oi.serving_option_name_snapshot,
-             oi.unit_price_yen_snapshot, oi.quantity, oi.line_total_yen
+             oi.unit_price_yen_snapshot, oi.adjusted_unit_price_yen,
+             COALESCE(oi.adjusted_unit_price_yen, oi.unit_price_yen_snapshot) AS current_unit_price_yen,
+             oi.quantity, COALESCE(oi.adjusted_unit_price_yen, oi.unit_price_yen_snapshot) * oi.quantity AS line_total_yen
       FROM orders AS o
       JOIN order_items AS oi ON oi.order_id = o.order_id
       WHERE o.session_id = ? AND o.status IN (${placeholders})
@@ -217,7 +221,7 @@ export function createCheckoutRepository({ database, now = Date.now, idFactory =
     return JSON.stringify(orderRows(sessionId).map((row) => [
       row.order_id, Number(row.order_item_id), row.formal_name_snapshot, row.variant_name_snapshot,
       row.variant_volume_snapshot, row.temperature_snapshot, row.serving_option_name_snapshot,
-      Number(row.unit_price_yen_snapshot), Number(row.quantity), Number(row.line_total_yen),
+      Number(row.unit_price_yen_snapshot), row.adjusted_unit_price_yen == null ? null : Number(row.adjusted_unit_price_yen), Number(row.quantity), Number(row.line_total_yen),
     ]));
   }
   function adjustmentTotal(checkoutRequestId) {
@@ -372,8 +376,8 @@ export function createCheckoutRepository({ database, now = Date.now, idFactory =
       const paymentRecordId = idFactory();
       const eventEpoch = eventState();
       database.prepare(`INSERT INTO payment_records (payment_record_id, checkout_request_id, table_session_id, table_id, payment_method, confirmed_total_yen, paid_at_ms, status, version, created_at_ms, updated_at_ms) VALUES (?, ?, ?, ?, ?, ?, ?, 'paid', 1, ?, ?)`).run(paymentRecordId, id, current.table_session_id, session.table_id, method, confirmedTotalYen, paidAtMs, paidAtMs, paidAtMs);
-      const insertItem = database.prepare(`INSERT INTO payment_order_items (payment_record_id, order_id, order_item_id, formal_name_snapshot, variant_name_snapshot, variant_volume_snapshot, temperature_snapshot, serving_option_name_snapshot, unit_price_yen_snapshot, quantity, line_total_yen, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
-      for (const [index, row] of orderRows(current.table_session_id).entries()) insertItem.run(paymentRecordId, row.order_id, row.order_item_id, row.formal_name_snapshot, row.variant_name_snapshot, row.variant_volume_snapshot, row.temperature_snapshot, row.serving_option_name_snapshot, row.unit_price_yen_snapshot, row.quantity, row.line_total_yen, index);
+      const insertItem = database.prepare(`INSERT INTO payment_order_items (payment_record_id, order_id, order_item_id, formal_name_snapshot, variant_name_snapshot, variant_volume_snapshot, temperature_snapshot, serving_option_name_snapshot, unit_price_yen_snapshot, adjusted_unit_price_yen, current_unit_price_yen, quantity, line_total_yen, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+      for (const [index, row] of orderRows(current.table_session_id).entries()) insertItem.run(paymentRecordId, row.order_id, row.order_item_id, row.formal_name_snapshot, row.variant_name_snapshot, row.variant_volume_snapshot, row.temperature_snapshot, row.serving_option_name_snapshot, row.unit_price_yen_snapshot, row.adjusted_unit_price_yen, row.current_unit_price_yen, row.quantity, row.line_total_yen, index);
       const insertAdjustment = database.prepare('INSERT INTO payment_adjustments (payment_record_id, kind, label, amount_yen, sort_order) VALUES (?, ?, ?, ?, ?)');
       for (const [index, row] of findAdjustments.all(id).entries()) insertAdjustment.run(paymentRecordId, row.kind, row.label, row.amount_yen, index);
       const closedAtMs = paidAtMs;

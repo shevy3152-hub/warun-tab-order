@@ -689,12 +689,12 @@ test("kitchen API state changes reach the memoized screen", () => {
   assert.match(appSource, /注文情報を取得できません。/);
 });
 
-test("kitchen exposes the current session reset action without deleting order data", () => {
+test("kitchen serving keeps the session and does not expose a serve-triggered reset action", () => {
   const kitchenScreen = appSource.slice(appSource.indexOf("function KitchenScreen"), appSource.indexOf("function HistoryScreen"));
   assert.match(kitchenScreen, /openSessions|apiState\.sessions/);
-  assert.match(kitchenScreen, /席をリセット（支払記録なし）/);
-  assert.match(kitchenScreen, /支払済み記録を作成しません/);
-  assert.match(kitchenScreen, /onCloseSession\(resetTarget\)/);
+  assert.match(kitchenScreen, /sessionId/);
+  assert.doesNotMatch(kitchenScreen, /席をリセット/);
+  assert.doesNotMatch(kitchenScreen, /onCloseSession/);
 });
 
 test("customer history refreshes when the authenticated SSE invalidation arrives", () => {

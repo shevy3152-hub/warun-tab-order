@@ -723,3 +723,44 @@
 - read-only確認で実listener PID 15312と既存runtime-stateのprocessId 20180が不一致だった。runtime-stateは変更せず、commit対象外とする。次回のsafe-copy正式起動経路確認時に解消する残余リスクである。
 
 次: 焼酎の所属・並び順確認後、8カテゴリー折りたたみと「芋／麦・その他」固定ナビを実装する。
+
+## 厨房テーブル別会計レイアウト・単価v14統合 QA 2026-09-25
+
+- 対象は隔離worktree `C:\Users\user\.codex\worktrees\kitchen-order-board\タブレットオーダーシステム` / branch `codex/kitchen-order-board`。元のdirty worktreeはread-onlyで調べ、注文単価変更・schema v14と厨房に必要なサーバー/API差分のみを移した。App.jsxの無関係な変更（poll間隔など）は含めていない。
+- 厨房UIを、赤い左レール（スタッフ呼び出し・接続・時刻）、小さな「新着注文」見出し、テーブルごとの縦配置へ変更。会計依頼を該当テーブルの注文より上に置き、未提供行を上・提供済み行を下へ、完了済み＋requested checkoutの注文詳細を折りたたみ可能にした。注文／会計履歴は一覧の下に縦スクロール配置。提供済みのみで履歴やsessionを削除／席をリセットしない。注文単価はsnapshot上限の価格変更実装に接続。
+- 追加料金入力欄は初期表示を短くするため開閉可能とし、追加料金と確認合計は常時表示。低い画面高では厨房ヘッダー等を縮め、1280×800／1637×602とも会計操作ボタンと先頭2つの未提供注文が完全に見えること、接続状態が赤レール内に見えること、横はみ出しがないことを確認。画面差・画像参照・QA結果は `prototype/design-qa.md` に記録。
+- 1280×800、1637×602の架空データ画面は `C:\Users\user\.codex\visualizations\2026\09\23\01a0ce57-ec42-7d03-a559-db26ed12f8db\kitchen-worktree-1280x800.png` と `...\kitchen-worktree-1637x602.png`。会計操作は押さず、折りたたみ・再表示だけをローカルdemoで確認。localhost隔離Vite以外へ接続していない。
+- 検証: prototype 130/130、Sites 4/4、server 395/395、Vite build 4,585 modules、Sites build preparation、inline-client、`git diff --check` PASS。pnpmはsandboxのEPERMで使えなかったため、固定lockfileを変更せず同梱Nodeのテスト・Vite・buildスクリプトを直接実行。
+- schema v14 migration SQLは隔離worktreeにあるが実行していない。DB、安全copy、checkout（requested／version 1／¥7,170）、remote、Web配信状態には触れていない。commit/pushなし。確認時点で対象worktreeは未commit差分を保持。
+
+次: この隔離worktreeの差分をレビューし、別途明示依頼があるまでmigration／commit／push／safe-copy反映を行わない。
+
+## 厨房レシート型テーブルスロット修正 2026-09-25
+
+- 前回の縦一列のテーブル表示を修正し、厨房の各テーブルを固定高さ・個別縦スクロールのレシート型スロットとして横一列に配置した。1280×800は2卓、1637×602相当は3卓を表示し、他卓は横スクロールで閲覧する。active checkoutがあるテーブルを先頭に並べ、複数卓の同時会計を別スロットで同時表示する。
+- 席料、深夜チャージ、延長料金の入力欄は各卓の会計レシートに表示。注文履歴・会計履歴は下方向のページスクロールへ配置。未提供行は提供済み行より上で維持し、提供操作による履歴/session削除や席resetは追加していない。
+- prototype 131/131、Vite build、Sites build preparationを確認。元dirty worktree・safe-copy・DB・checkout・remote、schema migration、commit/pushには触れていない。
+- QA記録は `prototype/design-qa.md` の「厨房レシート型テーブルスロット再調整 2026-09-25」。指定サイズのスクリーンショットは隔離ブラウザーの撮影出力として確認したが、ローカル画像ファイルとしては未保存。
+
+次: 横スクロールで3卓目以降へ移動できる実機相当操作性と、変更後の個別レシート内ボタン到達性をレビューする。
+
+## 厨房リアルタイム表示・履歴集約 QA 2026-09-25
+
+- 同じ隔離worktreeで、厨房画面下部にあった注文履歴・会計履歴パネルを除去し、左レールの「注文・会計履歴」から既存履歴画面へまとめた。履歴画面で注文履歴と支払履歴の両方を表示する経路を維持し、KitchenScreen側の会計履歴取得は行わない。提供済み注文は、会計依頼中のテーブルレシートが必要とする分だけ引き続き保持する。
+- テーブルの横一列スロットを余白高さまで伸ばした。料金入力は各テーブルの「追加料金合計／入力・編集」から開く方式を初期状態とし、注文商品合計・追加料金合計・確認用合計と会計操作を短い表示に保つ。席料・深夜チャージ・延長料金の入力欄は開くと各レシート内で利用できる。
+- 1280×800と1637×602、device scale factor 1で隔離Vite画面を撮影。`C:\Users\user\.codex\visualizations\2026\09\23\01a0ce57-ec42-7d03-a559-db26ed12f8db\kitchen-history-rail-1280x800.png` と `...\kitchen-history-rail-1637x602.png`。各サイズで会計依頼2卓を横並びにし、3つの会計操作ボタンと先頭2行の未提供注文がスロット内に完全表示されること、文書の横はみ出しがないことをDOM矩形で確認した。1280×800は先頭2卓、1637×602は3卓が完全表示。
+- 追加料金欄を開くと席料・深夜チャージ・延長料金の3項目が表示されることを確認。全品提供済み＋会計依頼中の注文詳細の表示切替も残る。履歴画面はローカルの架空注文／支払レスポンスをPlaywrightでmockし、注文session・履歴行・支払記録カード各1件の描画とエラーなしを確認した。会計操作・serve操作は押していない。
+- 検証: prototype 131/131、Sites 4/4、Vite build 4,585 modules、Sites build preparation、inline-client、`git diff --check`。build時のsandbox子プロセス／distアクセス拒否は隔離worktreeのbuild許可で実行し、出力はworktree内distに限定した。server側コードはこの調整では変更していない。
+- 注文履歴／会計履歴の記録は実DBでは読まず、隔離の架空データのみで表示確認。実DB、schema migration、現在のcheckout、safe-copy、API/server設定、元のdirty作業ツリー、remoteには変更なし。commit/pushなし。
+
+次: 隔離worktreeの累積差分をレビューし、別途明示依頼があるまでmigration・commit・push・safe-copy反映を行わない。
+
+## 厨房会計追加料金の初期表示 2026-09-25
+
+- 会計依頼が来たテーブルのレシートでは「追加料金合計／入力・編集」を最初から展開し、見出し操作で任意に折りたためるよう変更。席料・深夜チャージ・延長料金を1人分×人数の横一列入力にして、任意料金追加も維持した。
+- 展開状態でもリアルタイム注文・会計操作が同時に見えるよう、テーブル内の重複会計見出し、料金欄の余白、操作ボタン列をコンパクト化。1280×800では両会計操作と先頭2つの未提供注文行、1637×602では2卓の会計操作とテーブル1の先頭2つの未提供行がレシート内に完全表示されることを確認。テーブル2は全品提供済みの架空データで未提供行なし。
+- スクリーンショット: `C:\Users\user\.codex\visualizations\2026\09\23\01a0ce57-ec42-7d03-a559-db26ed12f8db\kitchen-fees-always-open-1280x800.png` と `...\kitchen-fees-always-open-1637x602.png`。隔離Vite previewの架空demoデータを使い、5174以外の通信を遮断。展開／折りたたみ／再展開、任意料金入力追加を画面内状態だけで確認し、API・DBへの要求なし。
+- prototype 131/131、Sites 4/4、Vite build 4,585 modules、Sites準備・inline-client、`git diff --check` PASS。pnpmは未承認のesbuild install scriptを理由に起動前停止したため、依存scriptを許可せず同梱Nodeから既存ViteとSites生成スクリプトを直接実行した。
+- この追補ではUI・テスト・設計記録のみ変更。元dirty worktree、実DB、schema migration、安全copy、現行checkout、API/server設定、remoteは変更なし。migration・commit・pushなし。
+
+次: 隔離worktreeの累積差分をレビューし、別途依頼があるまでmigration・commit・push・safe-copy反映をしない。

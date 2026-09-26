@@ -232,7 +232,7 @@ function mapOrderRow(row, items) {
     tableId: row.table_id,
     tableNumberSnapshot: row.table_number_snapshot,
     status: row.status,
-    totalAmountYen: row.total_amount_yen,
+    totalAmountYen: items.reduce((sum, item) => sum + item.lineTotalYen, 0),
     acceptedAtMs: row.accepted_at_ms,
     completedAtMs: row.completed_at_ms,
     version: row.version,
@@ -252,8 +252,11 @@ function mapOrderItemRow(row) {
     formalNameSnapshot: row.formal_name_snapshot,
     kitchenAliasSnapshot: row.kitchen_alias_snapshot,
     unitPriceYenSnapshot: row.unit_price_yen_snapshot,
+    adjustedUnitPriceYen: row.adjusted_unit_price_yen ?? null,
+    currentUnitPriceYen: row.adjusted_unit_price_yen ?? row.unit_price_yen_snapshot,
     quantity: row.quantity,
-    lineTotalYen: row.line_total_yen,
+    lineTotalYenSnapshot: row.line_total_yen,
+    lineTotalYen: (row.adjusted_unit_price_yen ?? row.unit_price_yen_snapshot) * row.quantity,
     isServed: row.is_served === 1,
     servedAtMs: row.served_at_ms,
   };
@@ -315,6 +318,7 @@ export function createOrderRepository({ database, now = Date.now, idFactory = ra
           formal_name_snapshot,
           kitchen_alias_snapshot,
           unit_price_yen_snapshot,
+          adjusted_unit_price_yen,
           quantity,
           line_total_yen,
           is_served,
@@ -392,6 +396,36 @@ export function createOrderRepository({ database, now = Date.now, idFactory = ra
         SELECT order_item_id, order_id, is_served
         FROM order_items
         WHERE order_item_id = ? AND order_id = ?
+      `),
+      findPriceAdjustmentTarget: database.prepare(`
+        SELECT oi.order_item_id, oi.order_id, oi.unit_price_yen_snapshot,
+               oi.adjusted_unit_price_yen, oi.quantity, o.session_id, o.status,
+               s.closed_at_ms,
+               EXISTS (
+                 SELECT 1 FROM checkout_requests cr
+                 JOIN payment_records pr ON pr.checkout_request_id = cr.checkout_request_id
+                 WHERE cr.table_session_id = o.session_id AND pr.status = 'paid'
+               ) AS payment_recorded
+        FROM order_items AS oi JOIN orders AS o ON o.order_id = oi.order_id
+        LEFT JOIN table_sessions AS s ON s.session_id = o.session_id
+        WHERE oi.order_item_id = ? AND oi.order_id = ?
+      `),
+      updateAdjustedUnitPrice: database.prepare(`
+        UPDATE order_items SET adjusted_unit_price_yen = ?, updated_at_ms = ?
+        WHERE order_item_id = ? AND order_id = ?
+      `),
+      insertPriceAdjustment: database.prepare(`
+        INSERT INTO order_item_price_adjustments
+          (order_id, order_item_id, previous_unit_price_yen, adjusted_unit_price_yen, quantity, created_at_ms, actor_device_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `),
+      findSessionCheckout: database.prepare(`
+        SELECT checkout_request_id, status FROM checkout_requests
+        WHERE table_session_id = ? ORDER BY requested_at_ms DESC LIMIT 1
+      `),
+      updateRequestedCheckoutTotal: database.prepare(`
+        UPDATE checkout_requests SET ordered_items_total_yen = ?, version = version + 1, updated_at_ms = ?
+        WHERE checkout_request_id = ? AND status = 'requested'
       `),
       countUnservedItems: database.prepare(`
         SELECT COUNT(*) AS count
@@ -816,6 +850,9 @@ export function createOrderRepository({ database, now = Date.now, idFactory = ra
         return {
           orderItemId: Number(insertion.lastInsertRowid),
           ...snapshot,
+          adjustedUnitPriceYen: null,
+          currentUnitPriceYen: snapshot.unitPriceYenSnapshot,
+          lineTotalYenSnapshot: snapshot.lineTotalYen,
           isServed: false,
           servedAtMs: null,
         };
@@ -1138,12 +1175,63 @@ export function createOrderRepository({ database, now = Date.now, idFactory = ra
     }
   }
 
+  function adjustItemUnitPrice({ principal, orderId, orderItemId, unitPriceYen } = {}) {
+    if (closed) throw repositoryError(ORDER_ERROR_CODES.DATABASE_FAILURE, 'The order repository is closed.');
+    authorizeDeviceRole(principal, ['kitchen', 'admin']);
+    const normalizedOrderId = normalizeUuid(orderId, 'orderId');
+    if (!Number.isSafeInteger(orderItemId) || orderItemId < 1) throw repositoryError(ORDER_ERROR_CODES.INVALID_ORDER_REQUEST, 'orderItemId must be a positive integer.');
+    if (!Number.isSafeInteger(unitPriceYen) || unitPriceYen < 0) throw repositoryError(ORDER_ERROR_CODES.INVALID_ORDER_REQUEST, 'unitPriceYen must be a non-negative integer.');
+    let transactionOpen = false;
+    try {
+      database.exec('BEGIN IMMEDIATE;');
+      transactionOpen = true;
+      const target = statements.findPriceAdjustmentTarget.get(orderItemId, normalizedOrderId);
+      if (!target) throw repositoryError(ORDER_ERROR_CODES.ORDER_NOT_FOUND, 'The order item was not found.');
+      if (unitPriceYen > Number(target.unit_price_yen_snapshot)) throw repositoryError(ORDER_ERROR_CODES.PRICE_CEILING_EXCEEDED, 'The adjusted price cannot exceed the order-time price snapshot.');
+      const checkout = target.session_id ? statements.findSessionCheckout.get(target.session_id) : null;
+      if (target.closed_at_ms != null || Number(target.payment_recorded) === 1) throw repositoryError(ORDER_ERROR_CODES.ORDER_CONFLICT, 'A closed or paid table session cannot be changed.');
+      if (checkout?.status === 'ready') throw repositoryError(ORDER_ERROR_CODES.ORDER_CONFLICT, 'A ready checkout cannot be changed.');
+      const previous = target.adjusted_unit_price_yen == null ? Number(target.unit_price_yen_snapshot) : Number(target.adjusted_unit_price_yen);
+      if (previous === unitPriceYen) {
+        const unchanged = statements.findServingOrder.get(normalizedOrderId);
+        database.exec('COMMIT;');
+        transactionOpen = false;
+        return { idempotencyResult: 'replayed', order: loadOrder(unchanged), event: null };
+      }
+      const changedAtMs = now();
+      if (!Number.isSafeInteger(changedAtMs) || changedAtMs < 0) throw repositoryError(ORDER_ERROR_CODES.DATABASE_FAILURE, 'now must return a non-negative integer timestamp.');
+      statements.updateAdjustedUnitPrice.run(unitPriceYen, changedAtMs, orderItemId, normalizedOrderId);
+      statements.insertPriceAdjustment.run(normalizedOrderId, orderItemId, previous, unitPriceYen, target.quantity, changedAtMs, principal.deviceId);
+      if (checkout?.status === 'requested') {
+        const total = Number(database.prepare(`
+          SELECT COALESCE(SUM(COALESCE(oi.adjusted_unit_price_yen, oi.unit_price_yen_snapshot) * oi.quantity), 0) AS total
+          FROM orders AS o JOIN order_items AS oi ON oi.order_id = o.order_id
+          WHERE o.session_id = ? AND o.status IN ('new', 'active', 'completed')
+        `).get(target.session_id).total);
+        statements.updateRequestedCheckoutTotal.run(total, changedAtMs, checkout.checkout_request_id);
+      }
+      const epoch = statements.findSystemState.get()?.event_epoch;
+      if (!epoch) throw repositoryError(ORDER_ERROR_CODES.DATABASE_FAILURE, 'Current event epoch is unavailable.');
+      const payloadJson = JSON.stringify({ orderId: normalizedOrderId, orderItemId, unitPriceYen, previousUnitPriceYen: previous });
+      const inserted = statements.insertOrderUpdateEvent.run(epoch, 'order.updated', normalizedOrderId, principal.deviceId, payloadJson, changedAtMs);
+      const updated = statements.findServingOrder.get(normalizedOrderId);
+      database.exec('COMMIT;');
+      transactionOpen = false;
+      return { idempotencyResult: 'created', order: loadOrder(updated), event: { eventEpoch: epoch, eventId: Number(inserted.lastInsertRowid) } };
+    } catch (error) {
+      if (transactionOpen) { try { database.exec('ROLLBACK;'); } catch {} }
+      if (error instanceof OrderRepositoryError) throw error;
+      throw repositoryError(ORDER_ERROR_CODES.DATABASE_FAILURE, 'The order item price adjustment failed.', { cause: error });
+    }
+  }
+
   return Object.freeze({
     createOrder,
     getCustomerHistory,
     getHistory,
     closeTableSession,
     markItemServed,
+    adjustItemUnitPrice,
     close() {
       closed = true;
     },

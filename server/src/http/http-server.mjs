@@ -90,6 +90,7 @@ const ROUTE_METHODS = new Map([
   ['/v1/customer/checkout-requests/current', 'GET'],
   ['/v1/kitchen/checkout-requests', 'GET'],
   ['/v1/kitchen/order-items/serve', 'POST'],
+  ['/v1/kitchen/order-items/price', 'POST'],
   ['/v1/tables/sessions/close', 'POST'],
   ['/v1/kitchen/order-history', 'GET'],
   ['/v1/admin/order-history', 'GET'],
@@ -590,6 +591,7 @@ function mapApplicationError(error) {
     if (error.code === ORDER_ERROR_CODES.INVALID_ORDER_REQUEST) {
       return createHttpError(HTTP_ERROR_CODES.INVALID_ORDER_REQUEST);
     }
+    if (error.code === ORDER_ERROR_CODES.PRICE_CEILING_EXCEEDED) return createHttpError(HTTP_ERROR_CODES.PRICE_CEILING_EXCEEDED);
     if (error.code === ORDER_ERROR_CODES.MENU_ITEM_NOT_FOUND) {
       return createHttpError(HTTP_ERROR_CODES.MENU_ITEM_NOT_FOUND);
     }
@@ -1261,6 +1263,17 @@ function createConfiguredHttpServer({
         drainRequest(request);
         const list = requireService(checkout, 'listActive').listActive({ principal });
         writeJsonResponse(response, { statusCode: 200, body: mapCheckoutStaffListResponse(list), requestId });
+        return;
+      }
+
+      if (target.path === '/v1/kitchen/order-items/price') {
+        authorizeDeviceRole(principal, ['kitchen', 'admin']);
+        const orders = requireService(orderRepository, 'adjustItemUnitPrice');
+        const body = await readJsonBody(request);
+        const result = orders.adjustItemUnitPrice({ principal, orderId: body?.orderId, orderItemId: body?.orderItemId, unitPriceYen: body?.unitPriceYen });
+        await notifyCommittedSafely(sseHub, result);
+        if (response.destroyed) return;
+        writeJsonResponse(response, { statusCode: 200, body: mapOrderHistoryResponse([result.order]), requestId });
         return;
       }
 

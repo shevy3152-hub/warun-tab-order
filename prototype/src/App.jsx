@@ -24,7 +24,7 @@ import { createClientOrderId, createCustomerOrderClient, CustomerCheckoutError, 
 import { claimCustomerDevice, createIndexedDbCredentialStore, loadOrCreateCustomerDevice, pairingClaimErrorMessage, runtimeForCustomerCredentials } from "./device-credentials.js";
 import { customerOrderErrorCategory, customerOrderNoticeFromOutboxEvent } from "./customer-order-notice.js";
 import { AdminPairingError, configuredAdminToken, createAdminRideGuidanceContact, deleteAdminRideGuidanceContact, fetchAdminBusinessHours, fetchAdminDiagnostics, fetchAdminMenu, fetchAdminOrderHistory, fetchAdminPaymentHistory, fetchAdminPairingPreflight, fetchAdminRideGuidance, issueCustomerPairingCode, revokeAdminDevice, saveAdminBusinessHours, saveAdminImageLayouts, saveAdminCategory, saveAdminMenuItem, saveAdminMenuOrdering, saveAdminRideGuidanceOrdering, saveAdminRideGuidancePickup, updateAdminRideGuidanceContact, voidAdminPayment } from "./admin-pairing.js";
-import { cancelKitchenCheckout, closeKitchenTableSession, fetchKitchenCheckoutRequests, fetchKitchenOrderHistory, fetchKitchenPaymentHistory, fetchKitchenSnapshot, kitchenApiConfigured, KitchenApiError, markKitchenItemServed, payKitchenCheckout, readyKitchenCheckout, saveKitchenCheckoutAdjustments, subscribeKitchenInvalidations, voidKitchenPayment } from "./kitchen-api.js";
+import { adjustKitchenItemUnitPrice, cancelKitchenCheckout, closeKitchenTableSession, fetchKitchenCheckoutRequests, fetchKitchenOrderHistory, fetchKitchenPaymentHistory, fetchKitchenSnapshot, kitchenApiConfigured, KitchenApiError, markKitchenItemServed, payKitchenCheckout, readyKitchenCheckout, saveKitchenCheckoutAdjustments, subscribeKitchenInvalidations, voidKitchenPayment } from "./kitchen-api.js";
 import { buildKitchenTableGroups } from "./kitchen-order-board.js";
 import { bootstrapCustomerOrderClient } from "./customer-bootstrap.js";
 import { taxExcludedYen } from "./pricing.js";
@@ -187,6 +187,11 @@ const defaultState = {
     },
   ],
 };
+
+const kitchenDemoCheckouts = [
+  { checkoutRequestId: "demo-checkout-1", tableSessionId: "demo-session-1", status: "requested", requestedAt: "2026-09-25T09:05:00.000Z", orderedItemsTotalYen: 2340, adjustments: [], receiptRequested: false },
+  { checkoutRequestId: "demo-checkout-2", tableSessionId: "demo-session-2", status: "requested", requestedAt: "2026-09-25T09:00:00.000Z", orderedItemsTotalYen: 1860, adjustments: [], receiptRequested: true },
+];
 
 const CUSTOMER_DRINK_SUBCATEGORIES = [
   { id: "recommended", name: "おかわり！", categoryIds: [] },
@@ -1375,7 +1380,7 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
 
 const staffNavItems = [
   { route: "/kitchen", label: "新着注文", icon: ChefHat },
-  { route: "/history", label: "提供済み（履歴）", icon: ClockCounterClockwise },
+  { route: "/history", label: "注文・会計履歴", icon: ClockCounterClockwise },
   { route: "/admin/menu", label: "設定・管理", icon: Gear },
 ];
 
@@ -1386,17 +1391,17 @@ const adminNavItems = [
   { route: "/admin/devices", label: "設定", icon: Gear },
 ];
 
-function StaffShell({ route, title, subtitle, state, children, right, newOrderCount = 0 }) {
+function StaffShell({ route, title, subtitle, state, children, right, status = null, newOrderCount = 0 }) {
   const isKitchen = route === "/kitchen";
   const isAdmin = route.startsWith("/admin");
-  const businessHours = usePublicBusinessHours(true);
+  const businessHours = usePublicBusinessHours(!isKitchen);
   const navItems = isAdmin ? adminNavItems : staffNavItems;
   return (
     <div className={`staff-app ${isKitchen ? "staff-app--kitchen" : ""} ${isAdmin ? "staff-app--admin" : ""}`}>
       <aside className="staff-sidebar">
-        {isKitchen ? <><Brand /><div className="kitchen-sidebar__store"><ClipboardText size={25} weight="bold" /><b>大衆酒場 一番星</b></div><div className="kitchen-sidebar__status">{right}</div></> : <Brand />}
+        {isKitchen ? null : <Brand />}
         <nav>{navItems.map((item) => <button key={item.route} className={route.startsWith(item.route) ? "is-active" : ""} onClick={() => navigate(item.route)}><item.icon size={30} weight="bold" /><span>{item.label}</span>{item.route === "/kitchen" && newOrderCount ? <b className="badge">{newOrderCount}</b> : null}</button>)}</nav>
-        <BusinessHoursText settings={businessHours} className="hours" />
+        {isKitchen ? <div className="staff-sidebar__status">{status}</div> : <BusinessHoursText settings={businessHours} className="hours" />}
       </aside>
       <main className="staff-main">
         {isKitchen ? <>
@@ -1432,13 +1437,13 @@ function checkoutErrorMessage(error, fallback) {
 }
 
 function CheckoutAdjustmentInput({ label, value, onChange, disabled, onDelete = null, optional = false }) {
-  return <div className="checkout-adjustment-row">
+  return <div className={`checkout-adjustment-row ${label ? "" : "checkout-adjustment-row--optional"}`}>
     {label ? <><span className="checkout-adjustment-label">{label}</span><div className="checkout-adjustment-fields"><label><span>1人分</span><input aria-label={`${label}の1人分`} className="checkout-unit-input" inputMode="numeric" pattern="[0-9]*" value={value.unitAmount} onChange={(event) => { if (/^\d*$/.test(event.target.value)) onChange({ ...value, unitAmount: event.target.value }); }} placeholder="0" disabled={disabled} /><small>円</small></label><label><span>人数</span><input aria-label={`${label}の人数`} className="checkout-people-input" inputMode="numeric" pattern="[0-9]*" min="1" max="99" value={value.people} onChange={(event) => { if (/^\d*$/.test(event.target.value)) onChange({ ...value, people: event.target.value }); }} placeholder="1" disabled={disabled} /><small>名</small></label><output aria-label={`${label}の金額`}>{Number.isInteger(Number(value.unitAmount)) && Number.isInteger(Number(value.people)) ? yen(Number(value.unitAmount) * Number(value.people)) : "入力確認"}</output></div></> : <label className="checkout-other-fields"><span>任意料金</span><input aria-label="任意料金の項目名" value={value.label} onChange={(event) => onChange({ ...value, label: event.target.value })} placeholder="項目名" maxLength={100} disabled={disabled} /><input aria-label="任意料金の金額" className="checkout-amount-input" inputMode="numeric" pattern="[0-9]*" value={value.amount} onChange={(event) => { if (/^\d*$/.test(event.target.value)) onChange({ ...value, amount: event.target.value }); }} placeholder="0" disabled={disabled} /><small>円</small></label>}
     {optional && onDelete ? <button type="button" className="button button--quiet checkout-adjustment-delete" onClick={onDelete} disabled={disabled}>削除</button> : null}
   </div>;
 }
 
-function KitchenCheckoutPanel({ checkouts, sessions, loading, error, onRefresh, onSave, onReady, onCancel, onPay }) {
+function KitchenCheckoutPanel({ checkouts, sessions, loading, error, onRefresh, onSave, onReady, onCancel, onPay, tableId = null }) {
   const [selectedId, setSelectedId] = useState(null);
   const [drafts, setDrafts] = useState({});
   const [busy, setBusy] = useState("");
@@ -1446,9 +1451,10 @@ function KitchenCheckoutPanel({ checkouts, sessions, loading, error, onRefresh, 
   const [errorMessage, setErrorMessage] = useState("");
   const [confirmAction, setConfirmAction] = useState(null);
   const [paymentMethod, setPaymentMethod] = useState("cash");
-  const active = checkouts.filter((checkout) => checkout.status === "requested" || checkout.status === "ready");
-  const selected = active.find((checkout) => checkout.checkoutRequestId === selectedId) || active[0] || null;
   const sessionTable = (checkout) => sessions.find((session) => session.sessionId === checkout?.tableSessionId)?.tableId || "—";
+  const active = checkouts.filter((checkout) => checkout.status === "requested" || checkout.status === "ready")
+    .filter((checkout) => tableId === null || String(sessionTable(checkout)) === String(tableId));
+  const selected = active.find((checkout) => checkout.checkoutRequestId === selectedId) || active[0] || null;
   const draftFor = (checkout) => {
     const current = drafts[checkout.checkoutRequestId];
     if (current) return current;
@@ -1496,15 +1502,17 @@ function KitchenCheckoutPanel({ checkouts, sessions, loading, error, onRefresh, 
       await onRefresh().catch(() => {});
     } finally { setBusy(""); setConfirmAction(null); }
   };
-  return <section className="checkout-panel" aria-labelledby="checkout-panel-title">
-    <header className="checkout-panel__header"><div><span className="section-kicker">CHECKOUT</span><h2 id="checkout-panel-title">会計依頼</h2></div><span className="checkout-panel__count">{active.length}件</span></header>
+  if (tableId !== null && !loading && !error && !active.length) return null;
+  const titleId = `checkout-panel-title-${tableId ?? "all"}`;
+  return <section className={`checkout-panel ${tableId !== null ? "checkout-panel--table" : ""}`} aria-labelledby={titleId}>
+    <header className="checkout-panel__header"><div><span className="section-kicker">CHECKOUT</span><h2 id={titleId}>会計依頼</h2></div><span className="checkout-panel__count">{active.length}件</span></header>
     {loading ? <div className="checkout-empty">会計依頼を読み込み中です。</div> : error ? <div className="checkout-empty" role="alert">会計依頼を取得できません。<button type="button" className="button button--quiet" onClick={onRefresh}>再読み込み</button></div> : !active.length ? <div className="checkout-empty">現在、会計依頼はありません。</div> : <div className="checkout-list">
-      <div className="checkout-list__cards">{active.map((checkout) => <button type="button" key={checkout.checkoutRequestId} className={`checkout-card ${selected?.checkoutRequestId === checkout.checkoutRequestId ? "is-selected" : ""}`} onClick={() => { setSelectedId(checkout.checkoutRequestId); setErrorMessage(""); }}>
+      {tableId === null ? <div className="checkout-list__cards">{active.map((checkout) => <button type="button" key={checkout.checkoutRequestId} className={`checkout-card ${selected?.checkoutRequestId === checkout.checkoutRequestId ? "is-selected" : ""}`} onClick={() => { setSelectedId(checkout.checkoutRequestId); setErrorMessage(""); }}>
         <span className="checkout-card__table">テーブル <b>{sessionTable(checkout)}</b></span><span className={`checkout-status checkout-status--${checkout.status}`}>{checkoutStatusLabel(checkout.status)}</span><time>{formatTime(checkout.requestedAt)}</time><strong>{yen(checkout.orderedItemsTotalYen)}</strong>{checkout.receiptRequested ? <em>手書き領収書希望</em> : null}
-      </button>)}</div>
+      </button>)}</div> : null}
       {selected ? <div className="checkout-editor">
         <div className="checkout-editor__title"><div><h3>テーブル {sessionTable(selected)} の会計</h3><p>{formatTime(selected.requestedAt)} 依頼・{checkoutStatusLabel(selected.status)}</p></div>{selected.receiptRequested ? <strong className="receipt-notice"><Receipt size={24} weight="fill" /> 手書き領収書希望</strong> : null}</div>
-        <div className="checkout-breakdown"><div className="checkout-breakdown__line"><span>注文済み商品合計</span><b>{yen(selected.orderedItemsTotalYen)}</b></div><div className="checkout-adjustments"><h4>追加料金合計</h4>{CHECKOUT_ADJUSTMENT_TYPES.map(([kind, label]) => <CheckoutAdjustmentInput key={kind} label={label} value={draftFor(selected)[kind]} disabled={selected.status !== "requested" || Boolean(busy)} onChange={(value) => setDraft(selected, { ...draftFor(selected), [kind]: value })} />)}{draftFor(selected).other.map((value, index) => <CheckoutAdjustmentInput key={`other-${index}`} value={value} optional disabled={selected.status !== "requested" || Boolean(busy)} onChange={(next) => setDraft(selected, { ...draftFor(selected), other: draftFor(selected).other.map((item, itemIndex) => itemIndex === index ? next : item) })} onDelete={() => setDraft(selected, { ...draftFor(selected), other: draftFor(selected).other.filter((_, itemIndex) => itemIndex !== index) })} />)}{selected.status === "requested" ? <button type="button" className="button button--quiet checkout-add-other" onClick={() => setDraft(selected, { ...draftFor(selected), other: [...draftFor(selected).other, { label: "", amount: "0" }] })} disabled={Boolean(busy)}><Plus size={18} weight="bold" /> 任意料金を追加</button> : null}</div><div className="checkout-total-preview"><span>確認用合計</span><b>{yen(previewTotal(selected))}</b></div></div>
+        <div className="checkout-breakdown"><div className="checkout-breakdown__line"><span>注文済み商品合計</span><b>{yen(selected.orderedItemsTotalYen)}</b></div><details open className="checkout-adjustments-disclosure"><summary><h4>追加料金合計</h4><b>{yen(checkoutAdjustmentTotal(draftFor(selected)) ?? 0)}</b><span>入力・編集</span></summary><div className="checkout-adjustments">{CHECKOUT_ADJUSTMENT_TYPES.map(([kind, label]) => <CheckoutAdjustmentInput key={kind} label={label} value={draftFor(selected)[kind]} disabled={selected.status !== "requested" || Boolean(busy)} onChange={(value) => setDraft(selected, { ...draftFor(selected), [kind]: value })} />)}{draftFor(selected).other.map((value, index) => <CheckoutAdjustmentInput key={`other-${index}`} value={value} optional disabled={selected.status !== "requested" || Boolean(busy)} onChange={(next) => setDraft(selected, { ...draftFor(selected), other: draftFor(selected).other.map((item, itemIndex) => itemIndex === index ? next : item) })} onDelete={() => setDraft(selected, { ...draftFor(selected), other: draftFor(selected).other.filter((_, itemIndex) => itemIndex === index) })} />)}{selected.status === "requested" ? <button type="button" className="button button--quiet checkout-add-other" onClick={() => setDraft(selected, { ...draftFor(selected), other: [...draftFor(selected).other, { label: "", amount: "0" }] })} disabled={Boolean(busy)}><Plus size={18} weight="bold" /> 任意料金を追加</button> : null}</div></details><div className="checkout-total-preview"><span>確認用合計</span><b>{yen(previewTotal(selected))}</b></div></div>
         {selected.status === "requested" && hasDraftError(selected) ? <p className="checkout-feedback checkout-feedback--error" role="alert">入力未完了の料金は保存できません。単価と人数、任意料金を確認してください。</p> : null}
         {errorMessage ? <p className="checkout-feedback checkout-feedback--error" role="alert">{errorMessage}</p> : null}{message ? <p className="checkout-feedback" role="status">{message}</p> : null}
         {selected.status === "requested" ? <div className="checkout-editor__actions"><button type="button" className="button button--quiet" onClick={() => setConfirmAction("cancel")} disabled={Boolean(busy)}>会計依頼を取り消す</button><button type="button" className="button button--quiet" onClick={() => void runAction("save", "追加料金を保存できませんでした。")} disabled={Boolean(busy)}>{busy === "save" ? "保存中…" : "追加料金を保存"}</button><button type="button" className="button button--primary" onClick={() => setConfirmAction("ready")} disabled={Boolean(busy) || hasDraftError(selected) || hasUnsavedDraft(selected)}>{busy === "ready" ? "確定中…" : "合計金額を確定"}</button></div> : selected.status === "ready" ? <div className="checkout-editor__actions checkout-editor__actions--payment"><span className="checkout-payment-note">readyは金額確定のみ。実際の支払い確認後に操作してください。</span><button type="button" className="button button--primary" onClick={() => setConfirmAction("pay")} disabled={Boolean(busy)}>{busy === "pay" ? "記録中…" : "支払を確認して会計済みにする"}</button></div> : <div className="checkout-ready-note">正式合計 <b>{yen(selected.grandTotalYen)}</b>・この依頼は操作できません</div>}
@@ -1514,22 +1522,66 @@ function KitchenCheckoutPanel({ checkouts, sessions, loading, error, onRefresh, 
   </section>;
 }
 
-function KitchenScreen({ state, updateState, apiState, checkoutState, onServe, onCloseSession, onRefreshCheckouts, onSaveCheckout, onReadyCheckout, onCancelCheckout, onPayCheckout }) {
+function KitchenScreen({ state, updateState, apiState, checkoutState, onServe, onSaveItemPrice, onRefreshCheckouts, onSaveCheckout, onReadyCheckout, onCancelCheckout, onPayCheckout }) {
+  const demoMode = window.WARUN_ORDER_MODE === "demo" || new URLSearchParams(window.location.search).get("demo") === "1";
   const [callPanel, setCallPanel] = useState(false);
+  const [priceTarget, setPriceTarget] = useState(null);
+  const [priceDraft, setPriceDraft] = useState("");
+  const [priceBusy, setPriceBusy] = useState(false);
+  const [priceError, setPriceError] = useState("");
+  const [collapsedOrders, setCollapsedOrders] = useState({});
+  const [historyState, setHistoryState] = useState({ loading: false, error: false, orders: [] });
   const apiMode = Boolean(apiState);
-  const sourceOrders = apiMode ? apiState.orders : state.orders;
-  const sessions = apiMode ? apiState.sessions : [];
-  const activeOrders = sourceOrders.filter((order) => order.status === "new" || order.status === "active");
-  const tables = buildKitchenTableGroups({ orders: sourceOrders, sessions, menuItems: state.menuItems, drinkCategoryIds: CUSTOMER_DRINK_CATEGORY_IDS });
+  const sessions = apiMode ? apiState.sessions : demoMode ? [
+    { sessionId: "demo-session-1", tableId: "1", openedAt: "2026-09-25T08:50:00.000Z" },
+    { sessionId: "demo-session-2", tableId: "2", openedAt: "2026-09-25T08:40:00.000Z" },
+  ] : [];
+  const activeCheckouts = (checkoutState?.checkouts || []).filter((checkout) => checkout.status === "requested" || checkout.status === "ready");
   const activeCalls = state.staffCalls.filter((call) => !call.resolvedAt);
   const kitchenAliases = Object.fromEntries(state.menuItems.map((item) => [item.id, item.kitchenAlias?.trim()]));
-  const [resetTarget, setResetTarget] = useState(null);
-  const [resetting, setResetting] = useState(false);
-  const [resetError, setResetError] = useState(false);
 
-  const toggleServed = (orderId, itemId) => {
+  const loadHistory = async () => {
+    if (!apiMode) return;
+    setHistoryState((current) => ({ ...current, loading: true, error: false }));
+    try {
+      const orders = await fetchKitchenOrderHistory({ env: window });
+      setHistoryState({ loading: false, error: false, orders });
+    } catch {
+      setHistoryState((current) => ({ ...current, loading: false, error: true }));
+    }
+  };
+  useEffect(() => {
+    if (!apiMode) return undefined;
+    void loadHistory();
+    const timer = window.setInterval(loadHistory, 30_000);
+    return () => window.clearInterval(timer);
+  }, [apiMode]);
+
+  const historyOrders = apiMode ? historyState.orders.map((order) => ({
+    id: order.orderId,
+    tableId: String(order.tableId),
+    sessionId: order.sessionId || null,
+    createdAt: new Date(order.acceptedAtMs).toISOString(),
+    completedAt: order.completedAtMs ? new Date(order.completedAtMs).toISOString() : null,
+    status: order.status,
+    totalAmount: order.totalAmountYen,
+    items: order.items.map((item) => ({
+      id: String(item.orderItemId), menuItemId: item.menuItemId, nameSnapshot: item.formalNameSnapshot,
+      kitchenAlias: item.kitchenAliasSnapshot, unitPriceYenSnapshot: item.unitPriceYenSnapshot,
+      adjustedUnitPriceYen: item.adjustedUnitPriceYen ?? null,
+      currentUnitPriceYen: item.currentUnitPriceYen ?? item.unitPriceYenSnapshot,
+      quantity: item.quantity, isServed: item.isServed, servedAt: item.servedAtMs ? new Date(item.servedAtMs).toISOString() : null,
+    })),
+  })) : state.orders.filter((order) => order.status === "completed");
+  const liveOrders = apiMode ? apiState.orders : state.orders.filter((order) => order.status === "new" || order.status === "active");
+  const boardOrders = [...liveOrders, ...historyOrders].map((order) => demoMode && order.tableId === "1" ? { ...order, sessionId: "demo-session-1" } : demoMode && order.tableId === "2" ? { ...order, sessionId: "demo-session-2" } : order);
+  const activeOrders = liveOrders.filter((order) => order.status === "new" || order.status === "active");
+  const tables = buildKitchenTableGroups({ orders: boardOrders, sessions, menuItems: state.menuItems, drinkCategoryIds: CUSTOMER_DRINK_CATEGORY_IDS, checkouts: activeCheckouts });
+
+  const toggleServed = async (orderId, itemId) => {
     if (apiMode) {
-      void onServe(orderId, itemId);
+      await onServe(orderId, itemId);
+      await loadHistory();
       return;
     }
     updateState((current) => {
@@ -1545,43 +1597,70 @@ function KitchenScreen({ state, updateState, apiState, checkoutState, onServe, o
     });
   };
 
-  const resolveCall = (callId) => updateState((current) => ({ ...current, staffCalls: current.staffCalls.map((call) => call.id === callId ? { ...call, resolvedAt: new Date().toISOString() } : call) }));
+  const saveItemPrice = async () => {
+    const ceiling = Number(priceTarget?.unitPriceYenSnapshot ?? priceTarget?.unitPriceSnapshot ?? 0);
+    const nextPrice = Number(priceDraft);
+    if (!Number.isSafeInteger(nextPrice) || nextPrice < 0 || nextPrice > ceiling) {
+      setPriceError(`0円以上、注文時単価の${yen(ceiling)}以下で入力してください。`);
+      return;
+    }
+    setPriceBusy(true); setPriceError("");
+    try {
+      if (apiMode) await onSaveItemPrice(priceTarget.orderId ?? priceTarget.id, priceTarget.id, nextPrice);
+      else updateState((current) => ({ ...current, orders: current.orders.map((order) => {
+        const orderId = order.id ?? order.orderId;
+        if (orderId !== priceTarget.orderId) return order;
+        const items = order.items.map((item) => item.id !== priceTarget.id ? item : { ...item, adjustedUnitPriceYen: nextPrice, currentUnitPriceYen: nextPrice, lineTotalYen: nextPrice * item.quantity });
+        return { ...order, items, totalAmount: items.reduce((sum, item) => sum + Number(item.currentUnitPriceYen ?? item.unitPriceYenSnapshot ?? item.unitPriceSnapshot ?? 0) * item.quantity, 0) };
+      }) }));
+      setPriceTarget(null);
+    } catch (error) {
+      setPriceError(error?.code === "PRICE_CEILING_EXCEEDED" ? "注文時単価を超える変更はできません。" : "単価を保存できませんでした。最新状態を再読み込みしてください。");
+    } finally { setPriceBusy(false); }
+  };
 
-  return (
-    <StaffShell route="/kitchen" title="新着注文" subtitle="未提供の注文をテーブルごとに表示します。提供完了後も来店・注文履歴は保持されます。" state={state} newOrderCount={activeOrders.length} right={<div className="staff-topbar__right"><button className="staff-call-button" onClick={() => setCallPanel(true)}><Bell size={26} weight="fill" /> スタッフ呼出 {activeCalls.length ? <b>{activeCalls.length}</b> : null}</button><ConnectionBadge online /><time className="kitchen-clock">{formatTime(new Date())}</time></div>}>
-      <section className="kitchen-content">
-        {apiMode ? <KitchenCheckoutPanel checkouts={checkoutState?.checkouts || []} sessions={sessions} loading={checkoutState?.loading} error={checkoutState?.error} onRefresh={onRefreshCheckouts} onSave={onSaveCheckout} onReady={onReadyCheckout} onCancel={onCancelCheckout} onPay={onPayCheckout} /> : null}
-        <div className="table-scroll">
-          {apiMode && apiState.loading ? <div className="kitchen-empty"><p>注文を読み込み中です。</p></div> : apiMode && apiState.error ? <div className="kitchen-empty"><p>注文情報を取得できません。</p></div> : tables.length ? tables.map((table) => {
-            const { tableId, orders, session, isCompletedSide } = table;
-            const sessionId = session?.sessionId;
-            const total = orders.reduce((sum, order) => sum + order.totalAmount, 0);
-            return (
-              <article className={`table-panel ${isCompletedSide ? "is-completed-side" : ""}`} key={tableId}>
-                <header><h2>テーブル <b>{tableId}</b></h2><span className="table-panel__state">{isCompletedSide ? "提供完了" : `${orders.length}件の注文`}</span></header>
-                <div className="table-panel__orders">
-                  {orders.map((order) => {
-                    const unserved = order.items.filter((item) => !item.isServed);
-                    const served = order.items.filter((item) => item.isServed);
-                    return <section className={`kitchen-order-card ${order.isDrinkOrder ? "is-drink-order" : ""}`} key={order.id} aria-label={`${order.isDrinkOrder ? "ドリンク注文" : "注文"} ${formatTime(order.createdAt)}`}>
-                      <header><b>{order.isDrinkOrder ? "ドリンク注文" : "注文"}</b><time>{formatTime(order.createdAt)}</time><small>{order.items.length}品</small></header>
-                      {unserved.map((item) => <button className="order-item" key={item.id} onClick={() => toggleServed(order.id, item.id)}><span><b>{kitchenMenuName(item, kitchenAliases)}</b><small>{item.quantity}点</small></span><i><Check size={19} weight="bold" /></i></button>)}
-                      {served.length ? <><div className="served-divider"><span>提供済み</span></div>{served.map((item) => <button className="order-item is-served" key={item.id} onClick={() => toggleServed(order.id, item.id)}><span><b>{kitchenMenuName(item, kitchenAliases)}</b><small>{item.quantity}点</small></span><i><Check size={19} weight="bold" /></i></button>)}</> : null}
-                    </section>;
-                  })}
-                  {isCompletedSide ? <div className="table-panel__completed-note">この来店の注文は提供完了です。履歴とsessionは保持されています。</div> : null}
-                </div>
-                <footer><span>{isCompletedSide ? "状態" : "注文商品合計"}</span><b>{isCompletedSide ? "提供完了" : yen(total)}</b>{apiMode && sessionId ? <button className="button button--quiet table-panel__reset" onClick={() => { setResetError(false); setResetTarget({ tableId, sessionId }); }}>席をリセット（支払記録なし）</button> : null}</footer>
-              </article>
-            );
-          }) : <div className="kitchen-empty"><CheckCircle size={72} weight="thin" /><h2>すべて提供済みです</h2><p>新しい注文が届くと、ここにテーブルごとに表示されます。</p></div>}
-        </div>
-        <div className="horizontal-hint"><ArrowLeft size={20} /><span></span><ArrowRight size={20} /></div>
-      </section>
-      {resetTarget ? <Modal title="席をリセット（支払記録なし）" onClose={() => { if (!resetting) setResetTarget(null); }}><p className="modal-lead">テーブル{resetTarget.tableId}の席だけをリセットします。これは支払済み記録を作成しません。実際の支払いは会計依頼の「支払を確認して会計済みにする」から記録してください。</p>{resetError ? <p role="alert">席のリセットに失敗しました。未提供の注文がないか確認してください。</p> : null}<div className="modal-actions"><button className="button button--quiet" onClick={() => setResetTarget(null)} disabled={resetting}>戻る</button><button className="button button--primary button--large" onClick={async () => { setResetting(true); setResetError(false); try { await onCloseSession(resetTarget); setResetTarget(null); } catch { setResetError(true); } finally { setResetting(false); } }} disabled={resetting}>{resetting ? "処理中" : "席をリセット（支払記録なし）"}</button></div></Modal> : null}
-      {callPanel ? <Modal title="スタッフ呼び出し" onClose={() => setCallPanel(false)} wide><div className="call-list">{activeCalls.length ? activeCalls.map((call) => <article key={call.id}><Bell size={28} weight="fill" /><div><b>テーブル {call.tableId}</b><span>{formatTime(call.createdAt)} に呼び出し</span></div><button className="button button--primary" onClick={() => resolveCall(call.id)}>対応済みにする</button></article>) : <div className="empty-state"><Bell size={42} /><p>未対応の呼び出しはありません。</p></div>}</div></Modal> : null}
-    </StaffShell>
-  );
+  const resolveCall = (callId) => updateState((current) => ({ ...current, staffCalls: current.staffCalls.map((call) => call.id === callId ? { ...call, resolvedAt: new Date().toISOString() } : call) }));
+  return <StaffShell route="/kitchen" title="新着注文" subtitle="未提供の注文をテーブルごとに表示します。提供完了後も来店・注文履歴は保持されます。" state={state} newOrderCount={activeOrders.length} status={<div className="staff-topbar__right"><button className="staff-call-button" onClick={() => setCallPanel(true)}><Bell size={26} weight="fill" /> スタッフ呼出 {activeCalls.length ? <b>{activeCalls.length}</b> : null}</button><ConnectionBadge online /><time className="kitchen-clock">{formatTime(new Date())}</time></div>}>
+    <section className="kitchen-content">
+      {apiMode && apiState.loading ? <div className="kitchen-empty"><p>注文を読み込み中です。</p></div> : null}
+      {apiMode && apiState.error ? <div className="kitchen-empty" role="alert"><p>注文情報を取得できません。</p></div> : null}
+      {!apiMode && !tables.length ? <div className="kitchen-empty"><CheckCircle size={54} weight="thin" /><h2>すべて提供済みです</h2><p>新しい注文が届くと、テーブルごとに表示されます。</p></div> : null}
+      {tables.length ? <div className="table-scroll">
+        {tables.map((table) => {
+          const { tableId, orders, session, isCompletedSide } = table;
+          const sessionId = session?.sessionId;
+          const tableCheckouts = activeCheckouts.filter((checkout) => sessions.some((entry) => entry.sessionId === checkout.tableSessionId && String(entry.tableId) === tableId));
+          const checkoutPending = tableCheckouts.some((checkout) => checkout.status === "requested");
+          const total = orders.reduce((sum, order) => sum + Number(order.totalAmount ?? order.totalAmountYen ?? 0), 0);
+          return <article className={`table-panel ${isCompletedSide ? "is-completed-side" : ""}`} key={tableId}>
+            <header><h2>テーブル <b>{tableId}</b></h2><span className="table-panel__state">{checkoutPending ? "会計依頼中" : isCompletedSide ? "提供完了" : `${orders.length}件の注文`}</span></header>
+            <div className="table-panel__receipt">
+            {(apiMode || demoMode) && (tableCheckouts.length || checkoutState?.loading || checkoutState?.error) ? <KitchenCheckoutPanel checkouts={tableCheckouts} sessions={sessions} loading={checkoutState?.loading} error={checkoutState?.error} onRefresh={demoMode ? async () => {} : onRefreshCheckouts} onSave={demoMode ? async () => ({}) : onSaveCheckout} onReady={demoMode ? async () => ({}) : onReadyCheckout} onCancel={demoMode ? async () => ({}) : onCancelCheckout} onPay={demoMode ? async () => ({}) : onPayCheckout} tableId={tableId} /> : null}
+            <div className="table-panel__orders">
+              {orders.map((order) => {
+                const unserved = order.items.filter((item) => !item.isServed);
+                const served = order.items.filter((item) => item.isServed);
+                const canCollapse = !unserved.length && checkoutPending;
+                const expanded = !collapsedOrders[order.id];
+                return <section className={`kitchen-order-card ${order.isDrinkOrder ? "is-drink-order" : ""}`} key={order.id} aria-label={`${order.isDrinkOrder ? "ドリンク注文" : "注文"} ${formatTime(order.createdAt)}`}>
+                  <header>{canCollapse ? <button type="button" className="order-details-toggle" aria-expanded={expanded} onClick={() => setCollapsedOrders((current) => ({ ...current, [order.id]: !current[order.id] }))}><b>注文内容を{expanded ? "非表示" : "表示"}</b></button> : <b>{order.isDrinkOrder ? "ドリンク注文" : "注文"}</b>}<time>{formatTime(order.createdAt)}</time><small>{order.items.length}品</small></header>
+                  {expanded ? <div className="kitchen-order-card__details">
+                    {unserved.map((item) => <div className="order-item-row" key={item.id}><button className="order-item" onClick={() => void toggleServed(order.id ?? order.orderId, item.id)}><span><b>{kitchenMenuName(item, kitchenAliases)}</b><small>{item.quantity}点</small></span><i><Check size={19} weight="bold" /></i></button><button type="button" className="order-item-price" onClick={() => { setPriceTarget({ ...item, id: item.id, orderId: order.id ?? order.orderId }); setPriceDraft(String(item.currentUnitPriceYen ?? item.adjustedUnitPriceYen ?? item.unitPriceYenSnapshot ?? item.unitPriceSnapshot ?? 0)); setPriceError(""); }}>単価 {yen(item.currentUnitPriceYen ?? item.adjustedUnitPriceYen ?? item.unitPriceYenSnapshot ?? item.unitPriceSnapshot ?? 0)}</button></div>)}
+                    {served.length ? <><div className="served-divider"><span>提供済み</span></div>{served.map((item) => <div className="order-item-row" key={item.id}><button className="order-item is-served" onClick={() => void toggleServed(order.id ?? order.orderId, item.id)}><span><b>{kitchenMenuName(item, kitchenAliases)}</b><small>{item.quantity}点</small></span><i><Check size={19} weight="bold" /></i></button><button type="button" className="order-item-price" onClick={() => { setPriceTarget({ ...item, id: item.id, orderId: order.id ?? order.orderId }); setPriceDraft(String(item.currentUnitPriceYen ?? item.adjustedUnitPriceYen ?? item.unitPriceYenSnapshot ?? item.unitPriceSnapshot ?? 0)); setPriceError(""); }}>単価 {yen(item.currentUnitPriceYen ?? item.adjustedUnitPriceYen ?? item.unitPriceYenSnapshot ?? item.unitPriceSnapshot ?? 0)}</button></div>)}</> : null}
+                  </div> : null}
+                </section>;
+              })}
+              {!orders.length ? <div className="table-panel__completed-note">この来店に未提供の注文はありません。sessionは保持されています。</div> : null}
+            </div>
+            <footer><span>注文商品合計</span><b>{yen(total)}</b></footer>
+            </div>
+          </article>;
+        })}
+      </div> : null}
+    </section>
+    {priceTarget ? <Modal title="注文単価の変更" onClose={() => { if (!priceBusy) setPriceTarget(null); }}><p className="modal-lead">{kitchenMenuName(priceTarget, kitchenAliases)}・{priceTarget.quantity}点<br />注文時単価（変更上限）：{yen(priceTarget.unitPriceYenSnapshot ?? priceTarget.unitPriceSnapshot ?? 0)}／現在の単価：{yen(priceTarget.currentUnitPriceYen ?? priceTarget.adjustedUnitPriceYen ?? priceTarget.unitPriceYenSnapshot ?? priceTarget.unitPriceSnapshot ?? 0)}</p><label className="price-adjustment-field">変更後の単価<input aria-label="変更後の単価" type="number" min="0" max={priceTarget.unitPriceYenSnapshot ?? priceTarget.unitPriceSnapshot} step="1" value={priceDraft} onChange={(event) => setPriceDraft(event.target.value)} disabled={priceBusy} />円</label><p className="price-adjustment-total">変更後の行合計：<b>{yen((Number(priceDraft) || 0) * priceTarget.quantity)}</b></p>{priceError ? <p role="alert" className="checkout-feedback checkout-feedback--error">{priceError}</p> : null}<div className="modal-actions"><button type="button" className="button button--quiet" onClick={() => setPriceTarget(null)} disabled={priceBusy}>キャンセル</button><button type="button" className="button button--primary button--large" onClick={() => void saveItemPrice()} disabled={priceBusy}>{priceBusy ? "保存中…" : "単価を保存"}</button></div></Modal> : null}
+    {callPanel ? <Modal title="スタッフ呼び出し" onClose={() => setCallPanel(false)} wide><div className="call-list">{activeCalls.length ? activeCalls.map((call) => <article key={call.id}><Bell size={28} weight="fill" /><div><b>テーブル {call.tableId}</b><span>{formatTime(call.createdAt)} に呼び出し</span></div><button className="button button--primary" onClick={() => resolveCall(call.id)}>対応済みにする</button></article>) : <div className="empty-state"><Bell size={42} /><p>未対応の呼び出しはありません。</p></div>}</div></Modal> : null}
+  </StaffShell>;
 }
 
 function paymentMethodLabel(method) {
@@ -1658,7 +1737,7 @@ function HistoryScreen({ state, apiMode = false, loadHistory = null, loadPayment
     return { ...group, paymentStatus: payment ? "会計済み" : group.closedAtMs ? "終了・会計記録なし" : "会計前" };
   });
   return (
-    <StaffShell route="/history" title="提供済み（履歴）" subtitle="完了した注文を、注文時点の品名と単価で確認できます。" state={state} right={<ConnectionBadge online />}>
+    <StaffShell route="/history" title="注文・会計履歴" subtitle="提供済みの注文内容と、会計記録を確認できます。" state={state} right={<ConnectionBadge online />}>
       <section className="history-content">
         <div className="history-summary"><div><small>本日の提供済み注文</small><b>{completedToday.length}</b><span>件</span></div><div><small>本日の注文商品合計</small><b>{yen(todayTotal)}</b></div></div>
         {apiMode && remoteState.loading ? <div className="empty-state"><p>注文履歴を読み込み中です。</p></div> : null}
@@ -2554,9 +2633,10 @@ export function App() {
       setKitchenCheckoutState(null);
       return undefined;
     }
-    if (!kitchenApiConfigured(window)) {
-      setKitchenApiState(window.WARUN_ORDER_MODE === "demo" ? null : { loading: false, error: true, orders: [], sessions: [] });
-      setKitchenCheckoutState(window.WARUN_ORDER_MODE === "demo" ? null : { loading: false, error: true, checkouts: [] });
+    const explicitDemo = window.WARUN_ORDER_MODE === "demo" || new URLSearchParams(window.location.search).get("demo") === "1";
+    if (explicitDemo || !kitchenApiConfigured(window)) {
+      setKitchenApiState(explicitDemo ? null : { loading: false, error: true, orders: [], sessions: [] });
+      setKitchenCheckoutState(explicitDemo ? { loading: false, error: false, checkouts: kitchenDemoCheckouts } : { loading: false, error: true, checkouts: [] });
       return undefined;
     }
     let cancelled = false;
@@ -2585,6 +2665,13 @@ export function App() {
     } catch {
       setKitchenApiState((current) => current ? { ...current, error: true } : current);
     }
+  };
+
+  const saveKitchenItemPrice = async (orderId, orderItemId, unitPriceYen) => {
+    await adjustKitchenItemUnitPrice({ env: window, orderId, orderItemId, unitPriceYen });
+    const [snapshot, checkouts] = await Promise.all([fetchKitchenSnapshot({ env: window }), fetchKitchenCheckoutRequests({ env: window })]);
+    setKitchenApiState({ loading: false, error: false, orders: snapshot.orders, sessions: snapshot.sessions });
+    setKitchenCheckoutState({ loading: false, error: false, checkouts });
   };
 
   const refreshKitchenCheckouts = async () => {
@@ -2704,9 +2791,9 @@ export function App() {
     if (isCustomerRoute && !orderClient) return <PairingScreen onClaim={claim} error={pairingError} />;
     if (route === "/") return <CustomerScreen state={state} updateState={updateState} deviceId="customer-03" orderClient={orderClient} customerDeviceConfig={customerDeviceConfig} />;
     if (route.startsWith("/customer/")) return <CustomerScreen state={state} updateState={updateState} deviceId={route.split("/")[2]} orderClient={orderClient} customerDeviceConfig={customerDeviceConfig} />;
-    if (route === "/kitchen") return <KitchenScreen state={state} updateState={updateState} apiState={kitchenApiState} checkoutState={kitchenCheckoutState} onServe={serveKitchenItem} onCloseSession={closeKitchenSession} onRefreshCheckouts={refreshKitchenCheckouts} onSaveCheckout={saveCheckout} onReadyCheckout={readyCheckout} onCancelCheckout={cancelCheckout} onPayCheckout={payCheckout} />;
+    if (route === "/kitchen") return <KitchenScreen state={state} updateState={updateState} apiState={kitchenApiState} checkoutState={kitchenCheckoutState} onServe={serveKitchenItem} onSaveItemPrice={saveKitchenItemPrice} onRefreshCheckouts={refreshKitchenCheckouts} onSaveCheckout={saveCheckout} onReadyCheckout={readyCheckout} onCancelCheckout={cancelCheckout} onPayCheckout={payCheckout} />;
     if (route === "/history") {
-      const explicitDemo = window.WARUN_ORDER_MODE === "demo";
+      const explicitDemo = window.WARUN_ORDER_MODE === "demo" || new URLSearchParams(window.location.search).get("demo") === "1";
       const kitchenConfigured = kitchenApiConfigured(window);
       const adminConfigured = configuredAdminToken(window);
       const loadHistory = kitchenConfigured

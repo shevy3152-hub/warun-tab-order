@@ -450,7 +450,7 @@ test('kitchen and admin snapshots map staff data through exact allow-lists', () 
       'tableNumberSnapshot', 'totalAmountYen', 'version',
     ].sort());
     assert.deepEqual(Object.keys(response.activeOrders[0].items[0]).sort(), [
-      'formalNameSnapshot', 'isServed', 'kitchenAliasSnapshot', 'lineTotalYen',
+      'adjustedUnitPriceYen', 'currentUnitPriceYen', 'formalNameSnapshot', 'isServed', 'kitchenAliasSnapshot', 'lineTotalYen', 'lineTotalYenSnapshot',
       'menuItemId', 'orderItemId', 'quantity', 'unitPriceYenSnapshot',
     ].sort());
     assert.deepEqual(Object.keys(response.openStaffCalls[0]).sort(), [

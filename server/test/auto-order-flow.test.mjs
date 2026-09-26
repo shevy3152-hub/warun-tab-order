@@ -89,7 +89,7 @@ test('automatic customer-to-kitchen-to-history flow uses one SQLite order', asyn
     const environment = { location: { origin }, navigator: { onLine: true }, fetch: fetchImpl };
     const client = await bootstrapCustomerOrderClient({ globalObject: environment, credentialStore, createClient });
     assert.equal(client.mode, 'api');
-    const record = await client.enqueue({ items: [{ menuItemId: 'edamame', quantity: 1 }] });
+    const record = await client.enqueue({ items: [{ menuItemId: 'edamame', quantity: 2 }] });
     const first = await client.flush({ clientOrderId: record.clientOrderId });
     assert.equal(first.state, 'synced');
     assert.equal(first.idempotencyResult, 'created');
@@ -111,6 +111,29 @@ test('automatic customer-to-kitchen-to-history flow uses one SQLite order', asyn
     const kitchenSnapshot = await fetch(`${origin}/v1/snapshot`, { headers: { Authorization: `Bearer ${KITCHEN_TOKEN}` } }).then((response) => response.json());
     assert.equal(kitchenSnapshot.activeOrders.length, 1);
     const order = kitchenSnapshot.activeOrders[0];
+    const atCeiling = await fetch(`${origin}/v1/kitchen/order-items/price`, {
+      method: 'POST', headers: { Authorization: `Bearer ${KITCHEN_TOKEN}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ orderId: order.orderId, orderItemId: order.items[0].orderItemId, unitPriceYen: 380 }),
+    });
+    assert.equal(atCeiling.status, 200);
+    const overCeiling = await fetch(`${origin}/v1/kitchen/order-items/price`, {
+      method: 'POST', headers: { Authorization: `Bearer ${KITCHEN_TOKEN}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ orderId: order.orderId, orderItemId: order.items[0].orderItemId, unitPriceYen: 381 }),
+    });
+    assert.equal(overCeiling.status, 400);
+    assert.equal((await overCeiling.json()).error.code, 'PRICE_CEILING_EXCEEDED');
+    const adjusted = await fetch(`${origin}/v1/kitchen/order-items/price`, {
+      method: 'POST', headers: { Authorization: `Bearer ${KITCHEN_TOKEN}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ orderId: order.orderId, orderItemId: order.items[0].orderItemId, unitPriceYen: 350 }),
+    });
+    assert.equal(adjusted.status, 200);
+    const adjustedOrder = (await adjusted.json()).orders[0];
+    assert.equal(adjustedOrder.items[0].unitPriceYenSnapshot, 380);
+    assert.equal(adjustedOrder.items[0].currentUnitPriceYen, 350);
+    assert.equal(adjustedOrder.items[0].lineTotalYen, 700);
+    assert.equal(adjustedOrder.items[0].lineTotalYenSnapshot, 760);
+    assert.equal(adjustedOrder.totalAmountYen, 700);
+    assert.equal(connection.database.prepare('SELECT COUNT(*) AS count FROM event_log').get().count, 2);
     const serve = await fetch(`${origin}/v1/kitchen/order-items/serve`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${KITCHEN_TOKEN}`, 'Content-Type': 'application/json' },
@@ -118,11 +141,13 @@ test('automatic customer-to-kitchen-to-history flow uses one SQLite order', asyn
     });
     assert.equal(serve.status, 200);
     assert.equal(connection.database.prepare('SELECT status FROM orders').get().status, 'completed');
-    assert.equal(connection.database.prepare('SELECT COUNT(*) AS count FROM event_log').get().count, 2);
+    assert.equal(connection.database.prepare('SELECT COUNT(*) AS count FROM event_log').get().count, 3);
 
     const history = await fetch(`${origin}/v1/admin/order-history`, { headers: { Authorization: `Bearer ${ADMIN_TOKEN}` } }).then((response) => response.json());
     assert.equal(history.orders.length, 1);
     assert.equal(history.orders[0].status, 'completed');
+    assert.equal(history.orders[0].items[0].unitPriceYenSnapshot, 380);
+    assert.equal(history.orders[0].items[0].currentUnitPriceYen, 350);
 
     const reloaded = await bootstrapCustomerOrderClient({ globalObject: environment, credentialStore, createClient });
     assert.equal(reloaded.mode, 'api');

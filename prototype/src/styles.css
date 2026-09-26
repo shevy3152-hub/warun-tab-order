@@ -563,6 +563,13 @@ h1, h2, h3, p { margin: 0; }
 .checkout-breakdown__line, .checkout-total-preview { min-height: 50px; padding: 8px 12px; border: 1px solid var(--line); display: flex; flex-direction: column; justify-content: center; gap: 2px; }
 .checkout-breakdown__line span, .checkout-total-preview span { font-size: 12px; font-weight: 900; }
 .checkout-breakdown__line b { color: var(--red); font-size: 23px; }
+.checkout-adjustments-disclosure { min-width: 0; }
+.checkout-adjustments-disclosure > summary { min-height: 50px; padding: 7px 10px; border: 1px solid var(--line); display: flex; align-items: center; gap: 10px; cursor: pointer; list-style: none; }
+.checkout-adjustments-disclosure > summary::-webkit-details-marker { display: none; }
+.checkout-adjustments-disclosure > summary h4 { margin-right: auto; font-size: 13px; }
+.checkout-adjustments-disclosure > summary b { color: var(--red); white-space: nowrap; }
+.checkout-adjustments-disclosure > summary span { color: var(--muted); font-size: 12px; font-weight: 800; white-space: nowrap; }
+.checkout-adjustments-disclosure[open] > summary { margin-bottom: 6px; }
 .checkout-adjustments { min-width: 0; display: grid; grid-template-columns: repeat(3, minmax(150px, 1fr)); gap: 5px 8px; align-items: end; }
 .checkout-adjustments h4 { grid-column: 1 / -1; font-size: 13px; }
 .checkout-adjustment-row { min-width: 0; display: flex; align-items: end; gap: 4px; }
@@ -1319,3 +1326,189 @@ h1, h2, h3, p { margin: 0; }
   line-height: 1.18;
   white-space: normal;
 }
+
+/* Kitchen: stack checkout and orders by table; keep history in the same vertical scroll. */
+.staff-app.staff-app--kitchen { height: 100dvh; min-height: 0; grid-template-columns: 250px minmax(0, 1fr); }
+.staff-app--kitchen .staff-sidebar { min-height: 0; padding: 8px 0 10px; overflow: hidden; }
+.staff-app--kitchen .staff-sidebar__status { margin-top: auto; padding: 12px; display: grid; gap: 8px; }
+.staff-app--kitchen .staff-sidebar__status .staff-topbar__right { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px; }
+.staff-app--kitchen .staff-sidebar__status .staff-call-button { grid-column: 1 / -1; width: 100%; min-height: 48px; margin: 0; padding: 0 8px; justify-content: center; font-size: 15px; }
+.staff-app--kitchen .staff-sidebar__status .connection { display: flex; min-width: 0; gap: 5px; font-size: 13px; }
+.staff-app--kitchen .staff-sidebar__status .connection small { display: none; }
+.staff-app--kitchen .staff-sidebar__status .connection svg { width: 18px; height: 18px; }
+.staff-app--kitchen .staff-sidebar__status .kitchen-clock { justify-self: end; margin: 0; font-size: 20px; }
+.staff-app--kitchen .staff-sidebar .hours,
+.staff-app--kitchen .staff-sidebar .brand,
+.staff-app--kitchen .kitchen-sidebar__store { display: none; }
+.staff-app--kitchen .kitchen-heading { min-height: 54px; padding: 8px 18px; gap: 14px; }
+.staff-app--kitchen .kitchen-heading h1 { flex: 0 0 auto; font-size: 27px; letter-spacing: .04em; }
+.staff-app--kitchen .kitchen-heading p { max-width: none; font-size: 12px; line-height: 1.35; }
+.staff-app--kitchen .kitchen-content { display: flex; flex: 1; flex-direction: column; min-height: 0; overflow: hidden; padding: 0 14px 8px; }
+.staff-app--kitchen .table-scroll { display: grid; flex: none; min-height: auto; gap: 12px; overflow: visible; padding: 0 0 4px; scroll-snap-type: none; }
+.staff-app--kitchen .table-panel { width: 100%; min-height: 0; flex: none; scroll-snap-align: none; }
+.staff-app--kitchen .table-panel > header { min-height: 48px; padding: 6px 12px; }
+.staff-app--kitchen .table-panel > header h2 { font-size: 19px; }
+.staff-app--kitchen .table-panel > header h2 b { font-size: 27px; }
+.staff-app--kitchen .table-panel__orders { flex: none; min-height: 0; overflow: visible; padding: 8px 10px; }
+.staff-app--kitchen .table-panel > footer { min-height: 48px; padding: 6px 12px; }
+.staff-app--kitchen .table-panel > footer span { font-size: 14px; }
+.staff-app--kitchen .table-panel > footer b { font-size: 23px; }
+.staff-app--kitchen .checkout-panel--table { max-height: none; margin: 8px 10px 0; border-width: 1px; }
+.staff-app--kitchen .checkout-panel--table .checkout-panel__header { min-height: 40px; padding: 5px 10px; }
+.staff-app--kitchen .checkout-panel--table .checkout-panel__header h2 { font-size: 18px; }
+.staff-app--kitchen .checkout-panel--table .checkout-panel__count { font-size: 15px; }
+.staff-app--kitchen .checkout-panel--table .checkout-list { display: block; min-height: auto; }
+.staff-app--kitchen .checkout-panel--table .checkout-list__cards { max-height: none; border: 0; }
+.staff-app--kitchen .checkout-panel--table .checkout-card { min-height: 52px; padding: 5px 10px; }
+.staff-app--kitchen .checkout-panel--table .checkout-card__table { font-size: 14px; }
+.staff-app--kitchen .checkout-panel--table .checkout-card__table b { font-size: 18px; }
+.staff-app--kitchen .checkout-panel--table .checkout-card strong { font-size: 16px; }
+.staff-app--kitchen .checkout-panel--table .checkout-editor { overflow: visible; padding: 8px 10px; }
+.staff-app--kitchen .checkout-panel--table .checkout-editor__title h3 { font-size: 17px; }
+.staff-app--kitchen .checkout-panel--table .checkout-breakdown { grid-template-columns: minmax(160px, .8fr) minmax(320px, 1.8fr) auto; gap: 8px; }
+.staff-app--kitchen .checkout-panel--table .checkout-adjustments { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
+.staff-app--kitchen .checkout-panel--table .checkout-editor__actions { flex-wrap: wrap; justify-content: flex-start; }
+.staff-app--kitchen .order-item-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px; border-bottom: 1px solid #cec8bf; }
+.staff-app--kitchen .order-item-row .order-item { min-width: 0; border-bottom: 0; }
+.staff-app--kitchen .order-item-price { min-height: 36px; border: 1px solid var(--line); background: #fffaf2; padding: 0 8px; color: var(--red); font-size: 13px; font-weight: 900; white-space: nowrap; }
+.staff-app--kitchen .order-details-toggle { min-height: 30px; border: 0; background: transparent; padding: 0; color: var(--red); font: inherit; text-align: left; }
+.staff-app--kitchen .kitchen-history { margin-top: 16px; border: 1px solid var(--line); background: #fffdf8; }
+.staff-app--kitchen .kitchen-history > header { min-height: 44px; padding: 7px 12px; border-bottom: 1px solid var(--line); display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.staff-app--kitchen .kitchen-history > header h2 { color: var(--red); font-size: 18px; }
+.staff-app--kitchen .kitchen-history > header span { color: var(--muted); font-size: 12px; font-weight: 800; }
+.staff-app--kitchen .kitchen-history__row { min-height: 40px; padding: 7px 12px; border-bottom: 1px solid #ded8cf; display: grid; grid-template-columns: 130px 90px minmax(0, 1fr) auto; align-items: center; gap: 10px; font-size: 13px; }
+.staff-app--kitchen .kitchen-history__row strong { color: var(--red); white-space: nowrap; }
+.staff-app--kitchen .kitchen-history__notice { padding: 12px; color: var(--muted); font-size: 13px; }
+.staff-app--kitchen .kitchen-history--payments { margin-top: 12px; }
+.staff-app--kitchen .horizontal-hint { display: none; }
+.staff-app--kitchen .staff-footer { flex: 0 0 42px; min-height: 42px; padding-inline: 16px; gap: 14px; font-size: 11px; }
+.staff-app--kitchen .staff-sidebar { padding-top: 14px; }
+.staff-app--kitchen .staff-sidebar__status { margin-bottom: 0; }
+.staff-app--kitchen .order-item-row { min-height: 58px; }
+.staff-app--kitchen .order-item-price:hover { border-color: var(--red); }
+.price-adjustment-field { display: flex; align-items: center; gap: 10px; margin-top: 18px; font-weight: 900; }
+.price-adjustment-field input { width: 150px; min-height: 54px; border: 1px solid var(--line); padding: 6px 10px; text-align: right; font: inherit; font-size: 24px; font-weight: 900; }
+.price-adjustment-total { margin-top: 14px; text-align: right; font-weight: 900; }
+.price-adjustment-total b { color: var(--red); font-size: 24px; }
+
+@media (max-width: 900px) {
+  .staff-app.staff-app--kitchen { grid-template-columns: 190px minmax(0, 1fr); }
+  .staff-app--kitchen .kitchen-history__row { grid-template-columns: 1fr auto; }
+  .staff-app--kitchen .kitchen-history__row span { grid-column: 1 / -1; }
+}
+
+@media (min-width: 900px) and (max-height: 650px) {
+  .staff-app--kitchen .kitchen-heading { min-height: 44px; padding-block: 4px; }
+  .staff-app--kitchen .staff-footer { flex-basis: 30px; min-height: 30px; }
+  .staff-app--kitchen .table-panel > header { min-height: 40px; padding-block: 4px; }
+  .staff-app--kitchen .checkout-panel--table .checkout-panel__header { min-height: 34px; padding-block: 3px; }
+  .staff-app--kitchen .checkout-panel--table .checkout-editor { padding-block: 5px; }
+  .staff-app--kitchen .checkout-panel--table .checkout-editor__actions { margin-top: 6px; }
+  .staff-app--kitchen .order-item-row { min-height: 52px; }
+}
+
+/* Kitchen: one independently scrollable receipt slot per table, side by side. */
+.staff-app--kitchen .table-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+  box-sizing: border-box;
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: calc(50vw - 160px);
+  grid-template-rows: minmax(0, 1fr);
+  align-items: stretch;
+  gap: 12px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scroll-snap-type: x proximity;
+  padding: 0 0 8px;
+}
+.staff-app--kitchen .table-panel {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  scroll-snap-align: start;
+}
+.staff-app--kitchen .table-panel__receipt {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+.staff-app--kitchen .table-panel__orders {
+  flex: none;
+  min-height: 0;
+  overflow: visible;
+  padding: 8px 10px;
+}
+.staff-app--kitchen .checkout-panel--table {
+  max-height: none;
+  margin: 8px 10px 0;
+  border-width: 1px;
+}
+.staff-app--kitchen .checkout-panel--table .checkout-panel__header { min-height: 34px; padding: 3px 8px; }
+.staff-app--kitchen .checkout-panel--table .checkout-panel__header > div { display: flex; align-items: baseline; gap: 8px; }
+.staff-app--kitchen .checkout-panel--table .section-kicker { font-size: 10px; line-height: 1; }
+.staff-app--kitchen .checkout-panel--table .checkout-panel__header h2 { font-size: 15px; line-height: 1.1; }
+.staff-app--kitchen .checkout-panel--table .checkout-panel__count { font-size: 12px; }
+.staff-app--kitchen .checkout-panel--table .checkout-list { display: block; min-height: auto; }
+.staff-app--kitchen .checkout-panel--table .checkout-editor { overflow: visible; padding: 5px 8px; }
+.staff-app--kitchen .checkout-panel--table .checkout-editor__title > div { display: flex; align-items: baseline; gap: 8px; }
+.staff-app--kitchen .checkout-panel--table .checkout-editor__title h3 { font-size: 13px; line-height: 1.15; }
+.staff-app--kitchen .checkout-panel--table .checkout-editor__title p { margin: 0; font-size: 10px; line-height: 1.2; white-space: nowrap; }
+.staff-app--kitchen .checkout-panel--table .checkout-breakdown { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-template-areas: "ordered total" "adjustments adjustments"; gap: 5px; margin-top: 5px; }
+.staff-app--kitchen .checkout-panel--table .checkout-breakdown__line { grid-area: ordered; min-height: 38px; padding: 4px 7px; flex-direction: row; align-items: center; justify-content: space-between; gap: 5px; }
+.staff-app--kitchen .checkout-panel--table .checkout-breakdown__line span,
+.staff-app--kitchen .checkout-panel--table .checkout-total-preview span { font-size: 10px; line-height: 1.15; }
+.staff-app--kitchen .checkout-panel--table .checkout-breakdown__line b,
+.staff-app--kitchen .checkout-panel--table .checkout-total-preview b { font-size: 18px; }
+.staff-app--kitchen .checkout-panel--table .checkout-total-preview { grid-area: total; min-width: 0; min-height: 38px; padding: 4px 7px; flex-direction: row; align-items: center; justify-content: space-between; gap: 5px; }
+.staff-app--kitchen .checkout-panel--table .checkout-adjustments-disclosure { grid-area: adjustments; }
+.staff-app--kitchen .checkout-panel--table .checkout-adjustments { grid-template-columns: minmax(0, 1fr); gap: 6px; }
+.staff-app--kitchen .checkout-panel--table .checkout-adjustments-disclosure > summary { min-height: 32px; padding: 3px 7px; }
+.staff-app--kitchen .checkout-panel--table .checkout-adjustments-disclosure > summary span { display: block; font-size: 10px; }
+.staff-app--kitchen .checkout-panel--table .checkout-adjustment-row { align-items: center; flex-wrap: wrap; }
+.staff-app--kitchen .checkout-panel--table .checkout-adjustment-label { flex: 0 0 100%; }
+.staff-app--kitchen .checkout-panel--table .checkout-adjustment-fields input { min-height: 40px; }
+.staff-app--kitchen .checkout-panel--table .checkout-editor__actions { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 5px; margin-top: 5px; }
+.staff-app--kitchen .checkout-panel--table .checkout-editor__actions .button { min-height: 44px; }
+.staff-app--kitchen .checkout-panel--table .checkout-editor__actions > .button--primary { grid-column: 1 / -1; }
+.staff-app--kitchen .table-panel > footer { position: sticky; bottom: 0; min-height: 56px; padding: 8px 12px; background: #fffaf2; }
+.staff-app--kitchen .table-panel > footer span { font-size: 14px; }
+.staff-app--kitchen .table-panel > footer b { font-size: 21px; }
+
+@media (max-width: 900px) {
+  .staff-app--kitchen .table-scroll { grid-auto-columns: min(100%, 620px); }
+}
+
+@media (min-width: 1400px) {
+  .staff-app--kitchen .table-scroll { grid-auto-columns: calc(33.333vw - 110px); }
+}
+
+/* Keep requested-checkout charges available by default without pushing live orders below the slot. */
+.staff-app--kitchen .checkout-panel--table .checkout-panel__header { display: none; }
+.staff-app--kitchen .checkout-panel--table .checkout-editor { padding: 4px 8px; }
+.staff-app--kitchen .checkout-panel--table .checkout-breakdown { margin-top: 4px; gap: 4px; }
+.staff-app--kitchen .checkout-panel--table .checkout-breakdown__line,
+.staff-app--kitchen .checkout-panel--table .checkout-total-preview { min-height: 34px; padding: 3px 6px; }
+.staff-app--kitchen .checkout-panel--table .checkout-adjustments-disclosure { position: relative; }
+.staff-app--kitchen .checkout-panel--table .checkout-adjustments-disclosure > summary { min-height: 32px; padding: 3px 7px; box-sizing: border-box; }
+.staff-app--kitchen .checkout-panel--table .checkout-adjustments-disclosure > summary h4 { margin-block: 0; line-height: 1.1; }
+.staff-app--kitchen .checkout-panel--table .checkout-adjustments-disclosure[open] > summary { margin-bottom: 3px; }
+.staff-app--kitchen .checkout-panel--table .checkout-adjustments { grid-template-columns: minmax(0, 1fr); gap: 2px; }
+.staff-app--kitchen .checkout-panel--table .checkout-adjustment-row { display: grid; grid-template-columns: minmax(76px, 92px) minmax(0, 1fr); gap: 5px; align-items: center; min-height: 34px; }
+.staff-app--kitchen .checkout-panel--table .checkout-adjustment-label { grid-column: 1; margin: 0; font-size: 11px; white-space: nowrap; }
+.staff-app--kitchen .checkout-panel--table .checkout-adjustment-fields { grid-column: 2; min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, .8fr) minmax(52px, auto); gap: 3px; align-items: center; }
+.staff-app--kitchen .checkout-panel--table .checkout-adjustment-fields label { min-width: 0; display: flex; align-items: center; gap: 2px; }
+.staff-app--kitchen .checkout-panel--table .checkout-adjustment-fields label span { font-size: 9px; white-space: nowrap; }
+.staff-app--kitchen .checkout-panel--table .checkout-adjustment-row input { min-height: 32px; padding: 2px 4px; font-size: 12px; }
+.staff-app--kitchen .checkout-panel--table .checkout-adjustment-fields output { min-width: 52px; padding: 0 2px; font-size: 10px; }
+.staff-app--kitchen .checkout-panel--table .checkout-adjustment-row--optional { grid-template-columns: minmax(0, 1fr); }
+.staff-app--kitchen .checkout-panel--table .checkout-other-fields { grid-template-columns: minmax(0, 1fr) minmax(0, .8fr) auto; gap: 3px; }
+.staff-app--kitchen .checkout-panel--table .checkout-add-other { position: static; justify-self: start; min-height: 26px; padding: 0 5px; font-size: 10px; }
+.staff-app--kitchen .checkout-panel--table .checkout-editor__actions { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; margin-top: 4px; }
+.staff-app--kitchen .checkout-panel--table .checkout-editor__actions > .button--primary { grid-column: auto; }
+.staff-app--kitchen .checkout-panel--table .checkout-editor__actions .button { min-height: 40px; padding-inline: 3px; font-size: 11px; line-height: 1.1; }

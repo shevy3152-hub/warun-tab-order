@@ -5,7 +5,7 @@ import { DatabaseSync } from 'node:sqlite';
 
 export const LEGACY_SCHEMA_VERSION = 1;
 export const SESSION_SCHEMA_VERSION = 2;
-export const SCHEMA_VERSION = 13;
+export const SCHEMA_VERSION = 14;
 
 export const REQUIRED_TABLES = Object.freeze([
   'system_state',
@@ -135,6 +135,9 @@ export const DEFAULT_V13_MIGRATION_PATH = resolve(
   '..',
   'docs',
   'schema-v13-migration.sql',
+);
+export const DEFAULT_V14_MIGRATION_PATH = resolve(
+  moduleDirectory, '..', '..', '..', 'docs', 'schema-v14-migration.sql',
 );
 
 export class DatabaseInitializationError extends Error {
@@ -483,6 +486,14 @@ function migrateSchemaV12ToV13(database, migrationPath) {
   }
 }
 
+function migrateSchemaV13ToV14(database, migrationPath) {
+  try { database.exec(readFileSync(migrationPath, 'utf8')); }
+  catch (error) {
+    try { if (database.isTransaction) database.exec('ROLLBACK;'); } catch {}
+    throw new DatabaseInitializationError('MIGRATION_FAILED', 'The order-item price adjustment migration failed.', { cause: error });
+  }
+}
+
 function migrateSchemaV1ToV2(database) {
   let transactionOpen = false;
   try {
@@ -673,10 +684,13 @@ function validateSchema(database) {
   assertRequiredNames(schemaObjectNames(database, 'table'), REQUIRED_TABLES, 'tables');
   assertRequiredNames(schemaObjectNames(database, 'index'), REQUIRED_INDEXES, 'indexes');
   assertRequiredNames(schemaObjectNames(database, 'trigger'), REQUIRED_TRIGGERS, 'triggers');
+  assertRequiredNames(schemaObjectNames(database, 'table'), ['order_item_price_adjustments'], 'tables');
+  assertRequiredNames(schemaObjectNames(database, 'index'), ['idx_order_item_price_adjustments_item'], 'indexes');
   assertRequiredNames(tableColumns(database, 'categories'), ['section_key'], 'categories columns');
   assertRequiredNames(tableColumns(database, 'menu_items'), ['ordering_mode'], 'menu_items columns');
   assertRequiredNames(tableColumns(database, 'menu_item_variants'), ['temperature_options_json'], 'menu_item_variants columns');
-  assertRequiredNames(tableColumns(database, 'order_items'), ['temperature_snapshot'], 'order_items columns');
+  assertRequiredNames(tableColumns(database, 'order_items'), ['temperature_snapshot', 'adjusted_unit_price_yen'], 'order_items columns');
+  assertRequiredNames(tableColumns(database, 'order_item_price_adjustments'), ['adjustment_id', 'order_id', 'order_item_id', 'previous_unit_price_yen', 'adjusted_unit_price_yen', 'quantity', 'created_at_ms', 'actor_device_id'], 'order item price adjustment columns');
   assertRequiredNames(
     tableColumns(database, 'business_hours'),
     ['open_minutes', 'close_minutes', 'last_order_minutes', 'is_visible', 'version', 'updated_at_ms'],
@@ -708,7 +722,7 @@ function validateSchema(database) {
     'checkout adjustment columns',
   );
   assertRequiredNames(tableColumns(database, 'payment_records'), ['payment_record_id', 'checkout_request_id', 'table_session_id', 'table_id', 'payment_method', 'confirmed_total_yen', 'paid_at_ms', 'status', 'voided_at_ms', 'void_reason', 'version', 'created_at_ms', 'updated_at_ms'], 'payment record columns');
-  assertRequiredNames(tableColumns(database, 'payment_order_items'), ['payment_order_item_id', 'payment_record_id', 'order_id', 'order_item_id', 'formal_name_snapshot', 'unit_price_yen_snapshot', 'quantity', 'line_total_yen', 'sort_order'], 'payment order item columns');
+  assertRequiredNames(tableColumns(database, 'payment_order_items'), ['payment_order_item_id', 'payment_record_id', 'order_id', 'order_item_id', 'formal_name_snapshot', 'unit_price_yen_snapshot', 'adjusted_unit_price_yen', 'current_unit_price_yen', 'quantity', 'line_total_yen', 'sort_order'], 'payment order item columns');
   assertRequiredNames(tableColumns(database, 'payment_adjustments'), ['payment_adjustment_id', 'payment_record_id', 'kind', 'label', 'amount_yen', 'sort_order'], 'payment adjustment columns');
   assertRequiredNames(schemaObjectNames(database, 'index'), ['idx_payment_records_paid_at', 'idx_payment_records_session', 'idx_payment_order_items_record_sort', 'idx_payment_adjustments_record_sort'], 'indexes');
 
@@ -796,6 +810,7 @@ export function initializeDatabase({
   v11MigrationPath = DEFAULT_V11_MIGRATION_PATH,
   v12MigrationPath = DEFAULT_V12_MIGRATION_PATH,
   v13MigrationPath = DEFAULT_V13_MIGRATION_PATH,
+  v14MigrationPath = DEFAULT_V14_MIGRATION_PATH,
 } = {}) {
   const resolvedDatabasePath = resolveFilePath(databasePath, 'databasePath');
   const resolvedSchemaPath = resolveFilePath(schemaPath, 'schemaPath');
@@ -810,6 +825,7 @@ export function initializeDatabase({
   const resolvedV11MigrationPath = resolveFilePath(v11MigrationPath, 'v11MigrationPath');
   const resolvedV12MigrationPath = resolveFilePath(v12MigrationPath, 'v12MigrationPath');
   const resolvedV13MigrationPath = resolveFilePath(v13MigrationPath, 'v13MigrationPath');
+  const resolvedV14MigrationPath = resolveFilePath(v14MigrationPath, 'v14MigrationPath');
 
   mkdirSync(dirname(resolvedDatabasePath), { recursive: true });
 
@@ -888,6 +904,11 @@ export function initializeDatabase({
     }
     if (currentVersion === 12) {
       migrateSchemaV12ToV13(database, resolvedV13MigrationPath);
+      enableWriteAheadLogging(database);
+      currentVersion = 13;
+    }
+    if (currentVersion === 13) {
+      migrateSchemaV13ToV14(database, resolvedV14MigrationPath);
       enableWriteAheadLogging(database);
       currentVersion = SCHEMA_VERSION;
     }

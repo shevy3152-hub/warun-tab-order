@@ -15,7 +15,7 @@ test('safe-copy launcher refuses production and derives LAN URL at runtime', () 
   assert.match(script, /X-Warun-Database-Target/);
   assert.match(script, /healthBody\.schemaVersion -ne \$TargetSchemaVersion/);
   assert.match(script, /Test-SupportedSafeCopySchema/);
-  assert.match(script, /TargetSchemaVersion = 13/);
+  assert.match(script, /TargetSchemaVersion = 14/);
   assert.match(script, /SchemaVersion -eq \$TargetSchemaVersion -or \$SchemaVersion -eq \(\$TargetSchemaVersion - 1\)/);
   assert.match(script, /migrationRequired = \(\$schemaVersion -eq \(\$TargetSchemaVersion - 1\)\)/);
   assert.match(script, /migration required \(schema v\$\(\$TargetSchemaVersion - 1\) -> v\$TargetSchemaVersion\)/);
@@ -65,7 +65,7 @@ test('safe-copy launcher refuses production and derives LAN URL at runtime', () 
 
   assert.match(adminLauncher, /\[string\]\$ProjectRoot/);
   assert.match(adminLauncher, /Start-Process -FilePath 'powershell\.exe'/);
-  assert.match(adminLauncher, /TargetSchemaVersion = 13/);
+  assert.match(adminLauncher, /TargetSchemaVersion = 14/);
   assert.match(adminLauncher, /schemaVersion -eq \$TargetSchemaVersion/);
   assert.match(adminLauncher, /ReleaseMutex/);
   assert.match(shortcutInstaller, /open-admin\.ps1/);

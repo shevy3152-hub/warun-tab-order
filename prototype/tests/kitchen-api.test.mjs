@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { cancelKitchenCheckout, closeKitchenTableSession, fetchKitchenCheckoutRequests, fetchKitchenOrderHistory, fetchKitchenOrders, fetchKitchenPaymentHistory, fetchKitchenSnapshot, kitchenApiConfigured, markKitchenItemServed, payKitchenCheckout, readyKitchenCheckout, saveKitchenCheckoutAdjustments, voidKitchenPayment } from "../src/kitchen-api.js";
+import { adjustKitchenItemUnitPrice, cancelKitchenCheckout, closeKitchenTableSession, fetchKitchenCheckoutRequests, fetchKitchenOrderHistory, fetchKitchenOrders, fetchKitchenPaymentHistory, fetchKitchenSnapshot, kitchenApiConfigured, markKitchenItemServed, payKitchenCheckout, readyKitchenCheckout, saveKitchenCheckoutAdjustments, voidKitchenPayment } from "../src/kitchen-api.js";
 
 const TOKEN = "fixture-kitchen-runtime-token";
 
@@ -72,6 +72,24 @@ test("kitchen serving update uses the same runtime token", async () => {
   assert.equal(calls[0].url, "http://192.168.1.10:5173/v1/kitchen/order-items/serve");
   assert.equal(calls[0].options.headers.Authorization, `Bearer ${TOKEN}`);
   assert.deepEqual(JSON.parse(calls[0].options.body), { orderId: "order-1", orderItemId: 11 });
+});
+
+test("kitchen item price adjustment posts only the selected order row", async () => {
+  const calls = [];
+  const env = environment(async (url, options) => {
+    calls.push({ url, options });
+    return { ok: true, async json() { return { orders: [{ orderId: "order-1" }] }; } };
+  });
+
+  const result = await adjustKitchenItemUnitPrice({ env, orderId: "order-1", orderItemId: "11", unitPriceYen: 350 });
+  assert.equal(result.orderId, "order-1");
+  assert.equal(calls[0].url, "http://192.168.1.10:5173/v1/kitchen/order-items/price");
+  assert.equal(calls[0].options.method, "POST");
+  assert.equal(calls[0].options.headers.Authorization, `Bearer ${TOKEN}`);
+  assert.deepEqual(JSON.parse(calls[0].options.body), { orderId: "order-1", orderItemId: 11, unitPriceYen: 350 });
+
+  const rejectedEnv = environment(async () => ({ ok: false, status: 400, async json() { return { error: { code: "PRICE_CEILING_EXCEEDED" } }; } }));
+  await assert.rejects(adjustKitchenItemUnitPrice({ env: rejectedEnv, orderId: "order-1", orderItemId: 11, unitPriceYen: 501 }), (error) => error.code === "PRICE_CEILING_EXCEEDED");
 });
 
 test("kitchen snapshot exposes open sessions and close uses the runtime token", async () => {
