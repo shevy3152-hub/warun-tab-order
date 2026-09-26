@@ -558,19 +558,35 @@ test('customer snapshot contains no orders or staff calls', async () => {
 
 test('kitchen snapshot returns active orders with immutable item snapshots', async () => {
   await withFixture(({ database, repository, principals }) => {
-    createOrder(database, {
+    const created = createOrder(database, {
       items: [
         { menuItemId: 'edamame', quantity: 2 },
         { menuItemId: 'beer', quantity: 1 },
       ],
     });
+    database.prepare('UPDATE order_items SET adjusted_unit_price_yen = 300 WHERE order_id = ? AND menu_item_id = ?')
+      .run(created.order.orderId, 'edamame');
+    database.prepare('UPDATE order_items SET adjusted_unit_price_yen = 0 WHERE order_id = ? AND menu_item_id = ?')
+      .run(created.order.orderId, 'beer');
     const result = repository.getSnapshotOrders(principals.kitchen);
     assert.equal(result.activeOrders.length, 1);
-    assert.equal(result.activeOrders[0].totalAmountYen, 1440);
+    assert.equal(result.activeOrders[0].totalAmountYen, 600);
     const edamame = result.activeOrders[0].items.find((item) => item.menuItemId === 'edamame');
     assert.equal(edamame.formalNameSnapshot, '枝豆（塩ゆで）');
     assert.equal(edamame.kitchenAliasSnapshot, '枝豆');
     assert.equal(edamame.unitPriceYenSnapshot, 380);
+    assert.equal(edamame.adjustedUnitPriceYen, 300);
+    assert.equal(edamame.currentUnitPriceYen, 300);
+    assert.equal(edamame.lineTotalYenSnapshot, 760);
+    assert.equal(edamame.lineTotalYen, 600);
+    const beer = result.activeOrders[0].items.find((item) => item.menuItemId === 'beer');
+    assert.equal(beer.adjustedUnitPriceYen, 0);
+    assert.equal(beer.lineTotalYen, 0);
+    assert.equal(database.prepare('SELECT total_amount_yen FROM orders WHERE order_id = ?').get(created.order.orderId).total_amount_yen, 1440);
+    assert.deepEqual(database.prepare('SELECT menu_item_id, unit_price_yen_snapshot, line_total_yen FROM order_items WHERE order_id = ? ORDER BY menu_item_id').all(created.order.orderId).map((row) => ({ ...row })), [
+      { menu_item_id: 'beer', unit_price_yen_snapshot: 680, line_total_yen: 680 },
+      { menu_item_id: 'edamame', unit_price_yen_snapshot: 380, line_total_yen: 760 },
+    ]);
     assert.equal(result.lastEventId, 1);
   });
 });

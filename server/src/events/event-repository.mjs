@@ -4,6 +4,7 @@ import {
   EVENT_ERROR_CODES,
   EventRepositoryError,
 } from './event-errors.mjs';
+import { orderItemAmounts, sumCurrentOrderItemTotals } from '../orders/order-pricing.mjs';
 
 const DEVICE_ROLES = Object.freeze(['customer', 'kitchen', 'admin']);
 const DEFAULT_SCAN_LIMIT = 200;
@@ -126,13 +127,17 @@ function projectEvent(row, device) {
 }
 
 function mapOrderItem(row) {
+  const amounts = orderItemAmounts(row);
   const item = {
     orderItemId: row.order_item_id,
     formalNameSnapshot: row.formal_name_snapshot,
     kitchenAliasSnapshot: row.kitchen_alias_snapshot,
-    unitPriceYenSnapshot: row.unit_price_yen_snapshot,
-    quantity: row.quantity,
-    lineTotalYen: row.line_total_yen,
+    unitPriceYenSnapshot: amounts.unitPriceYenSnapshot,
+    adjustedUnitPriceYen: amounts.adjustedUnitPriceYen,
+    currentUnitPriceYen: amounts.currentUnitPriceYen,
+    quantity: amounts.quantity,
+    lineTotalYenSnapshot: amounts.lineTotalYenSnapshot,
+    lineTotalYen: amounts.lineTotalYen,
     isServed: row.is_served === 1,
   };
   if (row.menu_item_id !== null) item.menuItemId = row.menu_item_id;
@@ -147,16 +152,17 @@ function mapOrderItem(row) {
 }
 
 function mapOrder(row, itemRows) {
+  const items = itemRows.map(mapOrderItem);
   const order = {
     orderId: row.order_id,
     clientOrderId: row.client_order_id,
     tableId: row.table_id,
     tableNumberSnapshot: row.table_number_snapshot,
     status: row.status,
-    totalAmountYen: row.total_amount_yen,
+    totalAmountYen: sumCurrentOrderItemTotals(items),
     acceptedAtMs: row.accepted_at_ms,
     version: row.version,
-    items: itemRows.map(mapOrderItem),
+    items,
   };
   if (row.session_id !== null && row.session_id !== undefined) order.sessionId = row.session_id;
   if (row.completed_at_ms !== null) order.completedAtMs = row.completed_at_ms;
@@ -280,6 +286,7 @@ export function createEventRepository({ database } = {}) {
           formal_name_snapshot,
           kitchen_alias_snapshot,
           unit_price_yen_snapshot,
+          adjusted_unit_price_yen,
           quantity,
           line_total_yen,
           is_served,

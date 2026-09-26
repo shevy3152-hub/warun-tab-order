@@ -133,6 +133,16 @@ test('automatic customer-to-kitchen-to-history flow uses one SQLite order', asyn
     assert.equal(adjustedOrder.items[0].lineTotalYen, 700);
     assert.equal(adjustedOrder.items[0].lineTotalYenSnapshot, 760);
     assert.equal(adjustedOrder.totalAmountYen, 700);
+    const refreshedKitchenSnapshot = await fetch(`${origin}/v1/snapshot`, { headers: { Authorization: `Bearer ${KITCHEN_TOKEN}` } }).then((response) => response.json());
+    assert.equal(refreshedKitchenSnapshot.activeOrders[0].items[0].adjustedUnitPriceYen, 350);
+    assert.equal(refreshedKitchenSnapshot.activeOrders[0].items[0].currentUnitPriceYen, 350);
+    assert.equal(refreshedKitchenSnapshot.activeOrders[0].items[0].lineTotalYenSnapshot, 760);
+    assert.equal(refreshedKitchenSnapshot.activeOrders[0].items[0].lineTotalYen, 700);
+    assert.equal(refreshedKitchenSnapshot.activeOrders[0].totalAmountYen, 700);
+    assert.deepEqual({ ...connection.database.prepare('SELECT unit_price_yen_snapshot, line_total_yen FROM order_items').get() }, {
+      unit_price_yen_snapshot: 380,
+      line_total_yen: 760,
+    });
     assert.equal(connection.database.prepare('SELECT COUNT(*) AS count FROM event_log').get().count, 2);
     const serve = await fetch(`${origin}/v1/kitchen/order-items/serve`, {
       method: 'POST',

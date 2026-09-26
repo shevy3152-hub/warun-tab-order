@@ -10,6 +10,7 @@ import {
   SNAPSHOT_ERROR_CODES,
   SnapshotServiceError,
 } from './snapshot-errors.mjs';
+import { orderItemAmounts, sumCurrentOrderItemTotals } from '../orders/order-pricing.mjs';
 
 const DEVICE_ROLES = Object.freeze(['customer', 'kitchen', 'admin']);
 const DEFAULT_MAX_ATTEMPTS = 3;
@@ -186,13 +187,19 @@ function projectMenu(role, source) {
 
 function projectOrderItem(source) {
   const value = requireObject(source);
+  const amounts = orderItemAmounts(value);
   const item = {
     orderItemId: requireInteger(value.orderItemId, 1),
     formalNameSnapshot: requireString(value.formalNameSnapshot),
     kitchenAliasSnapshot: requireString(value.kitchenAliasSnapshot),
-    unitPriceYenSnapshot: requireInteger(value.unitPriceYenSnapshot),
-    quantity: requireInteger(value.quantity, 1),
-    lineTotalYen: requireInteger(value.lineTotalYen),
+    unitPriceYenSnapshot: requireInteger(amounts.unitPriceYenSnapshot),
+    adjustedUnitPriceYen: amounts.adjustedUnitPriceYen === null
+      ? null
+      : requireInteger(amounts.adjustedUnitPriceYen),
+    currentUnitPriceYen: requireInteger(amounts.currentUnitPriceYen),
+    quantity: requireInteger(amounts.quantity, 1),
+    lineTotalYenSnapshot: requireInteger(amounts.lineTotalYenSnapshot),
+    lineTotalYen: requireInteger(amounts.lineTotalYen),
     isServed: requireBoolean(value.isServed),
   };
   optionalString(item, 'menuItemId', value.menuItemId);
@@ -208,16 +215,19 @@ function projectOrderItem(source) {
 
 function projectOrder(source) {
   const value = requireObject(source);
+  const items = requireArray(value.items).map(projectOrderItem);
+  const totalAmountYen = requireInteger(value.totalAmountYen);
+  if (sumCurrentOrderItemTotals(items) !== totalAmountYen) throw new InvalidSnapshotCandidate();
   const order = {
     orderId: requireString(value.orderId),
     clientOrderId: requireString(value.clientOrderId),
     tableId: requireInteger(value.tableId, 1),
     tableNumberSnapshot: requireInteger(value.tableNumberSnapshot, 1),
     status: requireString(value.status),
-    totalAmountYen: requireInteger(value.totalAmountYen),
+    totalAmountYen,
     acceptedAtMs: requireInteger(value.acceptedAtMs),
     version: requireInteger(value.version, 1),
-    items: requireArray(value.items).map(projectOrderItem),
+    items,
   };
   if (Object.hasOwn(value, 'sessionId')) order.sessionId = requireString(value.sessionId);
   optionalInteger(order, 'completedAtMs', value.completedAtMs);

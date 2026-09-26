@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 
 import { authorizeDeviceRole } from '../auth/device-auth.mjs';
 import { ORDER_ERROR_CODES, OrderRepositoryError } from './order-errors.mjs';
+import { createOrderPricingRepository, orderItemAmounts, sumCurrentOrderItemTotals } from './order-pricing.mjs';
 
 const FINGERPRINT_VERSION = 1;
 const MAX_ITEMS = 50;
@@ -232,7 +233,7 @@ function mapOrderRow(row, items) {
     tableId: row.table_id,
     tableNumberSnapshot: row.table_number_snapshot,
     status: row.status,
-    totalAmountYen: items.reduce((sum, item) => sum + item.lineTotalYen, 0),
+    totalAmountYen: sumCurrentOrderItemTotals(items),
     acceptedAtMs: row.accepted_at_ms,
     completedAtMs: row.completed_at_ms,
     version: row.version,
@@ -245,18 +246,19 @@ function mapOrderRow(row, items) {
 }
 
 function mapOrderItemRow(row) {
+  const amounts = orderItemAmounts(row);
   const item = {
     orderItemId: row.order_item_id,
     lineIndex: row.line_index,
     menuItemId: row.menu_item_id,
     formalNameSnapshot: row.formal_name_snapshot,
     kitchenAliasSnapshot: row.kitchen_alias_snapshot,
-    unitPriceYenSnapshot: row.unit_price_yen_snapshot,
-    adjustedUnitPriceYen: row.adjusted_unit_price_yen ?? null,
-    currentUnitPriceYen: row.adjusted_unit_price_yen ?? row.unit_price_yen_snapshot,
-    quantity: row.quantity,
-    lineTotalYenSnapshot: row.line_total_yen,
-    lineTotalYen: (row.adjusted_unit_price_yen ?? row.unit_price_yen_snapshot) * row.quantity,
+    unitPriceYenSnapshot: amounts.unitPriceYenSnapshot,
+    adjustedUnitPriceYen: amounts.adjustedUnitPriceYen,
+    currentUnitPriceYen: amounts.currentUnitPriceYen,
+    quantity: amounts.quantity,
+    lineTotalYenSnapshot: amounts.lineTotalYenSnapshot,
+    lineTotalYen: amounts.lineTotalYen,
     isServed: row.is_served === 1,
     servedAtMs: row.served_at_ms,
   };
@@ -287,6 +289,7 @@ export function createOrderRepository({ database, now = Date.now, idFactory = ra
     );
   }
 
+  const orderPricing = createOrderPricingRepository(database);
   let closed = false;
   let statements;
 
@@ -1203,11 +1206,7 @@ export function createOrderRepository({ database, now = Date.now, idFactory = ra
       statements.updateAdjustedUnitPrice.run(unitPriceYen, changedAtMs, orderItemId, normalizedOrderId);
       statements.insertPriceAdjustment.run(normalizedOrderId, orderItemId, previous, unitPriceYen, target.quantity, changedAtMs, principal.deviceId);
       if (checkout?.status === 'requested') {
-        const total = Number(database.prepare(`
-          SELECT COALESCE(SUM(COALESCE(oi.adjusted_unit_price_yen, oi.unit_price_yen_snapshot) * oi.quantity), 0) AS total
-          FROM orders AS o JOIN order_items AS oi ON oi.order_id = o.order_id
-          WHERE o.session_id = ? AND o.status IN ('new', 'active', 'completed')
-        `).get(target.session_id).total);
+        const total = orderPricing.getSessionTotalYen(target.session_id);
         statements.updateRequestedCheckoutTotal.run(total, changedAtMs, checkout.checkout_request_id);
       }
       const epoch = statements.findSystemState.get()?.event_epoch;

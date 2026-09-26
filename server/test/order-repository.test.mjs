@@ -320,15 +320,36 @@ test('creates a new order and returns created', async () => {
 test('per-line price adjustments obey the order snapshot ceiling, persist, and update a requested checkout total', async () => {
   await withFixture(({ database, openAdditionalConnection }) => {
     const customer = issuePrincipal(database, DEVICE_A, 1).principal;
+    const otherCustomer = issuePrincipal(database, DEVICE_B, 2).principal;
     const kitchen = issuePrincipal(database, DEVICE_KITCHEN, 5).principal;
     const orders = makeRepository(database);
+    const otherOrders = makeRepository(database, { orderIds: [uuid(204)] });
+    const priorOrder = otherOrders.createOrder(orderRequest({
+      clientOrderId: CLIENT_ORDER_C,
+      authenticatedDeviceId: DEVICE_B,
+      items: [{ menuItemId: 'beer', quantity: 2 }],
+    })).order;
+    const checkout = createCheckoutRepository({ database, now: () => FIXED_NOW });
+    const priorCheckoutId = uuid(902);
+    checkout.createCheckout({ principal: otherCustomer, checkoutRequestId: priorCheckoutId, receiptRequested: false });
+    orders.markItemServed({ principal: kitchen, orderId: priorOrder.orderId, orderItemId: priorOrder.items[0].orderItemId });
+    const priorReady = checkout.ready({ principal: kitchen, checkoutRequestId: priorCheckoutId, expectedVersion: 1 });
+    const priorPayment = checkout.pay({
+      principal: kitchen,
+      checkoutRequestId: priorCheckoutId,
+      expectedVersion: priorReady.request.version,
+      paymentMethod: 'cash',
+    }).payment;
+    const priorPaymentItems = database.prepare('SELECT * FROM payment_order_items WHERE payment_record_id = ? ORDER BY payment_order_item_id')
+      .all(priorPayment.paymentRecordId).map((row) => ({ ...row }));
+    const priorPaymentRecord = { ...database.prepare('SELECT * FROM payment_records WHERE payment_record_id = ?').get(priorPayment.paymentRecordId) };
+
     const created = orders.createOrder(orderRequest({ items: [{ menuItemId: 'edamame', quantity: 3 }] })).order;
     const itemId = created.items[0].orderItemId;
     database.prepare("UPDATE menu_items SET price_yen = 900 WHERE menu_item_id = 'edamame'").run();
     const laterOrder = orders.createOrder(orderRequest({ clientOrderId: CLIENT_ORDER_B, items: [{ menuItemId: 'edamame', quantity: 1 }] })).order;
     assert.equal(laterOrder.items[0].unitPriceYenSnapshot, 900);
     assert.equal(laterOrder.items[0].currentUnitPriceYen, 900);
-    const checkout = createCheckoutRepository({ database, now: () => FIXED_NOW });
     checkout.createCheckout({ principal: customer, checkoutRequestId: uuid(901), receiptRequested: false });
 
     const atCeiling = orders.adjustItemUnitPrice({ principal: kitchen, orderId: created.orderId, orderItemId: itemId, unitPriceYen: 380 });
@@ -344,16 +365,44 @@ test('per-line price adjustments obey the order snapshot ceiling, persist, and u
     assert.equal(database.prepare('SELECT price_yen FROM menu_items WHERE menu_item_id = ?').get('edamame').price_yen, 900);
     assert.equal(database.prepare('SELECT ordered_items_total_yen FROM checkout_requests WHERE checkout_request_id = ?').get(uuid(901)).ordered_items_total_yen, 1800);
     assert.equal(database.prepare('SELECT adjusted_unit_price_yen FROM order_items WHERE order_item_id = ?').get(laterOrder.items[0].orderItemId).adjusted_unit_price_yen, null);
+    assert.equal(database.prepare('SELECT total_amount_yen FROM orders WHERE order_id = ?').get(created.orderId).total_amount_yen, 1140);
+    assert.deepEqual(database.prepare('SELECT * FROM payment_order_items WHERE payment_record_id = ? ORDER BY payment_order_item_id')
+      .all(priorPayment.paymentRecordId).map((row) => ({ ...row })), priorPaymentItems);
+    assert.deepEqual({ ...database.prepare('SELECT * FROM payment_records WHERE payment_record_id = ?').get(priorPayment.paymentRecordId) }, priorPaymentRecord);
 
     orders.markItemServed({ principal: kitchen, orderId: created.orderId, orderItemId: itemId });
+    orders.markItemServed({ principal: kitchen, orderId: laterOrder.orderId, orderItemId: laterOrder.items[0].orderItemId });
     const reopened = openAdditionalConnection();
     const reopenedOrders = makeRepository(reopened);
     const persisted = reopenedOrders.getHistory(kitchen).find((order) => order.orderId === created.orderId);
     assert.equal(persisted.items[0].currentUnitPriceYen, 300);
     assert.equal(persisted.items[0].lineTotalYen, 900);
+    assert.equal(persisted.items[0].lineTotalYenSnapshot, 1140);
+    assert.equal(persisted.totalAmountYen, 900);
     reopenedOrders.close();
+
+    const ready = checkout.ready({ principal: kitchen, checkoutRequestId: uuid(901), expectedVersion: 2 });
+    assert.equal(ready.request.orderedItemsTotalYen, 1800);
+    const paid = checkout.pay({
+      principal: kitchen,
+      checkoutRequestId: uuid(901),
+      expectedVersion: ready.request.version,
+      paymentMethod: 'cash',
+    }).payment;
+    assert.equal(paid.confirmedTotalYen, 1800);
+    assert.deepEqual(paid.orderItems.map((item) => item.lineTotalYen), [900, 900]);
+    assert.deepEqual(paid.orderItems.map((item) => item.unitPriceYenSnapshot), [380, 900]);
+    assert.deepEqual({ ...database.prepare('SELECT unit_price_yen_snapshot, line_total_yen, adjusted_unit_price_yen FROM order_items WHERE order_item_id = ?').get(itemId) }, {
+      unit_price_yen_snapshot: 380,
+      line_total_yen: 1140,
+      adjusted_unit_price_yen: 300,
+    });
+    assert.deepEqual(database.prepare('SELECT * FROM payment_order_items WHERE payment_record_id = ? ORDER BY payment_order_item_id')
+      .all(priorPayment.paymentRecordId).map((row) => ({ ...row })), priorPaymentItems);
+    assert.deepEqual({ ...database.prepare('SELECT * FROM payment_records WHERE payment_record_id = ?').get(priorPayment.paymentRecordId) }, priorPaymentRecord);
     checkout.close();
     orders.close();
+    otherOrders.close();
   });
 });
 

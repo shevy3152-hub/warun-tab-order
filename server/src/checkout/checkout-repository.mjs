@@ -2,9 +2,9 @@ import { randomUUID } from 'node:crypto';
 
 import { authorizeDeviceRole } from '../auth/device-auth.mjs';
 import { CHECKOUT_ERROR_CODES, CheckoutRepositoryError } from './checkout-errors.mjs';
+import { createOrderPricingRepository } from '../orders/order-pricing.mjs';
 
 const UUID_V4_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const BILLABLE_ORDER_STATUSES = Object.freeze(['new', 'active', 'completed']);
 const ADJUSTMENT_KINDS = new Set(['seat_charge', 'late_night_charge', 'extension_charge', 'other']);
 const PAYMENT_METHODS = new Set(['cash', 'card', 'qr', 'other']);
 
@@ -155,6 +155,7 @@ function normalizeAdjustments(adjustments) {
 export function createCheckoutRepository({ database, now = Date.now, idFactory = randomUUID } = {}) {
   if (!database || typeof database.prepare !== 'function' || typeof database.exec !== 'function' || typeof now !== 'function' || typeof idFactory !== 'function') throw new TypeError('A database, clock, and ID factory are required.');
   let closed = false;
+  const orderPricing = createOrderPricingRepository(database);
   const findRequest = database.prepare('SELECT * FROM checkout_requests WHERE checkout_request_id = ?');
   const findAdjustments = database.prepare('SELECT * FROM checkout_adjustments WHERE checkout_request_id = ? ORDER BY sort_order, adjustment_id');
   const findPayment = database.prepare('SELECT * FROM payment_records WHERE payment_record_id = ?');
@@ -194,28 +195,10 @@ export function createCheckoutRepository({ database, now = Date.now, idFactory =
     `).get(deviceId);
   }
   function orderTotal(sessionId) {
-    const placeholders = BILLABLE_ORDER_STATUSES.map(() => '?').join(', ');
-    const row = database.prepare(`
-      SELECT COALESCE(SUM(COALESCE(oi.adjusted_unit_price_yen, oi.unit_price_yen_snapshot) * oi.quantity), 0) AS total
-      FROM orders AS o
-      JOIN order_items AS oi ON oi.order_id = o.order_id
-      WHERE o.session_id = ? AND o.status IN (${placeholders})
-    `).get(sessionId, ...BILLABLE_ORDER_STATUSES);
-    return Number(row?.total ?? 0);
+    return orderPricing.getSessionTotalYen(sessionId);
   }
   function orderRows(sessionId) {
-    const placeholders = BILLABLE_ORDER_STATUSES.map(() => '?').join(', ');
-    return database.prepare(`
-      SELECT o.order_id, oi.order_item_id, oi.formal_name_snapshot, oi.variant_name_snapshot,
-             oi.variant_volume_snapshot, oi.temperature_snapshot, oi.serving_option_name_snapshot,
-             oi.unit_price_yen_snapshot, oi.adjusted_unit_price_yen,
-             COALESCE(oi.adjusted_unit_price_yen, oi.unit_price_yen_snapshot) AS current_unit_price_yen,
-             oi.quantity, COALESCE(oi.adjusted_unit_price_yen, oi.unit_price_yen_snapshot) * oi.quantity AS line_total_yen
-      FROM orders AS o
-      JOIN order_items AS oi ON oi.order_id = o.order_id
-      WHERE o.session_id = ? AND o.status IN (${placeholders})
-      ORDER BY o.accepted_at_ms, o.order_id, oi.line_index, oi.order_item_id
-    `).all(sessionId, ...BILLABLE_ORDER_STATUSES);
+    return orderPricing.getSessionOrderItems(sessionId);
   }
   function orderFingerprint(sessionId) {
     return JSON.stringify(orderRows(sessionId).map((row) => [
