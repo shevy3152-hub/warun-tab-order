@@ -795,3 +795,22 @@
 - 本worktreeの最終対象はtracked 27ファイルとschema v15／v16 migration 2ファイル。既存差分を保全して1つのローカル機能commitにまとめる。safe-copy、実DB、既存checkoutには接続・変更せず、migrationは未適用。pushなし。
 
 次: migration適用やsafe-copy反映が必要になった場合は、対象環境・backup・復旧手順を別途確認してから実施する。
+
+## 厨房左レール折り畳み・展開 2026-09-27
+
+- 厨房画面だけに赤い左レールの開閉ボタンを追加。折り畳み中も新着注文・注文／会計履歴・設定／管理のナビゲーション、スタッフ呼出、接続状態、時刻をアイコンとアクセシブル名で利用可能。厨房以外の共有バッジ挙動は変更しない。
+- localhost隔離previewで開閉と再展開を操作し、ナビゲーション、スタッフ呼出、接続状態が残ることを確認。表示された無加工キャプチャ上で、折り畳み時にレールの要素が重ならないことを確認した。ただし利用中のブラウザー操作面ではCSS viewport寸法を指定できず、1280×800／1637×602の正確な画面受入は未達。キャプチャを切り抜き・リサイズして寸法を偽装していない。キャプチャはローカルPNGとして保存していない。
+- 検証: `node --test tests/kitchen-order-board.test.mjs` 8/8、Vite production build 4,585 modules、Sites build preparation、inline-client生成。pnpm installのignored esbuild build-script guardがあるため、既存の固定バージョンesbuild binaryを指定し既存Vite／生成scriptを直接実行。正確な画面viewportでの見切れは未検証。
+- API・DB・schema・checkout・safe-copy・実環境は変更していない。migration適用、注文／会計操作、commit、pushなし。隔離worktreeの実装・テスト・記録のみ。
+
+次: CSS viewportを直接指定できる隔離ブラウザーで1280×800と1637×602の無加工画面を撮影し、開閉時の見切れを確認する。
+
+## 厨房左レール実幅修正・最終画面受入 2026-09-27
+
+- 折り畳み指定が後段の厨房レイアウト規則に負けていたため、折り畳みgrid列の詳細度を上げ、左レール自身にも `width: 78px` と `min-width: 0` を指定。ラベル非表示だけでなく、実際のレール幅を展開250px／折り畳み78pxにした。折り畳み時の厨房main開始位置はx=78pxとなり、幅は172px増加（1280 viewportで1030→1202px、1637 viewportで1387→1559px）。
+- PlaywrightでCSS viewportを1280×800／1637×602、DPR 1に直接設定して撮影。4枚ともviewport全体の無加工PNGで、切り抜き・リサイズなし。ファイル: `qa/kitchen-rail-width-fixed-expanded-1280x800.png`、`qa/kitchen-rail-width-fixed-collapsed-1280x800.png`、`qa/kitchen-rail-width-fixed-expanded-1637x602.png`、`qa/kitchen-rail-width-fixed-collapsed-1637x602.png`。実幅、メイン位置、横overflow、レール内各要素の矩形を確認し、見切れなし。
+- 折り畳み中も新着注文バッジ数3、履歴・管理への遷移、スタッフ呼出パネル、通信状態、時刻を確認。呼出は表示後に閉じ、送信していない。隔離ブラウザーでAPI／外部URL要求4件を遮断し、実API・DBへ接続していない。先行QA画像は保全し、幅修正後の証跡には上記 `-fixed-` 画像を使う。
+- 検証: kitchen order board 9/9（78px列とsidebar実幅制約の回帰テストを含む）、Vite build 4,585 modules、Sites build preparation／inline-client、Sites 4/4、`git diff --check` PASS。通常 `pnpm run build` は実行前のEPERMで停止したため、隔離worktree内の既存Viteとbuild scriptを使って生成物を作成。
+- API、DB、schema、checkout、safe-copy、checkout／production環境は変更なし。QA previewは停止しport 5197閉鎖を確認。commit／pushなし。
+
+次: commit／pushやsafe-copy反映などの配布作業は別途明示依頼を待つ。

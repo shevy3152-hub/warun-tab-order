@@ -103,3 +103,22 @@ visual result: DOM geometry confirms that quantity controls and price-save actio
 - 架空demoデータのみを表示し、キャンセル・数量変更・注文送信は行っていない。ブラウザーとViteは停止済み。監査履歴が複数行ある状態のブラウザー表示は別途未確認で、関連するAPI／保存／lock動作は隔離テストで検証済み。
 
 visual result: passed — six unmodified viewport captures at 1280×800 and 1637×602.
+
+## 厨房左レール折り畳み・展開 2026-09-27
+
+- 厨房画面の赤い左レールに開閉操作を追加。展開状態では従来どおり項目名を表示し、折り畳み状態でも厨房・履歴・設定／管理へ遷移可能。スタッフ呼出、通信状態、時刻も残し、アイコンにアクセシブル名を保持する。
+- localhostの隔離previewで展開→折り畳み→再展開を実操作し、ナビゲーションとスタッフ情報へのアクセスが維持されることを確認した。取得できたブラウザー画像はそのまま目視した。会計・提供・キャンセル等の操作はしていない。
+- 正確なCSS viewport overrideが利用できず、1280×800と1637×602での無加工スクリーンショット／見切れ確認は未達。キャプチャの切り抜き・リサイズで代替せず、画像ファイルとしても保存していない。従って本項目では両viewportの視覚受入をPASS扱いにしない。
+
+visual result: partial — expand/collapse interaction and retained navigation/status verified in isolated preview; target viewport sizing and clipping acceptance remain unverified.
+
+## 厨房左レール実幅修正・画面受入 2026-09-27
+
+- 折り畳み時のgrid列とsidebarの実幅が後段の厨房grid規則により250pxのままだった不具合を修正。展開時250px、折り畳み時78px。main領域はx=250からx=78へ移動し、利用可能幅が172px増えることをブラウザー上の矩形で測定。
+- 1280×800と1637×602のCSS viewportをPlaywrightで直接設定、DPR 1、`fullPage: false`のviewport PNGを取得。切り抜き・リサイズは行っていない。展開／折り畳みの4画像: `qa/kitchen-rail-width-fixed-expanded-1280x800.png`、`qa/kitchen-rail-width-fixed-collapsed-1280x800.png`、`qa/kitchen-rail-width-fixed-expanded-1637x602.png`、`qa/kitchen-rail-width-fixed-collapsed-1637x602.png`。PNG実寸も各指定サイズと一致。
+- 折り畳み時も新着注文・履歴・設定／管理のナビ、通知数3、スタッフ呼出ボタン、通信状態アイコン、時計がレール内／viewport内に収まり、呼出パネルと履歴・管理遷移へアクセス可能。document/bodyの横overflowなし。厨房テーブル列の横スクロールは既存仕様どおり。
+- 既存の `kitchen-rail-toggle-*` QA PNGは削除・上書きしていない。これらは実幅修正前の記録として保持し、最終の幅判定は本項の `-fixed-` PNGで行う。直前の部分受入記録は履歴として残し、本項で完了へ更新。
+- 検証: `node --test tests/kitchen-order-board.test.mjs` 9/9、Vite build 4,585 modules、Sites build preparation、inline-client、Sites worker 4/4、`git diff --check` PASS。pnpm launcherはEPERMでbuild前に停止したため、既存Vite build／Sites scriptを隔離worktree内で実行。PlaywrightでAPI／外部要求4件を遮断。page errorなし。
+- localhostの隔離previewは終了し、port 5197が閉じていることを確認。API、DB、schema、checkout、safe-copy、実環境、commit、pushは変更・実施していない。
+
+visual result: passed — exact 1280×800 and 1637×602 CSS viewports, DPR 1; sidebar measured 250px expanded and 78px collapsed, with main content gaining 172px.

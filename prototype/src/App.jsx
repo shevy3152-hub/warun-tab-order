@@ -531,9 +531,9 @@ function Brand({ compact = false }) {
   );
 }
 
-function ConnectionBadge({ online = true, compact = false }) {
+function ConnectionBadge({ online = true, compact = false, announceStatus = false }) {
   return (
-    <div className={`connection ${online ? "is-online" : "is-offline"} ${compact ? "connection--compact" : ""}`}>
+    <div className={`connection ${online ? "is-online" : "is-offline"} ${compact ? "connection--compact" : ""}`} role={announceStatus ? "status" : undefined} aria-label={announceStatus ? `通信状態：${online ? "接続中" : "送信待ち"}` : undefined} title={announceStatus ? `通信状態：${online ? "接続中" : "送信待ち"}` : undefined}>
       {online ? <WifiHigh size={22} weight="bold" /> : <WifiSlash size={22} weight="bold" />}
       <span><small>通信状態</small>{online ? "接続中" : "送信待ち"}</span>
     </div>
@@ -1404,13 +1404,26 @@ const adminNavItems = [
 function StaffShell({ route, title, subtitle, state, children, right, status = null, newOrderCount = 0 }) {
   const isKitchen = route === "/kitchen";
   const isAdmin = route.startsWith("/admin");
+  const [kitchenRailCollapsed, setKitchenRailCollapsed] = useState(false);
   const businessHours = usePublicBusinessHours(!isKitchen);
   const navItems = isAdmin ? adminNavItems : staffNavItems;
   return (
-    <div className={`staff-app ${isKitchen ? "staff-app--kitchen" : ""} ${isAdmin ? "staff-app--admin" : ""}`}>
-      <aside className="staff-sidebar">
+    <div className={`staff-app ${isKitchen ? "staff-app--kitchen" : ""} ${isAdmin ? "staff-app--admin" : ""} ${isKitchen && kitchenRailCollapsed ? "staff-app--kitchen-rail-collapsed" : ""}`}>
+      <aside className="staff-sidebar" aria-label={isKitchen ? "厨房レール" : undefined}>
         {isKitchen ? null : <Brand />}
-        <nav>{navItems.map((item) => <button key={item.route} className={route.startsWith(item.route) ? "is-active" : ""} onClick={() => navigate(item.route)}><item.icon size={30} weight="bold" /><span>{item.label}</span>{item.route === "/kitchen" && newOrderCount ? <b className="badge">{newOrderCount}</b> : null}</button>)}</nav>
+        {isKitchen ? <button
+          type="button"
+          className="kitchen-rail-toggle"
+          aria-label={kitchenRailCollapsed ? "厨房レールを展開" : "厨房レールを折りたたむ"}
+          title={kitchenRailCollapsed ? "厨房レールを展開" : "厨房レールを折りたたむ"}
+          aria-expanded={!kitchenRailCollapsed}
+          aria-controls="kitchen-staff-navigation"
+          onClick={() => setKitchenRailCollapsed((collapsed) => !collapsed)}
+        >
+          {kitchenRailCollapsed ? <ArrowRight size={22} weight="bold" /> : <ArrowLeft size={22} weight="bold" />}
+          <span>{kitchenRailCollapsed ? "展開" : "レールを閉じる"}</span>
+        </button> : null}
+        <nav id={isKitchen ? "kitchen-staff-navigation" : undefined} aria-label={isKitchen ? "厨房ナビゲーション" : undefined}>{navItems.map((item) => <button key={item.route} className={route.startsWith(item.route) ? "is-active" : ""} aria-label={isKitchen ? item.label : undefined} aria-current={isKitchen && route.startsWith(item.route) ? "page" : undefined} title={isKitchen ? item.label : undefined} onClick={() => navigate(item.route)}><item.icon size={30} weight="bold" /><span className={isKitchen ? "staff-sidebar__nav-label" : undefined}>{item.label}</span>{item.route === "/kitchen" && newOrderCount ? <b className="badge">{newOrderCount}</b> : null}</button>)}</nav>
         {isKitchen ? <div className="staff-sidebar__status">{status}</div> : <BusinessHoursText settings={businessHours} className="hours" />}
       </aside>
       <main className="staff-main">
@@ -1827,7 +1840,7 @@ function KitchenScreen({ state, updateState, apiState, checkoutState, onServe, o
   };
 
   const resolveCall = (callId) => updateState((current) => ({ ...current, staffCalls: current.staffCalls.map((call) => call.id === callId ? { ...call, resolvedAt: new Date().toISOString() } : call) }));
-  return <StaffShell route="/kitchen" title="新着注文" subtitle="未提供の注文をテーブルごとに表示します。提供完了後も来店・注文履歴は保持されます。" state={state} newOrderCount={activeOrders.length} status={<div className="staff-topbar__right"><button className="staff-call-button" onClick={() => setCallPanel(true)}><Bell size={26} weight="fill" /> スタッフ呼出 {activeCalls.length ? <b>{activeCalls.length}</b> : null}</button><ConnectionBadge online /><time className="kitchen-clock">{formatTime(new Date())}</time></div>}>
+  return <StaffShell route="/kitchen" title="新着注文" subtitle="未提供の注文をテーブルごとに表示します。提供完了後も来店・注文履歴は保持されます。" state={state} newOrderCount={activeOrders.length} status={<div className="staff-topbar__right"><button type="button" className="staff-call-button" aria-label="スタッフ呼出" title="スタッフ呼出" onClick={() => setCallPanel(true)}><Bell size={26} weight="fill" /><span className="kitchen-sidebar__call-label">スタッフ呼出</span> {activeCalls.length ? <b>{activeCalls.length}</b> : null}</button><ConnectionBadge online announceStatus /><time className="kitchen-clock" aria-label={`現在時刻 ${formatTime(new Date())}`}>{formatTime(new Date())}</time></div>}>
     <section className="kitchen-content">
       {apiMode && apiState.loading ? <div className="kitchen-empty"><p>注文を読み込み中です。</p></div> : null}
       {apiMode && apiState.error ? <div className="kitchen-empty" role="alert"><p>注文情報を取得できません。</p></div> : null}

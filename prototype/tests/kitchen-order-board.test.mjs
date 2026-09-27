@@ -178,3 +178,37 @@ test("kitchen markup prioritizes live horizontal table slots and keeps histories
   assert.match(styles, /\.staff-app--kitchen \.staff-sidebar__status \.staff-topbar__right/);
   assert.match(styles, /\.staff-app--kitchen \.table-panel__orders \{ flex: none; min-height: 0; overflow: visible;/);
 });
+
+test("kitchen red rail collapses without removing navigation or staff status access", async () => {
+  const app = await readFile(new URL("../src/App.jsx", import.meta.url), "utf8");
+  const styles = await readFile(new URL("../src/styles.css", import.meta.url), "utf8");
+  const shell = app.slice(app.indexOf("function StaffShell"), app.indexOf("function checkoutStatusLabel"));
+  const kitchenScreen = app.slice(app.indexOf('function KitchenScreen'), app.indexOf('function HistoryScreen'));
+
+  assert.match(shell, /const \[kitchenRailCollapsed, setKitchenRailCollapsed\] = useState\(false\)/);
+  assert.match(shell, /className="kitchen-rail-toggle"/);
+  assert.match(shell, /aria-expanded=\{!kitchenRailCollapsed\}/);
+  assert.match(shell, /aria-controls="kitchen-staff-navigation"/);
+  assert.match(shell, /setKitchenRailCollapsed\(\(collapsed\) => !collapsed\)/);
+  assert.match(shell, /staff-app--kitchen-rail-collapsed/);
+  assert.match(shell, /aria-label=\{isKitchen \? item\.label : undefined\}/);
+  assert.match(app, /route: "\/history", label: "注文・会計履歴"/);
+  assert.match(app, /route: "\/admin\/menu", label: "設定・管理"/);
+  assert.match(kitchenScreen, /aria-label="スタッフ呼出"/);
+  assert.match(kitchenScreen, /<ConnectionBadge online announceStatus \/>/);
+  assert.match(app, /role=\{announceStatus \? "status" : undefined\}/);
+  assert.match(styles, /\.staff-app\.staff-app--kitchen\.staff-app--kitchen-rail-collapsed \{ grid-template-columns: 78px minmax\(0, 1fr\); \}/);
+  assert.match(styles, /staff-app\.staff-app--kitchen-rail-collapsed \.staff-sidebar nav button \{ min-height: 56px; grid-template-columns: minmax\(0, 1fr\)/);
+  assert.match(styles, /staff-app\.staff-app--kitchen-rail-collapsed \.staff-sidebar__status \.staff-topbar__right \{[^}]*display: flex; flex-direction: column;/);
+  assert.match(styles, /staff-app\.staff-app--kitchen-rail-collapsed \.staff-sidebar__status \.connection > span \{ position: absolute;/);
+});
+
+test("collapsed kitchen rail uses a fixed 78px sidebar width", async () => {
+  const styles = await readFile(new URL("../src/styles.css", import.meta.url), "utf8");
+  const collapsedSidebar = styles.match(/\.staff-app\.staff-app--kitchen-rail-collapsed \.staff-sidebar \{([^}]*)\}/);
+
+  assert.match(styles, /\.staff-app\.staff-app--kitchen\.staff-app--kitchen-rail-collapsed \{ grid-template-columns: 78px minmax\(0, 1fr\); \}/);
+  assert.ok(collapsedSidebar, "collapsed kitchen sidebar override must exist");
+  assert.match(collapsedSidebar[1], /\bwidth:\s*78px;/);
+  assert.match(collapsedSidebar[1], /\bmin-width:\s*0;/);
+});
