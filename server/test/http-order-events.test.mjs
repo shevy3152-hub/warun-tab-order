@@ -251,6 +251,26 @@ function closeSession(port, token, body) {
   });
 }
 
+function changeOrderItemCancellation(port, token, operation, body) {
+  return request({
+    port,
+    path: `/v1/kitchen/order-items/${operation}`,
+    method: 'POST',
+    headers: { ...bearer(token), ...JSON_HEADERS },
+    body: JSON.stringify(body),
+  });
+}
+
+function adjustOrderItemQuantity(port, token, body) {
+  return request({
+    port,
+    path: '/v1/kitchen/order-items/quantity',
+    method: 'POST',
+    headers: { ...bearer(token), ...JSON_HEADERS },
+    body: JSON.stringify(body),
+  });
+}
+
 function assertError(response, statusCode, code, message = undefined) {
   assert.equal(response.statusCode, statusCode);
   assert.equal(response.json.error.code, code);
@@ -543,6 +563,129 @@ test('kitchen can serve items, complete orders, and expose them to admin history
     const history = await request({ port, path: '/v1/admin/order-history', headers: bearer(ADMIN_TOKEN) });
     assert.equal(history.statusCode, 200);
     assert.equal(history.json.orders[0].orderId, stored.order_id);
+  });
+});
+
+test('kitchen/admin cancellation routes retain history and reject customers and partial quantities', async () => {
+  await withFixture(async ({ port, database }) => {
+    const created = await postOrder(port, CUSTOMER_A_TOKEN, orderBody(uuid(1_111), [{ menuItemId: 'edamame', quantity: 2 }]));
+    const orderId = database.prepare('SELECT order_id FROM orders LIMIT 1').get().order_id;
+    const item = database.prepare('SELECT order_item_id FROM order_items WHERE order_id = ?').get(orderId);
+
+    const customerAttempt = await changeOrderItemCancellation(port, CUSTOMER_A_TOKEN, 'cancel', { orderId, orderItemId: item.order_item_id });
+    assertError(customerAttempt, 403, 'AUTHORIZATION_FAILED');
+    const partialAttempt = await changeOrderItemCancellation(port, KITCHEN_TOKEN, 'cancel', { orderId, orderItemId: item.order_item_id, quantity: 1 });
+    assertError(partialAttempt, 400, 'BAD_REQUEST');
+
+    const cancelled = await changeOrderItemCancellation(port, ADMIN_TOKEN, 'cancel', { orderId, orderItemId: item.order_item_id });
+    assert.equal(cancelled.statusCode, 200);
+    assert.equal(cancelled.json.orders[0].status, 'cancelled');
+    assert.equal(cancelled.json.orders[0].totalAmountYen, 0);
+    assert.equal(cancelled.json.orders[0].items[0].currentBillableAmountYen, 0);
+    assert.equal(cancelled.json.orders[0].items[0].isCancelled, true);
+    assert.equal(cancelled.json.orders[0].items[0].cancellationHistory.length, 1);
+    assert.equal(cancelled.headers['idempotency-result'], 'created');
+    assert.equal(database.prepare('SELECT status FROM orders WHERE order_id = ?').get(orderId).status, 'new');
+
+    const history = await request({ port, path: '/v1/admin/order-history', headers: bearer(ADMIN_TOKEN) });
+    assert.equal(history.json.orders.some((order) => order.orderId === orderId && order.status === 'cancelled'), true);
+    const restored = await changeOrderItemCancellation(port, ADMIN_TOKEN, 'restore', { orderId, orderItemId: item.order_item_id });
+    assert.equal(restored.statusCode, 200);
+    assert.equal(restored.json.orders[0].status, 'new');
+    assert.equal(restored.json.orders[0].totalAmountYen, 760);
+    assert.equal(restored.json.orders[0].items[0].isCancelled, false);
+    assert.deepEqual(restored.json.orders[0].items[0].cancellationHistory.map((event) => event.action), ['cancelled', 'restored']);
+    assert.equal(database.prepare('SELECT COUNT(*) AS count FROM order_item_cancellation_events WHERE order_item_id = ?').get(item.order_item_id).count, 2);
+  });
+});
+
+test('kitchen quantity endpoint creates audited additional rows and rejects unconfirmed zero', async () => {
+  await withFixture(async ({ port, database }) => {
+    await postOrder(port, CUSTOMER_A_TOKEN, orderBody(uuid(1_112), [{ menuItemId: 'edamame', quantity: 2 }]));
+    const source = database.prepare('SELECT order_id FROM orders LIMIT 1').get();
+    const sourceItem = database.prepare('SELECT order_item_id FROM order_items WHERE order_id = ?').get(source.order_id);
+    const base = { orderId: source.order_id, orderItemId: sourceItem.order_item_id };
+
+    const customerAttempt = await adjustOrderItemQuantity(port, CUSTOMER_A_TOKEN, {
+      ...base, direction: 'decrease', operationId: uuid(1_130), expectedBillableQuantity: 2,
+    });
+    assertError(customerAttempt, 403, 'AUTHORIZATION_FAILED');
+    assert.equal(count(database, 'order_item_quantity_events'), 0);
+
+    const decreased = await adjustOrderItemQuantity(port, KITCHEN_TOKEN, {
+      ...base, direction: 'decrease', operationId: uuid(1_130), expectedBillableQuantity: 2,
+    });
+    assert.equal(decreased.statusCode, 200, decreased.rawBody);
+    assert.equal(decreased.json.orders[0].items[0].quantity, 2);
+    assert.equal(decreased.json.orders[0].items[0].quantityReduced, 1);
+    assert.equal(decreased.json.orders[0].items[0].billableQuantity, 1);
+    assert.equal(decreased.json.orders[0].items[0].lineTotalYen, 380);
+    assert.equal(decreased.json.orders[0].items[0].quantityHistory[0].action, 'decreased');
+
+    const replayedDecrease = await adjustOrderItemQuantity(port, KITCHEN_TOKEN, {
+      ...base, direction: 'decrease', operationId: uuid(1_130), expectedBillableQuantity: 2,
+    });
+    assert.equal(replayedDecrease.statusCode, 200);
+    assert.equal(replayedDecrease.headers['idempotency-result'], 'replayed');
+    assert.equal(database.prepare('SELECT COUNT(*) AS count FROM order_item_quantity_events WHERE operation_id = ?').get(uuid(1_130)).count, 1);
+    const conflictingDecrease = await adjustOrderItemQuantity(port, KITCHEN_TOKEN, {
+      ...base, direction: 'decrease', operationId: uuid(1_130), expectedBillableQuantity: 1,
+    });
+    assertError(conflictingDecrease, 409, 'ORDER_CONFLICT');
+    assert.equal(database.prepare('SELECT COUNT(*) AS count FROM order_item_quantity_events WHERE operation_id = ?').get(uuid(1_130)).count, 1);
+
+    const added = await adjustOrderItemQuantity(port, KITCHEN_TOKEN, {
+      ...base, direction: 'increase', operationId: uuid(1_131), expectedBillableQuantity: 1,
+    });
+    assert.equal(added.statusCode, 200);
+    assert.equal(added.headers['idempotency-result'], 'created');
+    assert.equal(count(database, 'orders'), 2);
+    const kitchenOrder = database.prepare("SELECT order_id, client_order_id, order_origin, created_by_device_id FROM orders WHERE order_origin = 'kitchen_addition'").get();
+    assert.equal(kitchenOrder.client_order_id, uuid(1_131));
+    assert.equal(kitchenOrder.created_by_device_id, KITCHEN_ID);
+    const addedItem = database.prepare('SELECT quantity, is_served, unit_price_yen_snapshot FROM order_items WHERE order_id = ?').get(kitchenOrder.order_id);
+    assert.equal(addedItem.quantity, 1);
+    assert.equal(addedItem.is_served, 0);
+    assert.equal(addedItem.unit_price_yen_snapshot, 380);
+    const sourceEvent = database.prepare('SELECT action, related_order_id FROM order_item_quantity_events WHERE action = ?').get('added');
+    assert.equal(sourceEvent.related_order_id, kitchenOrder.order_id);
+
+    const zeroWithoutConfirmation = await adjustOrderItemQuantity(port, KITCHEN_TOKEN, {
+      orderId: kitchenOrder.order_id,
+      orderItemId: database.prepare('SELECT order_item_id FROM order_items WHERE order_id = ?').get(kitchenOrder.order_id).order_item_id,
+      direction: 'decrease', operationId: uuid(1_132), expectedBillableQuantity: 1,
+    });
+    assertError(zeroWithoutConfirmation, 409, 'ORDER_CONFLICT');
+    assert.equal(database.prepare('SELECT is_cancelled FROM order_items WHERE order_id = ?').get(kitchenOrder.order_id).is_cancelled, 0);
+
+    const confirmedZero = await adjustOrderItemQuantity(port, KITCHEN_TOKEN, {
+      orderId: kitchenOrder.order_id,
+      orderItemId: database.prepare('SELECT order_item_id FROM order_items WHERE order_id = ?').get(kitchenOrder.order_id).order_item_id,
+      direction: 'decrease', operationId: uuid(1_132), expectedBillableQuantity: 1,
+      confirmZero: true,
+    });
+    assert.equal(confirmedZero.statusCode, 200);
+    assert.equal(confirmedZero.json.orders[0].items[0].isCancelled, true);
+    assert.equal(confirmedZero.json.orders[0].items[0].cancellationHistory[0].reason, null);
+    assert.equal(confirmedZero.json.orders[0].items[0].cancellationHistory[0].operationId, uuid(1_132));
+    const replayedZero = await adjustOrderItemQuantity(port, KITCHEN_TOKEN, {
+      orderId: kitchenOrder.order_id,
+      orderItemId: database.prepare('SELECT order_item_id FROM order_items WHERE order_id = ?').get(kitchenOrder.order_id).order_item_id,
+      direction: 'decrease', operationId: uuid(1_132), expectedBillableQuantity: 1,
+      confirmZero: true,
+    });
+    assert.equal(replayedZero.statusCode, 200);
+    assert.equal(replayedZero.headers['idempotency-result'], 'replayed');
+    assert.equal(database.prepare('SELECT COUNT(*) AS count FROM order_item_cancellation_events WHERE operation_id = ?').get(uuid(1_132)).count, 1);
+    const conflictingZero = await adjustOrderItemQuantity(port, KITCHEN_TOKEN, {
+      orderId: kitchenOrder.order_id,
+      orderItemId: database.prepare('SELECT order_item_id FROM order_items WHERE order_id = ?').get(kitchenOrder.order_id).order_item_id,
+      direction: 'decrease', operationId: uuid(1_132), expectedBillableQuantity: 1,
+      confirmZero: true, reason: '異なるpayload',
+    });
+    assertError(conflictingZero, 409, 'ORDER_CONFLICT');
+    assert.equal(database.prepare('SELECT COUNT(*) AS count FROM order_item_cancellation_events WHERE operation_id = ?').get(uuid(1_132)).count, 1);
+    assert.equal(database.prepare('SELECT COUNT(*) AS count FROM order_items').get().count, 2);
   });
 });
 

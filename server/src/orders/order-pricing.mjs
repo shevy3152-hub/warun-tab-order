@@ -9,6 +9,9 @@ export function orderItemAmounts(row) {
   const adjustedValue = valueFrom(row, 'adjustedUnitPriceYen', 'adjusted_unit_price_yen');
   const adjustedUnitPriceYen = adjustedValue == null ? null : Number(adjustedValue);
   const quantity = Number(row.quantity);
+  const quantityReducedValue = valueFrom(row, 'quantityReduced', 'quantity_reduced');
+  const quantityReduced = quantityReducedValue == null ? 0 : Number(quantityReducedValue);
+  const billableQuantity = Math.max(0, quantity - quantityReduced);
   const currentUnitPriceYen = adjustedUnitPriceYen ?? unitPriceYenSnapshot;
   const snapshotLineTotalValue = row.lineTotalYenSnapshot
     ?? row.line_total_yen_snapshot
@@ -21,8 +24,10 @@ export function orderItemAmounts(row) {
     adjustedUnitPriceYen,
     currentUnitPriceYen,
     quantity,
+    quantityReduced,
+    billableQuantity,
     lineTotalYenSnapshot: Number(snapshotLineTotalValue),
-    lineTotalYen: currentUnitPriceYen * quantity,
+    lineTotalYen: currentUnitPriceYen * billableQuantity,
   };
 }
 
@@ -55,6 +60,8 @@ export function createOrderPricingRepository(database) {
       oi.unit_price_yen_snapshot,
       oi.adjusted_unit_price_yen,
       oi.quantity,
+      oi.quantity_reduced,
+      oi.is_cancelled,
       oi.line_total_yen
     FROM orders AS o
     JOIN order_items AS oi ON oi.order_id = o.order_id
@@ -64,12 +71,14 @@ export function createOrderPricingRepository(database) {
 
   function getSessionOrderItems(sessionId) {
     return findSessionOrderItems.all(sessionId, ...BILLABLE_ORDER_STATUSES)
-      .filter((row) => !isOrderItemCancelled(row))
+      .filter((row) => !isOrderItemCancelled(row) && orderItemAmounts(row).billableQuantity > 0)
       .map((row) => {
         const amounts = orderItemAmounts(row);
         return {
           ...row,
           current_unit_price_yen: amounts.currentUnitPriceYen,
+          quantity_reduced: amounts.quantityReduced,
+          billable_quantity: amounts.billableQuantity,
           line_total_yen_snapshot: amounts.lineTotalYenSnapshot,
           line_total_yen: amounts.lineTotalYen,
         };

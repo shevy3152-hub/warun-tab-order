@@ -23,8 +23,8 @@ import {
 import { createClientOrderId, createCustomerOrderClient, CustomerCheckoutError, resolveOrderApiConfig } from "./order-outbox.js";
 import { claimCustomerDevice, createIndexedDbCredentialStore, loadOrCreateCustomerDevice, pairingClaimErrorMessage, runtimeForCustomerCredentials } from "./device-credentials.js";
 import { customerOrderErrorCategory, customerOrderNoticeFromOutboxEvent } from "./customer-order-notice.js";
-import { AdminPairingError, configuredAdminToken, createAdminRideGuidanceContact, deleteAdminRideGuidanceContact, fetchAdminBusinessHours, fetchAdminDiagnostics, fetchAdminMenu, fetchAdminOrderHistory, fetchAdminPaymentHistory, fetchAdminPairingPreflight, fetchAdminRideGuidance, issueCustomerPairingCode, revokeAdminDevice, saveAdminBusinessHours, saveAdminImageLayouts, saveAdminCategory, saveAdminMenuItem, saveAdminMenuOrdering, saveAdminRideGuidanceOrdering, saveAdminRideGuidancePickup, updateAdminRideGuidanceContact, voidAdminPayment } from "./admin-pairing.js";
-import { adjustKitchenItemUnitPrice, cancelKitchenCheckout, closeKitchenTableSession, fetchKitchenCheckoutRequests, fetchKitchenOrderHistory, fetchKitchenPaymentHistory, fetchKitchenSnapshot, kitchenApiConfigured, KitchenApiError, markKitchenItemServed, payKitchenCheckout, readyKitchenCheckout, saveKitchenCheckoutAdjustments, subscribeKitchenInvalidations, voidKitchenPayment } from "./kitchen-api.js";
+import { AdminPairingError, configuredAdminToken, createAdminRideGuidanceContact, deleteAdminRideGuidanceContact, fetchAdminBusinessHours, fetchAdminCheckoutRequests, fetchAdminDiagnostics, fetchAdminMenu, fetchAdminOrderHistory, fetchAdminPaymentHistory, fetchAdminPairingPreflight, fetchAdminRideGuidance, issueCustomerPairingCode, revokeAdminDevice, saveAdminBusinessHours, saveAdminImageLayouts, saveAdminCategory, saveAdminMenuItem, saveAdminMenuOrdering, saveAdminRideGuidanceOrdering, saveAdminRideGuidancePickup, updateAdminRideGuidanceContact, voidAdminPayment } from "./admin-pairing.js";
+import { adjustKitchenItemUnitPrice, adjustKitchenOrderItemQuantity as adjustKitchenItemQuantityRequest, cancelKitchenCheckout, cancelKitchenOrderItem, closeKitchenTableSession, fetchKitchenCheckoutRequests, fetchKitchenOrderHistory, fetchKitchenPaymentHistory, fetchKitchenSnapshot, kitchenApiConfigured, KitchenApiError, markKitchenItemServed, payKitchenCheckout, readyKitchenCheckout, restoreKitchenOrderItem, saveKitchenCheckoutAdjustments, subscribeKitchenInvalidations, voidKitchenPayment } from "./kitchen-api.js";
 import { buildKitchenTableGroups } from "./kitchen-order-board.js";
 import { bootstrapCustomerOrderClient } from "./customer-bootstrap.js";
 import { taxExcludedYen } from "./pricing.js";
@@ -35,6 +35,16 @@ import { DEFAULT_BUSINESS_HOURS_NOTICE, withBusinessHoursNotice } from "./busine
 import { CHECKOUT_ADJUSTMENT_TYPES, checkoutAdjustmentTotal, normalizeCheckoutAdjustments, parseFixedAdjustment } from "./checkout-adjustments.js";
 
 const STORAGE_KEY = "izakaya-order-prototype-v3";
+
+function createKitchenOperationId() {
+  if (typeof globalThis.crypto?.randomUUID === "function") return globalThis.crypto.randomUUID();
+  if (typeof globalThis.crypto?.getRandomValues !== "function") throw new Error("この端末では数量操作IDを作成できません。");
+  const bytes = globalThis.crypto.getRandomValues(new Uint8Array(16));
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
 
 function formatPairingCode(code) {
   return code.match(/.{1,4}/g)?.join("-") ?? code;
@@ -1522,13 +1532,18 @@ function KitchenCheckoutPanel({ checkouts, sessions, loading, error, onRefresh, 
   </section>;
 }
 
-function KitchenScreen({ state, updateState, apiState, checkoutState, onServe, onSaveItemPrice, onRefreshCheckouts, onSaveCheckout, onReadyCheckout, onCancelCheckout, onPayCheckout }) {
+function KitchenScreen({ state, updateState, apiState, checkoutState, onServe, onSaveItemPrice, onAdjustItemQuantity, onChangeItemCancellation, onRefreshCheckouts, onSaveCheckout, onReadyCheckout, onCancelCheckout, onPayCheckout }) {
   const demoMode = window.WARUN_ORDER_MODE === "demo" || new URLSearchParams(window.location.search).get("demo") === "1";
   const [callPanel, setCallPanel] = useState(false);
   const [priceTarget, setPriceTarget] = useState(null);
   const [priceDraft, setPriceDraft] = useState("");
   const [priceBusy, setPriceBusy] = useState(false);
   const [priceError, setPriceError] = useState("");
+  const [quantityBusy, setQuantityBusy] = useState(false);
+  const [quantityError, setQuantityError] = useState("");
+  const [quantityZeroConfirm, setQuantityZeroConfirm] = useState(false);
+  const [quantityReason, setQuantityReason] = useState("");
+  const [cancellationTarget, setCancellationTarget] = useState(null);
   const [collapsedOrders, setCollapsedOrders] = useState({});
   const [historyState, setHistoryState] = useState({ loading: false, error: false, orders: [] });
   const apiMode = Boolean(apiState);
@@ -1563,6 +1578,7 @@ function KitchenScreen({ state, updateState, apiState, checkoutState, onServe, o
     sessionId: order.sessionId || null,
     createdAt: new Date(order.acceptedAtMs).toISOString(),
     completedAt: order.completedAtMs ? new Date(order.completedAtMs).toISOString() : null,
+    sessionClosedAtMs: order.sessionClosedAtMs ?? null,
     status: order.status,
     totalAmount: order.totalAmountYen,
     items: order.items.map((item) => ({
@@ -1570,9 +1586,16 @@ function KitchenScreen({ state, updateState, apiState, checkoutState, onServe, o
       kitchenAlias: item.kitchenAliasSnapshot, unitPriceYenSnapshot: item.unitPriceYenSnapshot,
       adjustedUnitPriceYen: item.adjustedUnitPriceYen ?? null,
       currentUnitPriceYen: item.currentUnitPriceYen ?? item.unitPriceYenSnapshot,
-      quantity: item.quantity, isServed: item.isServed, servedAt: item.servedAtMs ? new Date(item.servedAtMs).toISOString() : null,
+      currentBillableAmountYen: item.currentBillableAmountYen ?? item.lineTotalYen,
+      quantity: item.quantity, quantityReduced: item.quantityReduced ?? 0,
+      billableQuantity: item.billableQuantity ?? item.quantity,
+      lineTotalYen: item.lineTotalYen, isServed: item.isServed, servedAt: item.servedAtMs ? new Date(item.servedAtMs).toISOString() : null,
+      servedByDeviceId: item.servedByDeviceId ?? null,
+      isCancelled: item.isCancelled === true,
+      cancellationHistory: item.cancellationHistory ?? [],
+      quantityHistory: item.quantityHistory ?? [],
     })),
-  })) : state.orders.filter((order) => order.status === "completed");
+  })) : state.orders.filter((order) => order.status === "completed" || order.status === "cancelled");
   const liveOrders = apiMode ? apiState.orders : state.orders.filter((order) => order.status === "new" || order.status === "active");
   const boardOrders = [...liveOrders, ...historyOrders].map((order) => demoMode && order.tableId === "1" ? { ...order, sessionId: "demo-session-1" } : demoMode && order.tableId === "2" ? { ...order, sessionId: "demo-session-2" } : order);
   const activeOrders = liveOrders.filter((order) => order.status === "new" || order.status === "active");
@@ -1589,12 +1612,160 @@ function KitchenScreen({ state, updateState, apiState, checkoutState, onServe, o
       const orders = current.orders.map((order) => {
         if (order.id !== orderId) return order;
         const items = order.items.map((item) => item.id === itemId ? { ...item, isServed: !item.isServed, servedAt: item.isServed ? null : now } : item);
-        const completed = items.every((item) => item.isServed);
-        const anyServed = items.some((item) => item.isServed);
+        const billableItems = items.filter((item) => !item.isCancelled);
+        const completed = billableItems.length > 0 && billableItems.every((item) => item.isServed);
+        const anyServed = billableItems.some((item) => item.isServed);
         return { ...order, items, status: completed ? "completed" : anyServed ? "active" : "new", completedAt: completed ? now : null };
       });
       return { ...current, orders };
     });
+  };
+
+  const submitQuantityAdjustment = async (direction, confirmZero = false) => {
+    const target = priceTarget;
+    if (!target || target.locked) return;
+    const currentQuantity = Number(target.billableQuantity ?? target.quantity ?? 0);
+    if (!Number.isSafeInteger(currentQuantity) || currentQuantity < 1) return;
+    if (direction === "decrease" && currentQuantity === 1 && !confirmZero) {
+      setQuantityZeroConfirm(true);
+      setQuantityReason("");
+      setQuantityError("");
+      return;
+    }
+    const operationId = createKitchenOperationId();
+    setQuantityBusy(true);
+    setQuantityError("");
+    try {
+      if (apiMode) {
+        await onAdjustItemQuantity({
+          orderId: target.orderId,
+          orderItemId: target.id,
+          direction,
+          operationId,
+          expectedBillableQuantity: currentQuantity,
+          confirmZero,
+          reason: confirmZero ? quantityReason.trim() || null : null,
+        });
+      } else {
+        updateState((current) => {
+          const occurredAtMs = Date.now();
+          let addedOrder = null;
+          const orders = current.orders.map((order) => {
+            if (String(order.id ?? order.orderId) !== target.orderId) return order;
+            const items = order.items.map((item) => {
+              if (String(item.id ?? item.orderItemId) !== String(target.id)) return item;
+              const quantity = Number(item.quantity ?? 0);
+              const quantityReduced = Number(item.quantityReduced ?? 0);
+              const billableQuantity = Number(item.billableQuantity ?? quantity - quantityReduced);
+              const currentUnitPriceYen = Number(item.currentUnitPriceYen ?? item.adjustedUnitPriceYen ?? item.unitPriceYenSnapshot ?? item.unitPriceSnapshot ?? 0);
+              if (direction === "increase") {
+                const relatedOrderId = `demo-added-${operationId}`;
+                const relatedOrderItemId = `demo-item-${operationId}`;
+                addedOrder = {
+                  id: relatedOrderId,
+                  clientOrderId: operationId,
+                  tableId: String(order.tableId),
+                  sessionId: order.sessionId ?? null,
+                  createdAt: new Date(occurredAtMs).toISOString(),
+                  status: "new",
+                  orderOrigin: "kitchen_addition",
+                  totalAmount: currentUnitPriceYen,
+                  items: [{
+                    ...item,
+                    id: relatedOrderItemId,
+                    quantity: 1,
+                    quantityReduced: 0,
+                    billableQuantity: 1,
+                    isServed: false,
+                    isCancelled: false,
+                    servedAt: null,
+                    servedByDeviceId: null,
+                    currentUnitPriceYen,
+                    adjustedUnitPriceYen: null,
+                    unitPriceYenSnapshot: currentUnitPriceYen,
+                    lineTotalYenSnapshot: currentUnitPriceYen,
+                    lineTotalYen: currentUnitPriceYen,
+                    currentBillableAmountYen: currentUnitPriceYen,
+                    cancellationHistory: [],
+                    quantityHistory: [],
+                  }],
+                };
+                return {
+                  ...item,
+                  quantityHistory: [...(item.quantityHistory ?? []), {
+                    eventId: occurredAtMs,
+                    operationId,
+                    action: "added",
+                    quantityDelta: 1,
+                    previousBillableQuantity: billableQuantity,
+                    nextBillableQuantity: billableQuantity,
+                    relatedOrderId,
+                    relatedOrderItemId,
+                    actorLabel: "厨房スタッフ",
+                    occurredAtMs,
+                    isServedSnapshot: item.isServed === true,
+                    servedAtMsSnapshot: item.servedAt ? new Date(item.servedAt).getTime() : null,
+                    servedByDeviceIdSnapshot: item.servedByDeviceId ?? null,
+                  }],
+                };
+              }
+              if (billableQuantity === 1 && confirmZero) {
+                return {
+                  ...item,
+                  isCancelled: true,
+                  currentBillableAmountYen: 0,
+                  cancellationHistory: [...(item.cancellationHistory ?? []), {
+                    eventId: occurredAtMs,
+                    action: "cancelled",
+                    actorLabel: "厨房スタッフ",
+                    occurredAtMs,
+                    reason: quantityReason.trim() || null,
+                    isServedSnapshot: item.isServed === true,
+                    servedAtMsSnapshot: item.servedAt ? new Date(item.servedAt).getTime() : null,
+                  }],
+                };
+              }
+              const nextReduced = quantityReduced + 1;
+              const nextBillable = quantity - nextReduced;
+              return {
+                ...item,
+                quantityReduced: nextReduced,
+                billableQuantity: nextBillable,
+                lineTotalYen: currentUnitPriceYen * nextBillable,
+                currentBillableAmountYen: currentUnitPriceYen * nextBillable,
+                quantityHistory: [...(item.quantityHistory ?? []), {
+                  eventId: occurredAtMs,
+                  operationId,
+                  action: "decreased",
+                  quantityDelta: -1,
+                  previousBillableQuantity: billableQuantity,
+                  nextBillableQuantity: nextBillable,
+                  relatedOrderId: null,
+                  relatedOrderItemId: null,
+                  actorLabel: "厨房スタッフ",
+                  occurredAtMs,
+                  isServedSnapshot: item.isServed === true,
+                  servedAtMsSnapshot: item.servedAt ? new Date(item.servedAt).getTime() : null,
+                  servedByDeviceIdSnapshot: item.servedByDeviceId ?? null,
+                }],
+              };
+            });
+            const billableItems = items.filter((item) => !item.isCancelled && Number(item.billableQuantity ?? item.quantity ?? 0) > 0);
+            const totalAmount = billableItems.reduce((sum, item) => sum + Number(item.currentUnitPriceYen ?? item.adjustedUnitPriceYen ?? item.unitPriceYenSnapshot ?? item.unitPriceSnapshot ?? 0) * Number(item.billableQuantity ?? item.quantity ?? 0), 0);
+            const status = !billableItems.length ? "cancelled" : billableItems.every((item) => item.isServed) ? "completed" : billableItems.some((item) => item.isServed) ? "active" : "new";
+            return { ...order, items, status, totalAmount, totalAmountYen: totalAmount };
+          });
+          return { ...current, orders: addedOrder ? [...orders, addedOrder] : orders };
+        });
+      }
+      setQuantityZeroConfirm(false);
+      setQuantityReason("");
+      setPriceTarget(null);
+    } catch (error) {
+      setQuantityError(error?.status === 409 ? "注文数量または会計状態が更新されています。最新状態を再読み込みしてください。" : error?.message || "数量を変更できませんでした。");
+    } finally {
+      setQuantityBusy(false);
+    }
   };
 
   const saveItemPrice = async () => {
@@ -1610,13 +1781,49 @@ function KitchenScreen({ state, updateState, apiState, checkoutState, onServe, o
       else updateState((current) => ({ ...current, orders: current.orders.map((order) => {
         const orderId = order.id ?? order.orderId;
         if (orderId !== priceTarget.orderId) return order;
-        const items = order.items.map((item) => item.id !== priceTarget.id ? item : { ...item, adjustedUnitPriceYen: nextPrice, currentUnitPriceYen: nextPrice, lineTotalYen: nextPrice * item.quantity });
-        return { ...order, items, totalAmount: items.reduce((sum, item) => sum + Number(item.currentUnitPriceYen ?? item.unitPriceYenSnapshot ?? item.unitPriceSnapshot ?? 0) * item.quantity, 0) };
+        const items = order.items.map((item) => item.id !== priceTarget.id ? item : { ...item, adjustedUnitPriceYen: nextPrice, currentUnitPriceYen: nextPrice, lineTotalYen: nextPrice * Number(item.billableQuantity ?? item.quantity) });
+        return { ...order, items, totalAmount: items.filter((item) => !item.isCancelled).reduce((sum, item) => sum + Number(item.currentUnitPriceYen ?? item.unitPriceYenSnapshot ?? item.unitPriceSnapshot ?? 0) * Number(item.billableQuantity ?? item.quantity), 0) };
       }) }));
       setPriceTarget(null);
     } catch (error) {
       setPriceError(error?.code === "PRICE_CEILING_EXCEEDED" ? "注文時単価を超える変更はできません。" : "単価を保存できませんでした。最新状態を再読み込みしてください。");
     } finally { setPriceBusy(false); }
+  };
+
+  const saveCancellation = async (reason) => {
+    const target = cancellationTarget;
+    if (!target) return;
+    const cancelled = target.action === "cancel";
+    if (apiMode) {
+      await onChangeItemCancellation({ orderId: target.orderId, orderItemId: target.item.id, reason, action: target.action });
+    } else {
+      updateState((current) => ({ ...current, orders: current.orders.map((order) => {
+        if (String(order.id ?? order.orderId) !== target.orderId) return order;
+        const changedAtMs = Date.now();
+        const items = order.items.map((item) => {
+          if (String(item.id ?? item.orderItemId) !== String(target.item.id)) return item;
+          return {
+            ...item,
+            isCancelled: cancelled,
+            cancellationHistory: [...(item.cancellationHistory ?? []), {
+              eventId: changedAtMs,
+              action: cancelled ? "cancelled" : "restored",
+              actorLabel: "厨房スタッフ",
+              occurredAtMs: changedAtMs,
+              reason: reason || null,
+              isServedSnapshot: item.isServed === true,
+              servedAtMsSnapshot: item.servedAt ? new Date(item.servedAt).getTime() : null,
+            }],
+          };
+        });
+        const billableItems = items.filter((item) => !item.isCancelled && Number(item.billableQuantity ?? item.quantity ?? 0) > 0);
+        const status = !billableItems.length ? "cancelled" : billableItems.every((item) => item.isServed) ? "completed" : billableItems.some((item) => item.isServed) ? "active" : "new";
+        const totalAmount = billableItems.reduce((sum, item) => sum + Number(item.currentUnitPriceYen ?? item.adjustedUnitPriceYen ?? item.unitPriceYenSnapshot ?? item.unitPriceSnapshot ?? 0) * Number(item.billableQuantity ?? item.quantity ?? 0), 0);
+        return { ...order, items, status, totalAmount, totalAmountYen: totalAmount };
+      }) }));
+    }
+    await loadHistory();
+    setCancellationTarget(null);
   };
 
   const resolveCall = (callId) => updateState((current) => ({ ...current, staffCalls: current.staffCalls.map((call) => call.id === callId ? { ...call, resolvedAt: new Date().toISOString() } : call) }));
@@ -1627,10 +1834,11 @@ function KitchenScreen({ state, updateState, apiState, checkoutState, onServe, o
       {!apiMode && !tables.length ? <div className="kitchen-empty"><CheckCircle size={54} weight="thin" /><h2>すべて提供済みです</h2><p>新しい注文が届くと、テーブルごとに表示されます。</p></div> : null}
       {tables.length ? <div className="table-scroll">
         {tables.map((table) => {
-          const { tableId, orders, session, isCompletedSide } = table;
+              const { tableId, orders, session, isCompletedSide } = table;
           const sessionId = session?.sessionId;
           const tableCheckouts = activeCheckouts.filter((checkout) => sessions.some((entry) => entry.sessionId === checkout.tableSessionId && String(entry.tableId) === tableId));
           const checkoutPending = tableCheckouts.some((checkout) => checkout.status === "requested");
+          const cancellationLocked = Boolean(!checkoutState || checkoutState.loading || checkoutState.error || session?.closedAtMs || orders.some((order) => order.sessionClosedAtMs) || tableCheckouts.some((checkout) => checkout.status === "ready"));
           const total = orders.reduce((sum, order) => sum + Number(order.totalAmount ?? order.totalAmountYen ?? 0), 0);
           return <article className={`table-panel ${isCompletedSide ? "is-completed-side" : ""}`} key={tableId}>
             <header><h2>テーブル <b>{tableId}</b></h2><span className="table-panel__state">{checkoutPending ? "会計依頼中" : isCompletedSide ? "提供完了" : `${orders.length}件の注文`}</span></header>
@@ -1638,15 +1846,39 @@ function KitchenScreen({ state, updateState, apiState, checkoutState, onServe, o
             {(apiMode || demoMode) && (tableCheckouts.length || checkoutState?.loading || checkoutState?.error) ? <KitchenCheckoutPanel checkouts={tableCheckouts} sessions={sessions} loading={checkoutState?.loading} error={checkoutState?.error} onRefresh={demoMode ? async () => {} : onRefreshCheckouts} onSave={demoMode ? async () => ({}) : onSaveCheckout} onReady={demoMode ? async () => ({}) : onReadyCheckout} onCancel={demoMode ? async () => ({}) : onCancelCheckout} onPay={demoMode ? async () => ({}) : onPayCheckout} tableId={tableId} /> : null}
             <div className="table-panel__orders">
               {orders.map((order) => {
-                const unserved = order.items.filter((item) => !item.isServed);
-                const served = order.items.filter((item) => item.isServed);
+              const orderId = String(order.id ?? order.orderId);
+                const unserved = order.items.filter((item) => !item.isServed && !item.isCancelled && Number(item.billableQuantity ?? item.quantity ?? 0) > 0);
+                const served = order.items.filter((item) => item.isServed && !item.isCancelled && Number(item.billableQuantity ?? item.quantity ?? 0) > 0);
+                const cancelled = order.items.filter((item) => item.isCancelled);
                 const canCollapse = !unserved.length && checkoutPending;
                 const expanded = !collapsedOrders[order.id];
+                const renderItem = (item) => <div className={`order-item-row ${item.isServed ? "is-served" : ""}`} key={item.id}>
+                  <div className={`order-item ${item.isServed ? "is-served" : ""}`}>
+                    <button type="button" className="order-item__name" aria-label={`${kitchenMenuName(item, kitchenAliases)}のキャンセル確認を開く`} onClick={() => setCancellationTarget({ action: "cancel", orderId, item, order })} disabled={cancellationLocked}>
+                      <span><b>{kitchenMenuName(item, kitchenAliases)}</b><small>{Number(item.billableQuantity ?? item.quantity ?? 0)}点</small></span>
+                    </button>
+                    <button type="button" className="order-item__serve" aria-label={`${kitchenMenuName(item, kitchenAliases)}を提供済みにする`} aria-pressed={item.isServed} onClick={() => void toggleServed(orderId, item.id)} disabled={item.isServed || cancellationLocked}><Check size={19} weight="bold" /></button>
+                  </div>
+                  <button type="button" className="order-item-price" aria-label={`${kitchenMenuName(item, kitchenAliases)}の単価と数量を編集`} onClick={() => { setPriceTarget({ ...item, id: item.id, orderId, locked: cancellationLocked }); setPriceDraft(String(item.currentUnitPriceYen ?? item.adjustedUnitPriceYen ?? item.unitPriceYenSnapshot ?? item.unitPriceSnapshot ?? 0)); setPriceError(""); setQuantityError(""); setQuantityZeroConfirm(false); }} disabled={cancellationLocked}>単価 {yen(item.currentUnitPriceYen ?? item.adjustedUnitPriceYen ?? item.unitPriceYenSnapshot ?? item.unitPriceSnapshot ?? 0)}</button>
+                  {item.quantityHistory?.length ? <details className="order-item-quantity-history"><summary>数量操作 {item.quantityHistory.length}件</summary>{item.quantityHistory.map((event) => <p key={event.eventId}>{event.action === "added" ? "追加注文 +1点" : "数量 −1点"}・{event.actorLabel || event.actorDeviceId}・{formatDateTime(new Date(event.occurredAtMs))}・{event.isServedSnapshot ? "操作時：提供済み" : "操作時：未提供"}{event.relatedOrderId ? `・追加注文 ${event.relatedOrderId.slice(0, 8)}` : ""}</p>)}</details> : null}
+                </div>;
                 return <section className={`kitchen-order-card ${order.isDrinkOrder ? "is-drink-order" : ""}`} key={order.id} aria-label={`${order.isDrinkOrder ? "ドリンク注文" : "注文"} ${formatTime(order.createdAt)}`}>
                   <header>{canCollapse ? <button type="button" className="order-details-toggle" aria-expanded={expanded} onClick={() => setCollapsedOrders((current) => ({ ...current, [order.id]: !current[order.id] }))}><b>注文内容を{expanded ? "非表示" : "表示"}</b></button> : <b>{order.isDrinkOrder ? "ドリンク注文" : "注文"}</b>}<time>{formatTime(order.createdAt)}</time><small>{order.items.length}品</small></header>
                   {expanded ? <div className="kitchen-order-card__details">
-                    {unserved.map((item) => <div className="order-item-row" key={item.id}><button className="order-item" onClick={() => void toggleServed(order.id ?? order.orderId, item.id)}><span><b>{kitchenMenuName(item, kitchenAliases)}</b><small>{item.quantity}点</small></span><i><Check size={19} weight="bold" /></i></button><button type="button" className="order-item-price" onClick={() => { setPriceTarget({ ...item, id: item.id, orderId: order.id ?? order.orderId }); setPriceDraft(String(item.currentUnitPriceYen ?? item.adjustedUnitPriceYen ?? item.unitPriceYenSnapshot ?? item.unitPriceSnapshot ?? 0)); setPriceError(""); }}>単価 {yen(item.currentUnitPriceYen ?? item.adjustedUnitPriceYen ?? item.unitPriceYenSnapshot ?? item.unitPriceSnapshot ?? 0)}</button></div>)}
-                    {served.length ? <><div className="served-divider"><span>提供済み</span></div>{served.map((item) => <div className="order-item-row" key={item.id}><button className="order-item is-served" onClick={() => void toggleServed(order.id ?? order.orderId, item.id)}><span><b>{kitchenMenuName(item, kitchenAliases)}</b><small>{item.quantity}点</small></span><i><Check size={19} weight="bold" /></i></button><button type="button" className="order-item-price" onClick={() => { setPriceTarget({ ...item, id: item.id, orderId: order.id ?? order.orderId }); setPriceDraft(String(item.currentUnitPriceYen ?? item.adjustedUnitPriceYen ?? item.unitPriceYenSnapshot ?? item.unitPriceSnapshot ?? 0)); setPriceError(""); }}>単価 {yen(item.currentUnitPriceYen ?? item.adjustedUnitPriceYen ?? item.unitPriceYenSnapshot ?? item.unitPriceSnapshot ?? 0)}</button></div>)}</> : null}
+                    {unserved.map(renderItem)}
+                    {served.length ? <><div className="served-divider"><span>提供済み</span></div>{served.map(renderItem)}</> : null}
+                    {cancelled.length ? <><div className="served-divider cancelled-divider"><span>キャンセル済み</span></div>{cancelled.map((item) => {
+                      const cancellationEvent = item.cancellationHistory?.at(-1);
+                      const cancelledQuantity = cancelledQuantityForDisplay(item);
+                      const currentUnitPrice = Number(item.currentUnitPriceYen ?? item.adjustedUnitPriceYen ?? item.unitPriceYenSnapshot ?? item.unitPriceSnapshot ?? 0);
+                      const excludedAmount = currentUnitPrice * cancelledQuantity;
+                      return <div className="order-item-row order-item-row--cancelled" key={item.id}>
+                        <div className="cancelled-order-item"><b>{kitchenMenuName(item, kitchenAliases)}</b><span>キャンセル済み{cancellationEvent?.operationId ? "（数量0点化）" : ""}・会計から除外 {cancelledQuantity}点／{yen(excludedAmount)}（現在請求 0円）</span>
+                          {item.cancellationHistory?.length ? <details><summary>取消履歴 {item.cancellationHistory.length}件</summary>{item.cancellationHistory.map((event) => <p key={event.eventId}>{event.action === "cancelled" ? event.operationId ? "数量0点化によるキャンセル" : "商品キャンセル" : "キャンセル取消し"}・{event.actorLabel || event.actorDeviceId}・{formatDateTime(new Date(event.occurredAtMs))}{event.reason ? `・理由：${event.reason}` : ""}・提供状態：{event.isServedSnapshot ? "提供済み" : "未提供"}</p>)}</details> : null}
+                        </div>
+                        <button type="button" className="order-item-restore" onClick={() => setCancellationTarget({ action: "restore", orderId, item, order })} disabled={cancellationLocked}>キャンセルを取り消す</button>
+                      </div>;
+                    })}</> : null}
                   </div> : null}
                 </section>;
               })}
@@ -1658,22 +1890,75 @@ function KitchenScreen({ state, updateState, apiState, checkoutState, onServe, o
         })}
       </div> : null}
     </section>
-    {priceTarget ? <Modal title="注文単価の変更" onClose={() => { if (!priceBusy) setPriceTarget(null); }}><p className="modal-lead">{kitchenMenuName(priceTarget, kitchenAliases)}・{priceTarget.quantity}点<br />注文時単価（変更上限）：{yen(priceTarget.unitPriceYenSnapshot ?? priceTarget.unitPriceSnapshot ?? 0)}／現在の単価：{yen(priceTarget.currentUnitPriceYen ?? priceTarget.adjustedUnitPriceYen ?? priceTarget.unitPriceYenSnapshot ?? priceTarget.unitPriceSnapshot ?? 0)}</p><label className="price-adjustment-field">変更後の単価<input aria-label="変更後の単価" type="number" min="0" max={priceTarget.unitPriceYenSnapshot ?? priceTarget.unitPriceSnapshot} step="1" value={priceDraft} onChange={(event) => setPriceDraft(event.target.value)} disabled={priceBusy} />円</label><p className="price-adjustment-total">変更後の行合計：<b>{yen((Number(priceDraft) || 0) * priceTarget.quantity)}</b></p>{priceError ? <p role="alert" className="checkout-feedback checkout-feedback--error">{priceError}</p> : null}<div className="modal-actions"><button type="button" className="button button--quiet" onClick={() => setPriceTarget(null)} disabled={priceBusy}>キャンセル</button><button type="button" className="button button--primary button--large" onClick={() => void saveItemPrice()} disabled={priceBusy}>{priceBusy ? "保存中…" : "単価を保存"}</button></div></Modal> : null}
+    {priceTarget ? <Modal title="注文単価・数量の変更" onClose={() => { if (!priceBusy && !quantityBusy) { setPriceTarget(null); setQuantityZeroConfirm(false); } }}>
+      <p className="modal-lead">{kitchenMenuName(priceTarget, kitchenAliases)}<br />注文時数量 {priceTarget.quantity}点・請求対象 {Number(priceTarget.billableQuantity ?? priceTarget.quantity)}点<br />注文時単価（変更上限）：{yen(priceTarget.unitPriceYenSnapshot ?? priceTarget.unitPriceSnapshot ?? 0)}／現在の単価：{yen(priceTarget.currentUnitPriceYen ?? priceTarget.adjustedUnitPriceYen ?? priceTarget.unitPriceYenSnapshot ?? priceTarget.unitPriceSnapshot ?? 0)}</p>
+      <div className="kitchen-quantity-editor" aria-label="注文数量の編集">
+        <span>請求対象数量</span>
+        <button type="button" onClick={() => void submitQuantityAdjustment("decrease")} disabled={quantityBusy || priceTarget.locked} aria-label="数量を1点減らす"><Minus size={20} weight="bold" /></button>
+        <b aria-live="polite">{Number(priceTarget.billableQuantity ?? priceTarget.quantity)}点</b>
+        <button type="button" onClick={() => void submitQuantityAdjustment("increase")} disabled={quantityBusy || priceTarget.locked} aria-label="同じ商品を1点追加注文"><Plus size={20} weight="bold" /></button>
+      </div>
+      {quantityZeroConfirm ? <div className="quantity-zero-confirm" role="alert"><b>最後の1点を請求対象から外しますか？</b><p>確認後、この注文行は削除されずキャンセル扱いで履歴に残ります。取消し復元で1点に戻せます。</p><label><span>理由（任意）</span><textarea value={quantityReason} onChange={(event) => setQuantityReason(event.target.value)} maxLength={300} disabled={quantityBusy} /></label><div className="modal-actions"><button type="button" className="button button--quiet" onClick={() => setQuantityZeroConfirm(false)} disabled={quantityBusy}>戻る</button><button type="button" className="button button--primary" onClick={() => void submitQuantityAdjustment("decrease", true)} disabled={quantityBusy || priceTarget.locked}>{quantityBusy ? "保存中…" : "0点にしてキャンセル"}</button></div></div> : null}
+      <label className="price-adjustment-field">変更後の単価<input aria-label="変更後の単価" type="number" min="0" max={priceTarget.unitPriceYenSnapshot ?? priceTarget.unitPriceSnapshot} step="1" value={priceDraft} onChange={(event) => setPriceDraft(event.target.value)} disabled={priceBusy || quantityBusy || priceTarget.locked} />円</label>
+      <p className="price-adjustment-total">変更後の行合計：<b>{yen((Number(priceDraft) || 0) * Number(priceTarget.billableQuantity ?? priceTarget.quantity))}</b></p>
+      {quantityError ? <p role="alert" className="checkout-feedback checkout-feedback--error">{quantityError}</p> : null}{priceError ? <p role="alert" className="checkout-feedback checkout-feedback--error">{priceError}</p> : null}
+      <div className="modal-actions"><button type="button" className="button button--quiet" onClick={() => { setPriceTarget(null); setQuantityZeroConfirm(false); }} disabled={priceBusy || quantityBusy}>閉じる</button><button type="button" className="button button--primary button--large" onClick={() => void saveItemPrice()} disabled={priceBusy || quantityBusy || priceTarget.locked}>{priceBusy ? "保存中…" : "単価を保存"}</button></div>
+    </Modal> : null}
+    {cancellationTarget ? <OrderItemCancellationModal key={`${cancellationTarget.action}-${cancellationTarget.orderId}-${cancellationTarget.item.id}`} target={cancellationTarget} onClose={() => setCancellationTarget(null)} onSave={saveCancellation} /> : null}
     {callPanel ? <Modal title="スタッフ呼び出し" onClose={() => setCallPanel(false)} wide><div className="call-list">{activeCalls.length ? activeCalls.map((call) => <article key={call.id}><Bell size={28} weight="fill" /><div><b>テーブル {call.tableId}</b><span>{formatTime(call.createdAt)} に呼び出し</span></div><button className="button button--primary" onClick={() => resolveCall(call.id)}>対応済みにする</button></article>) : <div className="empty-state"><Bell size={42} /><p>未対応の呼び出しはありません。</p></div>}</div></Modal> : null}
   </StaffShell>;
+}
+
+function cancelledQuantityForDisplay(item) {
+  const latestCancellation = item?.cancellationHistory?.at(-1);
+  return item?.isCancelled === true && latestCancellation?.action === "cancelled" && latestCancellation.operationId
+    ? 0
+    : Number(item?.billableQuantity ?? item?.quantity ?? 0);
 }
 
 function paymentMethodLabel(method) {
   return { cash: "現金", card: "クレジットカード", qr: "QR決済", other: "その他" }[method] || method;
 }
 
-function HistoryScreen({ state, apiMode = false, loadHistory = null, loadPaymentHistory = null, onVoidPayment = null }) {
+function OrderItemCancellationModal({ target, onClose, onSave }) {
+  const [reason, setReason] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const restoring = target.action === "restore";
+  const cancellationProductName = kitchenMenuName(target.item, {});
+  const cancellationQuantity = Number(target.item.billableQuantity ?? target.item.quantity ?? 0);
+  const cancellationUnitPrice = Number(target.item.currentUnitPriceYen ?? target.item.adjustedUnitPriceYen ?? target.item.unitPriceYenSnapshot ?? target.item.unitPriceSnapshot ?? 0);
+  const cancellationAmount = cancellationUnitPrice * cancellationQuantity;
+  const cancelButtonLabel = `${cancellationProductName} ${cancellationQuantity}点をキャンセル`;
+  const submit = async () => {
+    setBusy(true);
+    setError("");
+    try {
+      await onSave(reason.trim() || null);
+    } catch (saveError) {
+      setError(saveError?.message || (restoring ? "キャンセルを取り消せませんでした。" : "注文商品をキャンセルできませんでした。"));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return <Modal title={restoring ? "キャンセルを取り消しますか？" : "注文商品をキャンセルしますか？"} onClose={() => { if (!busy) onClose(); }}>
+    <p className="modal-lead">{restoring ? `${cancellationProductName} のキャンセルを取り消します。提供状態は現在のまま維持します。` : `${cancellationProductName} ${cancellationQuantity}点をキャンセルし、今回の会計から外します。注文の記録は残ります。提供済みの場合、提供した記録も残ります。`}</p>
+    {!restoring ? <p className="cancellation-amount-preview">今回の会計から外す金額：{yen(cancellationUnitPrice)} × {cancellationQuantity}点 = <b>{yen(cancellationAmount)}</b></p> : null}
+    <label className="payment-void-form"><span>理由（任意）</span><textarea value={reason} onChange={(event) => setReason(event.target.value)} maxLength={300} placeholder="必要な場合だけ入力してください" disabled={busy} /></label>
+    {error ? <p className="checkout-feedback checkout-feedback--error" role="alert">{error}</p> : null}
+    <div className="modal-actions"><button type="button" className="button button--quiet" onClick={onClose} disabled={busy}>戻る</button><button type="button" className="button button--primary" onClick={() => void submit()} disabled={busy}>{busy ? "処理中…" : restoring ? "キャンセルを取り消す" : cancelButtonLabel}</button></div>
+  </Modal>;
+}
+
+function HistoryScreen({ state, apiMode = false, loadHistory = null, loadPaymentHistory = null, loadCheckoutRequests = null, onVoidPayment = null, onChangeItemCancellation = null }) {
   const [remoteState, setRemoteState] = useState({ loading: apiMode, error: false, orders: [] });
   const [paymentRemoteState, setPaymentRemoteState] = useState({ loading: apiMode, error: false, payments: [] });
+  const [checkoutRemoteState, setCheckoutRemoteState] = useState({ loading: apiMode, error: false, checkouts: [] });
   const [showPastOrders, setShowPastOrders] = useState(false);
   const [voidTarget, setVoidTarget] = useState(null);
   const [voidReason, setVoidReason] = useState("");
   const [voidError, setVoidError] = useState("");
+  const [cancellationTarget, setCancellationTarget] = useState(null);
   useEffect(() => {
     if (!apiMode) return undefined;
     if (typeof loadHistory !== "function") {
@@ -1690,6 +1975,21 @@ function HistoryScreen({ state, apiMode = false, loadHistory = null, loadPayment
     });
     return () => { cancelled = true; };
   }, [apiMode, loadHistory, loadPaymentHistory]);
+  useEffect(() => {
+    if (!apiMode) return undefined;
+    let cancelled = false;
+    setCheckoutRemoteState({ loading: true, error: false, checkouts: [] });
+    if (typeof loadCheckoutRequests !== "function") {
+      setCheckoutRemoteState({ loading: false, error: true, checkouts: [] });
+      return undefined;
+    }
+    void loadCheckoutRequests({ env: window }).then((checkouts) => {
+      if (!cancelled) setCheckoutRemoteState({ loading: false, error: false, checkouts });
+    }).catch(() => {
+      if (!cancelled) setCheckoutRemoteState({ loading: false, error: true, checkouts: [] });
+    });
+    return () => { cancelled = true; };
+  }, [apiMode, loadCheckoutRequests]);
   const sourceOrders = apiMode ? remoteState.orders.map((order) => ({
     id: order.orderId,
     tableId: String(order.tableId),
@@ -1711,14 +2011,28 @@ function HistoryScreen({ state, apiMode = false, loadHistory = null, loadPayment
       servingOptionId: item.servingOptionId,
       servingOptionNameSnapshot: item.servingOptionNameSnapshot,
       quantity: item.quantity,
+      quantityReduced: item.quantityReduced ?? 0,
+      billableQuantity: item.billableQuantity ?? item.quantity,
+      isServed: item.isServed === true,
+      servedAtMs: item.servedAtMs ?? null,
+      servedByDeviceId: item.servedByDeviceId ?? null,
+      lineTotalYenSnapshot: item.lineTotalYenSnapshot ?? item.unitPriceYenSnapshot * item.quantity,
+      lineTotalYen: item.lineTotalYen,
+      currentUnitPriceYen: item.currentUnitPriceYen ?? item.unitPriceYenSnapshot,
+      currentBillableAmountYen: item.currentBillableAmountYen ?? item.lineTotalYen,
+      isCancelled: item.isCancelled === true,
+      cancellationHistory: item.cancellationHistory ?? [],
+      quantityHistory: item.quantityHistory ?? [],
     })),
   })) : state.orders;
-  const completed = sourceOrders.filter((order) => order.status === "completed").sort((a, b) => new Date(b.completedAt) - new Date(a.completedAt));
-  const completedToday = completed.filter((order) => isSameLocalDate(order.completedAt));
-  const pastCompleted = completed.length - completedToday.length;
-  const visibleCompleted = showPastOrders ? completed : completedToday;
+  const historyOrders = sourceOrders.filter((order) => order.status === "completed" || order.status === "cancelled").sort((a, b) => new Date(b.completedAt ?? b.createdAt) - new Date(a.completedAt ?? a.createdAt));
+  const completed = historyOrders.filter((order) => order.status === "completed");
+  const completedToday = completed.filter((order) => isSameLocalDate(order.completedAt ?? order.createdAt));
+  const visibleToday = historyOrders.filter((order) => isSameLocalDate(order.completedAt ?? order.createdAt));
+  const pastHistoryCount = historyOrders.length - visibleToday.length;
+  const visibleOrders = showPastOrders ? historyOrders : visibleToday;
   const todayTotal = completedToday.reduce((sum, order) => sum + order.totalAmount, 0);
-  const sessionGroups = [...visibleCompleted.reduce((groups, order) => {
+  const sessionGroups = [...visibleOrders.reduce((groups, order) => {
     const sessionId = order.sessionId || `order-${order.id}`;
     const existing = groups.get(sessionId) || {
       sessionId,
@@ -1736,21 +2050,54 @@ function HistoryScreen({ state, apiMode = false, loadHistory = null, loadPayment
     const payment = paymentRemoteState.payments.find((record) => record.tableSessionId === group.sessionId && record.status === "paid");
     return { ...group, paymentStatus: payment ? "会計済み" : group.closedAtMs ? "終了・会計記録なし" : "会計前" };
   });
+  const readySessionIds = new Set(checkoutRemoteState.checkouts.filter((checkout) => checkout.status === "ready").map((checkout) => checkout.tableSessionId));
+  const paidSessionIds = new Set(paymentRemoteState.payments.filter((payment) => payment.status === "paid").map((payment) => payment.tableSessionId));
+  const historyOperationsUnavailable = apiMode && (remoteState.loading || remoteState.error || paymentRemoteState.loading || paymentRemoteState.error || checkoutRemoteState.loading || checkoutRemoteState.error);
+  const historyOperationLocked = (order) => historyOperationsUnavailable
+    || order.sessionClosedAtMs != null
+    || readySessionIds.has(order.sessionId)
+    || paidSessionIds.has(order.sessionId);
+  const saveHistoryCancellation = async (reason) => {
+    if (!cancellationTarget || typeof onChangeItemCancellation !== "function") return;
+    await onChangeItemCancellation({ orderId: cancellationTarget.order.id, orderItemId: cancellationTarget.item.id, reason, action: cancellationTarget.action });
+    const orders = await loadHistory({ env: window });
+    setRemoteState({ loading: false, error: false, orders });
+    setCancellationTarget(null);
+  };
   return (
     <StaffShell route="/history" title="注文・会計履歴" subtitle="提供済みの注文内容と、会計記録を確認できます。" state={state} right={<ConnectionBadge online />}>
       <section className="history-content">
         <div className="history-summary"><div><small>本日の提供済み注文</small><b>{completedToday.length}</b><span>件</span></div><div><small>本日の注文商品合計</small><b>{yen(todayTotal)}</b></div></div>
         {apiMode && remoteState.loading ? <div className="empty-state"><p>注文履歴を読み込み中です。</p></div> : null}
         {apiMode && remoteState.error ? <div className="empty-state"><p>注文履歴を取得できませんでした。</p></div> : null}
-        {(!apiMode || (!remoteState.loading && !remoteState.error)) && completed.length === 0 ? <div className="empty-state"><p>注文履歴はありません。</p></div> : null}
-        {(!apiMode || (!remoteState.loading && !remoteState.error)) && completed.length > 0 && completedToday.length === 0 && !showPastOrders ? <div className="history-past-notice"><p>本日提供完了した注文はありません。</p><p>過去の注文を確認する場合は、下のボタンを押してください。</p></div> : null}
-        {(!apiMode || (!remoteState.loading && !remoteState.error)) && pastCompleted > 0 ? <div className="history-past-actions"><button type="button" className="button button--outline" onClick={() => setShowPastOrders((current) => !current)}>{showPastOrders ? "本日の注文だけ表示" : "過去の注文も表示"}</button>{showPastOrders ? <span>過去の注文を含めて表示中です。</span> : null}</div> : null}
+        {(!apiMode || (!remoteState.loading && !remoteState.error)) && historyOrders.length === 0 ? <div className="empty-state"><p>注文履歴はありません。</p></div> : null}
+        {(!apiMode || (!remoteState.loading && !remoteState.error)) && historyOrders.length > 0 && visibleToday.length === 0 && !showPastOrders ? <div className="history-past-notice"><p>本日完了・キャンセルになった注文はありません。</p><p>過去の注文を確認する場合は、下のボタンを押してください。</p></div> : null}
+        {(!apiMode || (!remoteState.loading && !remoteState.error)) && pastHistoryCount > 0 ? <div className="history-past-actions"><button type="button" className="button button--outline" onClick={() => setShowPastOrders((current) => !current)}>{showPastOrders ? "本日の注文だけ表示" : "過去の注文も表示"}</button>{showPastOrders ? <span>過去の注文を含めて表示中です。</span> : null}</div> : null}
         {(!apiMode || (!remoteState.loading && !remoteState.error)) && sessionGroups.length > 0 && <div className="history-table-wrap">
           {sessionGroups.map((group) => <section className="history-session" key={group.sessionId}>
             <header className="history-session-divider"><div><b>テーブル {group.tableId}</b><span>来店日時 {formatDateTime(new Date(group.openedAtMs))}</span></div><strong>{group.paymentStatus}</strong></header>
             <table className="history-table">
-              <thead><tr><th>注文番号</th><th>テーブル</th><th>受付</th><th>完了</th><th>品目</th><th>合計</th></tr></thead>
-              <tbody>{group.orders.map((order) => <tr key={order.id}><td><b>{order.id}</b></td><td><span className="table-pill">T{order.tableId}</span></td><td>{formatDateTime(order.createdAt)}</td><td>{formatDateTime(order.completedAt)}</td><td><div className="history-items">{order.items.map((item) => <span key={item.id}>{selectionDisplayName({ name: item.nameSnapshot }, item)} <b>{item.quantity}点</b> <small>{yen(item.unitPriceSnapshot)}</small></span>)}</div></td><td className="history-total">{yen(order.totalAmount)}</td></tr>)}</tbody>
+              <thead><tr><th>注文番号・状態</th><th>テーブル</th><th>受付</th><th>完了</th><th>品目・操作履歴</th><th>現在の注文合計</th></tr></thead>
+              <tbody>{group.orders.map((order) => <tr key={order.id}>
+                <td><b>{order.id}</b><span className={`order-history-status ${order.status === "cancelled" ? "is-cancelled" : ""}`}>{order.status === "cancelled" ? "全品キャンセル" : "提供完了"}</span></td>
+                <td><span className="table-pill">T{order.tableId}</span></td>
+                <td>{formatDateTime(order.createdAt)}</td>
+                <td>{order.completedAt ? formatDateTime(order.completedAt) : "—"}</td>
+                <td><div className="history-items">{order.items.map((item) => {
+                  const latestCancellation = item.cancellationHistory.at(-1);
+                  const cancelledQuantity = cancelledQuantityForDisplay(item);
+                  const currentUnitPrice = Number(item.currentUnitPriceYen ?? item.unitPriceSnapshot ?? 0);
+                  const billableQuantity = Number(item.billableQuantity ?? item.quantity);
+                  return <span className={`history-order-item ${item.isCancelled ? "is-cancelled" : ""}`} key={item.id}>
+                    <span>{selectionDisplayName({ nameSnapshot: item.nameSnapshot }, item)} <b>{item.isCancelled ? `注文時 ${item.quantity}点` : `${billableQuantity}点請求対象`}</b></span>
+                    <small>注文時 {yen(item.lineTotalYenSnapshot ?? item.unitPriceSnapshot * item.quantity)}{item.isCancelled ? `・キャンセル対象 ${cancelledQuantity}点／${yen(currentUnitPrice * cancelledQuantity)}` : ""}・現在請求 {yen(item.currentBillableAmountYen ?? item.lineTotalYen ?? item.unitPriceSnapshot * item.quantity)}</small>
+                    {(item.quantityHistory ?? []).map((event) => <small className="cancellation-audit-entry" key={event.eventId}>{event.action === "added" ? "追加注文 +1点" : "数量 −1点"}・{event.actorLabel || event.actorDeviceId}・{formatDateTime(new Date(event.occurredAtMs))}・操作時{event.isServedSnapshot ? "提供済み" : "未提供"}</small>)}
+                    {(item.cancellationHistory ?? []).map((event) => <small className="cancellation-audit-entry" key={event.eventId}>{event.action === "cancelled" ? event.operationId ? "数量0点化によるキャンセル" : "商品キャンセル" : "キャンセル取消し"}・{event.actorLabel || event.actorDeviceId}・{formatDateTime(new Date(event.occurredAtMs))}{event.reason ? `・${event.reason}` : ""}・当時{event.isServedSnapshot ? "提供済み" : "未提供"}</small>)}
+                    {apiMode && onChangeItemCancellation ? <button type="button" className={item.isCancelled ? "order-item-restore" : "order-item-cancel"} onClick={() => setCancellationTarget({ action: item.isCancelled ? "restore" : "cancel", order, item })} disabled={historyOperationLocked(order)}>{item.isCancelled ? "キャンセルを取り消す" : "商品をキャンセル"}</button> : null}
+                  </span>;
+                })}</div></td>
+                <td className="history-total">{yen(order.totalAmount)}</td>
+              </tr>)}</tbody>
             </table>
           </section>)}
         </div>}
@@ -1761,6 +2108,7 @@ function HistoryScreen({ state, apiMode = false, loadHistory = null, loadPayment
           {!apiMode || (!paymentRemoteState.loading && !paymentRemoteState.error) ? paymentRemoteState.payments.length ? <div className="payment-history-list">{paymentRemoteState.payments.map((payment) => <article className={`payment-history-card payment-history-card--${payment.status}`} key={payment.paymentRecordId}><header><div><b>テーブル {payment.tableId}</b><span>{formatDateTime(new Date(payment.paidAtMs))}・{paymentMethodLabel(payment.paymentMethod)}</span></div><strong>{yen(payment.confirmedTotalYen)}</strong></header><p className="payment-history-card__meta">会計記録 {payment.paymentRecordId}・session {payment.tableSessionId}</p><details><summary>注文商品・追加料金の内訳</summary><div className="payment-history-card__details"><h4>注文商品</h4>{payment.orderItems.map((item) => <div key={`${payment.paymentRecordId}-${item.orderItemId}`}><span>{item.formalNameSnapshot}{item.variantNameSnapshot ? ` ${item.variantNameSnapshot}` : ""} × {item.quantity}</span><b>{yen(item.lineTotalYen)}</b></div>)}{payment.adjustments.length ? <><h4>追加料金</h4>{payment.adjustments.map((item) => <div key={`${payment.paymentRecordId}-${item.sortOrder}`}><span>{item.label}</span><b>{yen(item.amountYen)}</b></div>)}</> : null}</div></details>{payment.status === "voided" ? <p className="payment-history-card__void">取消済み：{payment.voidReason}</p> : onVoidPayment ? <button type="button" className="button button--quiet" onClick={() => { setVoidError(""); setVoidReason(""); setVoidTarget(payment); }}>誤記録として取消</button> : null}</article>)}</div> : <div className="empty-state"><p>会計履歴はありません。</p></div> : null}
         </section>
       </section>
+      {cancellationTarget ? <OrderItemCancellationModal key={`${cancellationTarget.action}-${cancellationTarget.order.id}-${cancellationTarget.item.id}`} target={cancellationTarget} onClose={() => setCancellationTarget(null)} onSave={saveHistoryCancellation} /> : null}
       {voidTarget ? <Modal title="会計記録を取消" onClose={() => setVoidTarget(null)}><p className="modal-lead">この記録は物理削除せず、取消理由を残して無効化します。</p><label className="payment-void-form"><span>取消理由</span><textarea value={voidReason} onChange={(event) => setVoidReason(event.target.value)} maxLength={300} placeholder="例：支払方法の選択誤り" /></label>{voidError ? <p className="checkout-feedback checkout-feedback--error" role="alert">{voidError}</p> : null}<div className="modal-actions"><button type="button" className="button button--quiet" onClick={() => setVoidTarget(null)}>戻る</button><button type="button" className="button button--primary" onClick={async () => { try { const updated = await onVoidPayment(voidTarget, voidReason); setPaymentRemoteState((current) => ({ ...current, payments: current.payments.map((item) => item.paymentRecordId === updated.paymentRecordId ? updated : item) })); setVoidTarget(null); } catch (error) { setVoidError(error.message || "取消できませんでした。"); } }} disabled={!voidReason.trim()}>取消を保存</button></div></Modal> : null}
     </StaffShell>
   );
@@ -2674,6 +3022,24 @@ export function App() {
     setKitchenCheckoutState({ loading: false, error: false, checkouts });
   };
 
+  const adjustKitchenItemQuantity = async (operation) => {
+    await adjustKitchenItemQuantityRequest({ env: window, ...operation });
+    const [snapshot, checkouts] = await Promise.all([fetchKitchenSnapshot({ env: window }), fetchKitchenCheckoutRequests({ env: window })]);
+    setKitchenApiState({ loading: false, error: false, orders: snapshot.orders, sessions: snapshot.sessions });
+    setKitchenCheckoutState({ loading: false, error: false, checkouts });
+  };
+
+  const changeKitchenOrderItemCancellation = async ({ orderId, orderItemId, reason, action }) => {
+    const change = action === "restore" ? restoreKitchenOrderItem : cancelKitchenOrderItem;
+    const result = await change({ env: window, orderId, orderItemId, reason });
+    if (kitchenApiConfigured(window)) {
+      const [snapshot, checkouts] = await Promise.all([fetchKitchenSnapshot({ env: window }), fetchKitchenCheckoutRequests({ env: window })]);
+      setKitchenApiState({ loading: false, error: false, orders: snapshot.orders, sessions: snapshot.sessions });
+      setKitchenCheckoutState({ loading: false, error: false, checkouts });
+    }
+    return result;
+  };
+
   const refreshKitchenCheckouts = async () => {
     const checkouts = await fetchKitchenCheckoutRequests({ env: window });
     setKitchenCheckoutState({ loading: false, error: false, checkouts });
@@ -2791,7 +3157,7 @@ export function App() {
     if (isCustomerRoute && !orderClient) return <PairingScreen onClaim={claim} error={pairingError} />;
     if (route === "/") return <CustomerScreen state={state} updateState={updateState} deviceId="customer-03" orderClient={orderClient} customerDeviceConfig={customerDeviceConfig} />;
     if (route.startsWith("/customer/")) return <CustomerScreen state={state} updateState={updateState} deviceId={route.split("/")[2]} orderClient={orderClient} customerDeviceConfig={customerDeviceConfig} />;
-    if (route === "/kitchen") return <KitchenScreen state={state} updateState={updateState} apiState={kitchenApiState} checkoutState={kitchenCheckoutState} onServe={serveKitchenItem} onSaveItemPrice={saveKitchenItemPrice} onRefreshCheckouts={refreshKitchenCheckouts} onSaveCheckout={saveCheckout} onReadyCheckout={readyCheckout} onCancelCheckout={cancelCheckout} onPayCheckout={payCheckout} />;
+    if (route === "/kitchen") return <KitchenScreen state={state} updateState={updateState} apiState={kitchenApiState} checkoutState={kitchenCheckoutState} onServe={serveKitchenItem} onSaveItemPrice={saveKitchenItemPrice} onAdjustItemQuantity={adjustKitchenItemQuantity} onChangeItemCancellation={changeKitchenOrderItemCancellation} onRefreshCheckouts={refreshKitchenCheckouts} onSaveCheckout={saveCheckout} onReadyCheckout={readyCheckout} onCancelCheckout={cancelCheckout} onPayCheckout={payCheckout} />;
     if (route === "/history") {
       const explicitDemo = window.WARUN_ORDER_MODE === "demo" || new URLSearchParams(window.location.search).get("demo") === "1";
       const kitchenConfigured = kitchenApiConfigured(window);
@@ -2802,7 +3168,10 @@ export function App() {
       const loadPaymentHistory = kitchenConfigured
         ? fetchKitchenPaymentHistory
         : adminConfigured ? fetchAdminPaymentHistory : null;
-      return <HistoryScreen state={state} apiMode={!explicitDemo} loadHistory={loadHistory} loadPaymentHistory={loadPaymentHistory} onVoidPayment={!explicitDemo && (kitchenConfigured || adminConfigured) ? voidPayment : null} />;
+      const loadCheckoutRequests = kitchenConfigured
+        ? fetchKitchenCheckoutRequests
+        : adminConfigured ? fetchAdminCheckoutRequests : null;
+      return <HistoryScreen state={state} apiMode={!explicitDemo} loadHistory={loadHistory} loadPaymentHistory={loadPaymentHistory} loadCheckoutRequests={loadCheckoutRequests} onVoidPayment={!explicitDemo && (kitchenConfigured || adminConfigured) ? voidPayment : null} onChangeItemCancellation={!explicitDemo && (kitchenConfigured || adminConfigured) ? changeKitchenOrderItemCancellation : null} />;
     }
     if (route.startsWith("/admin/")) return <AdminScreen state={state} updateState={updateState} section={route.split("/")[2] || "menu"} />;
     if (route === "/devices") return <Launcher state={state} updateState={updateState} />;

@@ -49,6 +49,19 @@ function normalizeTableId(value, fieldName = 'tableId') {
   return value;
 }
 
+function normalizeCancellationReason(value) {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== 'string') {
+    throw repositoryError(ORDER_ERROR_CODES.INVALID_ORDER_REQUEST, 'reason must be text.');
+  }
+  const reason = value.trim();
+  if (reason === '') return null;
+  if ([...reason].length > 300 || /<\/?[A-Za-z][^>]*>/.test(reason)) {
+    throw repositoryError(ORDER_ERROR_CODES.INVALID_ORDER_REQUEST, 'reason must be plain text of at most 300 characters.');
+  }
+  return reason;
+}
+
 function normalizeItems(items) {
   if (!Array.isArray(items) || items.length === 0 || items.length > MAX_ITEMS) {
     throw repositoryError(
@@ -224,6 +237,7 @@ function isClientOrderUniqueViolation(error) {
 }
 
 function mapOrderRow(row, items) {
+  const fullyCancelled = items.length > 0 && items.every((item) => item.isCancelled);
   const order = {
     orderId: row.order_id,
     clientOrderId: row.client_order_id,
@@ -232,21 +246,58 @@ function mapOrderRow(row, items) {
     authenticatedDeviceId: row.customer_device_id,
     tableId: row.table_id,
     tableNumberSnapshot: row.table_number_snapshot,
-    status: row.status,
+    status: fullyCancelled ? 'cancelled' : row.status,
     totalAmountYen: sumCurrentOrderItemTotals(items),
     acceptedAtMs: row.accepted_at_ms,
     completedAtMs: row.completed_at_ms,
     version: row.version,
     items,
   };
+  if (row.order_origin !== undefined) order.orderOrigin = row.order_origin;
+  if (row.created_by_device_id !== undefined && row.created_by_device_id !== null) order.createdByDeviceId = row.created_by_device_id;
   if (row.session_id !== null && row.session_id !== undefined) order.sessionId = row.session_id;
   if (row.session_opened_at_ms !== undefined) order.sessionOpenedAtMs = row.session_opened_at_ms;
   if (row.session_closed_at_ms !== undefined) order.sessionClosedAtMs = row.session_closed_at_ms;
   return order;
 }
 
-function mapOrderItemRow(row) {
+function mapCancellationEventRow(row) {
+  return {
+    eventId: Number(row.cancellation_event_id),
+    operationId: row.operation_id ?? null,
+    action: row.action,
+    actorDeviceId: row.actor_device_id,
+    actorLabel: row.actor_label_snapshot,
+    occurredAtMs: Number(row.occurred_at_ms),
+    reason: row.reason,
+    isServedSnapshot: row.is_served_snapshot === 1,
+    servedAtMsSnapshot: row.served_at_ms_snapshot === null ? null : Number(row.served_at_ms_snapshot),
+    servedByDeviceIdSnapshot: row.served_by_device_id_snapshot,
+  };
+}
+
+function mapQuantityEventRow(row) {
+  return {
+    eventId: Number(row.quantity_event_id),
+    operationId: row.operation_id,
+    action: row.action,
+    quantityDelta: Number(row.quantity_delta),
+    previousBillableQuantity: Number(row.previous_billable_quantity),
+    nextBillableQuantity: Number(row.next_billable_quantity),
+    relatedOrderId: row.related_order_id,
+    relatedOrderItemId: row.related_order_item_id === null ? null : Number(row.related_order_item_id),
+    actorDeviceId: row.actor_device_id,
+    actorLabel: row.actor_label_snapshot,
+    occurredAtMs: Number(row.occurred_at_ms),
+    isServedSnapshot: row.is_served_snapshot === 1,
+    servedAtMsSnapshot: row.served_at_ms_snapshot === null ? null : Number(row.served_at_ms_snapshot),
+    servedByDeviceIdSnapshot: row.served_by_device_id_snapshot,
+  };
+}
+
+function mapOrderItemRow(row, cancellationHistory = [], quantityHistory = []) {
   const amounts = orderItemAmounts(row);
+  const isCancelled = row.is_cancelled === 1;
   const item = {
     orderItemId: row.order_item_id,
     lineIndex: row.line_index,
@@ -257,11 +308,18 @@ function mapOrderItemRow(row) {
     adjustedUnitPriceYen: amounts.adjustedUnitPriceYen,
     currentUnitPriceYen: amounts.currentUnitPriceYen,
     quantity: amounts.quantity,
+    quantityReduced: amounts.quantityReduced,
+    billableQuantity: amounts.billableQuantity,
     lineTotalYenSnapshot: amounts.lineTotalYenSnapshot,
     lineTotalYen: amounts.lineTotalYen,
+    currentBillableAmountYen: isCancelled ? 0 : amounts.lineTotalYen,
     isServed: row.is_served === 1,
     servedAtMs: row.served_at_ms,
+    isCancelled,
+    cancellationHistory,
+    quantityHistory,
   };
+  if (row.served_by_device_id !== null && row.served_by_device_id !== undefined) item.servedByDeviceId = row.served_by_device_id;
   if (row.variant_id !== null && row.variant_id !== undefined) {
     item.variantId = row.variant_id;
     item.variantNameSnapshot = row.variant_name_snapshot;
@@ -309,7 +367,9 @@ export function createOrderRepository({ database, now = Date.now, idFactory = ra
           total_amount_yen,
           accepted_at_ms,
           completed_at_ms,
-          version
+          version,
+          order_origin,
+          created_by_device_id
         FROM orders
         WHERE client_order_id = ?
       `),
@@ -323,9 +383,12 @@ export function createOrderRepository({ database, now = Date.now, idFactory = ra
           unit_price_yen_snapshot,
           adjusted_unit_price_yen,
           quantity,
+          quantity_reduced,
           line_total_yen,
           is_served,
-          served_at_ms
+          served_at_ms,
+          served_by_device_id,
+          is_cancelled
           ,variant_id
           ,variant_name_snapshot
           ,variant_volume_snapshot
@@ -351,12 +414,18 @@ export function createOrderRepository({ database, now = Date.now, idFactory = ra
           orders.accepted_at_ms,
           orders.completed_at_ms,
           orders.version,
+          orders.order_origin,
+          orders.created_by_device_id,
           table_sessions.opened_at_ms AS session_opened_at_ms,
           table_sessions.closed_at_ms AS session_closed_at_ms
         FROM orders
         LEFT JOIN table_sessions ON table_sessions.session_id = orders.session_id
-        WHERE status = 'completed'
-        ORDER BY orders.completed_at_ms DESC, orders.order_id DESC
+        WHERE orders.status = 'completed'
+          OR (
+            EXISTS (SELECT 1 FROM order_items AS oi WHERE oi.order_id = orders.order_id)
+            AND NOT EXISTS (SELECT 1 FROM order_items AS oi WHERE oi.order_id = orders.order_id AND oi.is_cancelled = 0 AND oi.quantity_reduced < oi.quantity)
+          )
+        ORDER BY COALESCE(orders.completed_at_ms, orders.accepted_at_ms) DESC, orders.order_id DESC
       `),
       findCustomerHistoryOrders: database.prepare(`
         SELECT
@@ -372,7 +441,9 @@ export function createOrderRepository({ database, now = Date.now, idFactory = ra
           total_amount_yen,
           accepted_at_ms,
           completed_at_ms,
-          version
+          version,
+          order_origin,
+          created_by_device_id
         FROM orders
         WHERE session_id = ?
         ORDER BY accepted_at_ms DESC, order_id DESC
@@ -391,18 +462,134 @@ export function createOrderRepository({ database, now = Date.now, idFactory = ra
           total_amount_yen,
           accepted_at_ms,
           completed_at_ms,
-          version
+          version,
+          order_origin,
+          created_by_device_id
         FROM orders
         WHERE order_id = ?
       `),
       findServingItem: database.prepare(`
-        SELECT order_item_id, order_id, is_served
+        SELECT order_item_id, order_id, is_served, is_cancelled, quantity, quantity_reduced
         FROM order_items
         WHERE order_item_id = ? AND order_id = ?
       `),
+      findCancellationTarget: database.prepare(`
+        SELECT oi.order_item_id, oi.order_id, oi.is_cancelled, oi.is_served,
+               oi.served_at_ms, oi.served_by_device_id, o.session_id, o.status,
+               o.completed_at_ms, s.closed_at_ms,
+               EXISTS (
+                 SELECT 1 FROM checkout_requests cr
+                 WHERE cr.table_session_id = o.session_id AND cr.ready_at_ms IS NOT NULL
+               ) AS checkout_was_ready,
+               EXISTS (
+                 SELECT 1 FROM payment_records pr
+                 JOIN checkout_requests cr ON cr.checkout_request_id = pr.checkout_request_id
+                 WHERE cr.table_session_id = o.session_id
+               ) AS payment_recorded
+        FROM order_items AS oi
+        JOIN orders AS o ON o.order_id = oi.order_id
+        LEFT JOIN table_sessions AS s ON s.session_id = o.session_id
+        WHERE oi.order_item_id = ? AND oi.order_id = ?
+      `),
+      findRequestedCheckoutForSession: database.prepare(`
+        SELECT checkout_request_id
+        FROM checkout_requests
+        WHERE table_session_id = ? AND status = 'requested'
+        ORDER BY requested_at_ms DESC
+        LIMIT 1
+      `),
+      countBillableOrderItemStates: database.prepare(`
+        SELECT
+          COUNT(*) AS item_count,
+          COALESCE(SUM(CASE WHEN is_cancelled = 0 AND quantity_reduced < quantity THEN 1 ELSE 0 END), 0) AS billable_count,
+          COALESCE(SUM(CASE WHEN is_cancelled = 0 AND quantity_reduced < quantity AND is_served = 0 THEN 1 ELSE 0 END), 0) AS unserved_count,
+          COALESCE(SUM(CASE WHEN is_cancelled = 0 AND quantity_reduced < quantity AND is_served = 1 THEN 1 ELSE 0 END), 0) AS served_count
+        FROM order_items
+        WHERE order_id = ?
+      `),
+      updateItemCancellation: database.prepare(`
+        UPDATE order_items SET is_cancelled = ?, updated_at_ms = ?
+        WHERE order_item_id = ? AND order_id = ?
+      `),
+      insertCancellationEvent: database.prepare(`
+        INSERT INTO order_item_cancellation_events (
+          order_id, order_item_id, action, actor_device_id, actor_label_snapshot,
+          occurred_at_ms, reason, is_served_snapshot, served_at_ms_snapshot,
+          served_by_device_id_snapshot, operation_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `),
+      findCancellationEvents: database.prepare(`
+        SELECT cancellation_event_id, order_id, order_item_id, operation_id, action,
+               actor_device_id, actor_label_snapshot, occurred_at_ms, reason,
+               is_served_snapshot, served_at_ms_snapshot,
+               served_by_device_id_snapshot
+        FROM order_item_cancellation_events
+        WHERE order_id = ?
+        ORDER BY cancellation_event_id
+      `),
+      findQuantityEvents: database.prepare(`
+        SELECT quantity_event_id, operation_id, order_id, order_item_id, action,
+               quantity_delta, previous_billable_quantity, next_billable_quantity,
+               related_order_id, related_order_item_id, actor_device_id,
+               actor_label_snapshot, occurred_at_ms, is_served_snapshot,
+               served_at_ms_snapshot, served_by_device_id_snapshot
+        FROM order_item_quantity_events
+        WHERE order_id = ?
+        ORDER BY quantity_event_id
+      `),
+      findQuantityOperation: database.prepare(`
+        SELECT order_id, order_item_id, action, previous_billable_quantity,
+               0 AS confirm_zero, NULL AS reason
+        FROM order_item_quantity_events
+        WHERE operation_id = ?
+        UNION ALL
+        SELECT order_id, order_item_id, 'cancelled_at_zero' AS action,
+               1 AS previous_billable_quantity, 1 AS confirm_zero, reason
+        FROM order_item_cancellation_events
+        WHERE operation_id = ? AND action = 'cancelled'
+      `),
+      insertQuantityEvent: database.prepare(`
+        INSERT INTO order_item_quantity_events (
+          operation_id, order_id, order_item_id, action, quantity_delta,
+          previous_billable_quantity, next_billable_quantity, related_order_id,
+          related_order_item_id, actor_device_id, actor_label_snapshot,
+          occurred_at_ms, is_served_snapshot, served_at_ms_snapshot,
+          served_by_device_id_snapshot
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `),
+      updateQuantityReduced: database.prepare(`
+        UPDATE order_items SET quantity_reduced = ?, updated_at_ms = ?
+        WHERE order_item_id = ? AND order_id = ?
+      `),
+      findQuantityChangeTarget: database.prepare(`
+        SELECT oi.order_item_id, oi.order_id, oi.menu_item_id, oi.formal_name_snapshot,
+               oi.kitchen_alias_snapshot, oi.unit_price_yen_snapshot,
+               oi.adjusted_unit_price_yen, oi.quantity, oi.quantity_reduced,
+               oi.is_served, oi.is_cancelled, oi.served_at_ms,
+               oi.served_by_device_id, oi.variant_id, oi.variant_name_snapshot,
+               oi.variant_volume_snapshot, oi.temperature_snapshot,
+               oi.serving_option_id, oi.serving_option_name_snapshot,
+               o.customer_device_id, o.table_id, o.table_number_snapshot,
+               o.session_id, o.status, o.completed_at_ms, o.total_amount_yen,
+               o.accepted_at_ms, o.version, s.closed_at_ms,
+               EXISTS (
+                 SELECT 1 FROM checkout_requests cr
+                 WHERE cr.table_session_id = o.session_id
+                   AND (cr.status = 'ready' OR cr.ready_at_ms IS NOT NULL)
+               ) AS checkout_was_ready,
+               EXISTS (
+                 SELECT 1 FROM payment_records pr
+                 JOIN checkout_requests cr ON cr.checkout_request_id = pr.checkout_request_id
+                 WHERE cr.table_session_id = o.session_id
+               ) AS payment_recorded
+        FROM order_items AS oi
+        JOIN orders AS o ON o.order_id = oi.order_id
+        LEFT JOIN table_sessions AS s ON s.session_id = o.session_id
+        WHERE oi.order_item_id = ? AND oi.order_id = ?
+      `),
       findPriceAdjustmentTarget: database.prepare(`
         SELECT oi.order_item_id, oi.order_id, oi.unit_price_yen_snapshot,
-               oi.adjusted_unit_price_yen, oi.quantity, o.session_id, o.status,
+               oi.adjusted_unit_price_yen, oi.quantity, oi.is_cancelled, o.session_id, o.status,
                s.closed_at_ms,
                EXISTS (
                  SELECT 1 FROM checkout_requests cr
@@ -433,12 +620,13 @@ export function createOrderRepository({ database, now = Date.now, idFactory = ra
       countUnservedItems: database.prepare(`
         SELECT COUNT(*) AS count
         FROM order_items
-        WHERE order_id = ? AND is_served = 0
+        WHERE order_id = ? AND is_served = 0 AND is_cancelled = 0
+          AND quantity_reduced < quantity
       `),
       markItemServed: database.prepare(`
         UPDATE order_items
         SET is_served = 1, served_at_ms = ?, served_by_device_id = ?, updated_at_ms = ?
-        WHERE order_item_id = ? AND order_id = ?
+        WHERE order_item_id = ? AND order_id = ? AND is_cancelled = 0
       `),
       updateServingOrder: database.prepare(`
         UPDATE orders
@@ -485,6 +673,7 @@ export function createOrderRepository({ database, now = Date.now, idFactory = ra
         SELECT COUNT(*) AS count
         FROM orders
         WHERE session_id = ? AND status IN ('new', 'active')
+          AND EXISTS (SELECT 1 FROM order_items WHERE order_items.order_id = orders.order_id AND is_cancelled = 0 AND quantity_reduced < quantity)
       `),
       closeSession: database.prepare(`
         UPDATE table_sessions
@@ -552,6 +741,13 @@ export function createOrderRepository({ database, now = Date.now, idFactory = ra
           accepted_at_ms
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'new', ?, ?)
       `),
+      insertKitchenAdditionOrder: database.prepare(`
+        INSERT INTO orders (
+          order_id, client_order_id, request_fingerprint, canonical_request_json,
+          customer_device_id, table_id, session_id, table_number_snapshot,
+          total_amount_yen, accepted_at_ms, order_origin, created_by_device_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'kitchen_addition', ?)
+      `),
       insertOrderItem: database.prepare(`
         INSERT INTO order_items (
           order_id,
@@ -594,7 +790,23 @@ export function createOrderRepository({ database, now = Date.now, idFactory = ra
 
   function loadOrder(row) {
     const itemRows = statements.findOrderItems.all(row.order_id);
-    return mapOrderRow(row, itemRows.map(mapOrderItemRow));
+    const cancellationsByItem = new Map();
+    for (const event of statements.findCancellationEvents.all(row.order_id)) {
+      const history = cancellationsByItem.get(Number(event.order_item_id)) || [];
+      history.push(mapCancellationEventRow(event));
+      cancellationsByItem.set(Number(event.order_item_id), history);
+    }
+    const quantitiesByItem = new Map();
+    for (const event of statements.findQuantityEvents.all(row.order_id)) {
+      const history = quantitiesByItem.get(Number(event.order_item_id)) || [];
+      history.push(mapQuantityEventRow(event));
+      quantitiesByItem.set(Number(event.order_item_id), history);
+    }
+    return mapOrderRow(row, itemRows.map((item) => mapOrderItemRow(
+      item,
+      cancellationsByItem.get(Number(item.order_item_id)) || [],
+      quantitiesByItem.get(Number(item.order_item_id)) || [],
+    )));
   }
 
   function conflict() {
@@ -1138,6 +1350,8 @@ export function createOrderRepository({ database, now = Date.now, idFactory = ra
       if (order.status === 'completed') throw repositoryError(ORDER_ERROR_CODES.ORDER_CONFLICT, 'The order is already completed.');
       const item = statements.findServingItem.get(orderItemId, normalizedOrderId);
       if (!item) throw repositoryError(ORDER_ERROR_CODES.INVALID_ORDER_REQUEST, 'The order item was not found.');
+      if (item.is_cancelled === 1) throw repositoryError(ORDER_ERROR_CODES.ORDER_CONFLICT, 'A cancelled order item cannot be marked served.');
+      if (Number(item.quantity_reduced) >= Number(item.quantity)) throw repositoryError(ORDER_ERROR_CODES.ORDER_CONFLICT, 'An item with no billable quantity cannot be marked served.');
       if (item.is_served === 1) {
         database.exec('COMMIT;');
         transactionOpen = false;
@@ -1178,6 +1392,289 @@ export function createOrderRepository({ database, now = Date.now, idFactory = ra
     }
   }
 
+  function changeOrderItemCancellation({ principal, orderId, orderItemId, reason, cancelled } = {}) {
+    if (closed) throw repositoryError(ORDER_ERROR_CODES.DATABASE_FAILURE, 'The order repository is closed.');
+    authorizeDeviceRole(principal, ['kitchen', 'admin']);
+    const normalizedOrderId = normalizeUuid(orderId, 'orderId');
+    if (!Number.isSafeInteger(orderItemId) || orderItemId < 1) {
+      throw repositoryError(ORDER_ERROR_CODES.INVALID_ORDER_REQUEST, 'orderItemId must be a positive integer.');
+    }
+    const normalizedReason = normalizeCancellationReason(reason);
+    let transactionOpen = false;
+    try {
+      database.exec('BEGIN IMMEDIATE;');
+      transactionOpen = true;
+      const target = statements.findCancellationTarget.get(orderItemId, normalizedOrderId);
+      if (!target) throw repositoryError(ORDER_ERROR_CODES.ORDER_NOT_FOUND, 'The order item was not found.');
+      if (Boolean(target.is_cancelled) === cancelled) {
+        const current = statements.findServingOrder.get(normalizedOrderId);
+        database.exec('COMMIT;');
+        transactionOpen = false;
+        return { idempotencyResult: 'replayed', order: loadOrder(current), event: null };
+      }
+      if (target.closed_at_ms != null || Number(target.checkout_was_ready) === 1 || Number(target.payment_recorded) === 1) {
+        throw repositoryError(ORDER_ERROR_CODES.ORDER_CONFLICT, 'A ready, paid, or closed table session cannot be changed.');
+      }
+      const changedAtMs = now();
+      if (!Number.isSafeInteger(changedAtMs) || changedAtMs < 0) {
+        throw repositoryError(ORDER_ERROR_CODES.DATABASE_FAILURE, 'now must return a non-negative integer timestamp.');
+      }
+      const update = statements.updateItemCancellation.run(cancelled ? 1 : 0, changedAtMs, orderItemId, normalizedOrderId);
+      if (Number(update.changes) !== 1) throw repositoryError(ORDER_ERROR_CODES.ORDER_CONFLICT, 'The order item changed while it was being updated.');
+      const actorLabel = typeof principal.deviceLabel === 'string' && principal.deviceLabel.trim()
+        ? principal.deviceLabel.trim().slice(0, 120)
+        : principal.deviceId;
+      statements.insertCancellationEvent.run(
+        normalizedOrderId,
+        orderItemId,
+        cancelled ? 'cancelled' : 'restored',
+        principal.deviceId,
+        actorLabel,
+        changedAtMs,
+        normalizedReason,
+        target.is_served,
+        target.served_at_ms,
+        target.served_by_device_id,
+        null,
+      );
+
+      const counts = statements.countBillableOrderItemStates.get(normalizedOrderId);
+      let nextStatus = target.status;
+      let completedAtMs = target.completed_at_ms;
+      if (Number(counts.billable_count) > 0) {
+        if (Number(counts.unserved_count) > 0) {
+          nextStatus = Number(counts.served_count) > 0 ? 'active' : 'new';
+          completedAtMs = null;
+        } else {
+          nextStatus = 'completed';
+          completedAtMs ??= changedAtMs;
+        }
+      }
+      statements.updateServingOrder.run(nextStatus, completedAtMs, normalizedOrderId);
+
+      if (target.session_id) {
+        const checkout = statements.findRequestedCheckoutForSession.get(target.session_id);
+        if (checkout) {
+          const total = orderPricing.getSessionTotalYen(target.session_id);
+          statements.updateRequestedCheckoutTotal.run(total, changedAtMs, checkout.checkout_request_id);
+        }
+      }
+
+      const systemState = statements.findSystemState.get();
+      if (!systemState?.event_epoch) throw repositoryError(ORDER_ERROR_CODES.DATABASE_FAILURE, 'Current event epoch is unavailable.');
+      const eventPayloadJson = JSON.stringify({ orderId: normalizedOrderId, orderItemId, isCancelled: cancelled });
+      const eventInsertion = statements.insertOrderUpdateEvent.run(
+        systemState.event_epoch,
+        'order.updated',
+        normalizedOrderId,
+        principal.deviceId,
+        eventPayloadJson,
+        changedAtMs,
+      );
+      const updated = statements.findServingOrder.get(normalizedOrderId);
+      database.exec('COMMIT;');
+      transactionOpen = false;
+      return {
+        idempotencyResult: 'created',
+        order: loadOrder(updated),
+        event: { eventEpoch: systemState.event_epoch, eventId: Number(eventInsertion.lastInsertRowid) },
+      };
+    } catch (error) {
+      if (transactionOpen) { try { database.exec('ROLLBACK;'); } catch {} }
+      if (error instanceof OrderRepositoryError) throw error;
+      throw repositoryError(ORDER_ERROR_CODES.DATABASE_FAILURE, 'The order item cancellation update failed.', { cause: error });
+    }
+  }
+
+  function cancelOrderItem({ principal, orderId, orderItemId, reason } = {}) {
+    return changeOrderItemCancellation({ principal, orderId, orderItemId, reason, cancelled: true });
+  }
+
+  function restoreOrderItemCancellation({ principal, orderId, orderItemId, reason } = {}) {
+    return changeOrderItemCancellation({ principal, orderId, orderItemId, reason, cancelled: false });
+  }
+
+  function adjustKitchenOrderItemQuantity({
+    principal,
+    orderId,
+    orderItemId,
+    direction,
+    operationId,
+    expectedBillableQuantity,
+    confirmZero = false,
+    reason = null,
+  } = {}) {
+    if (closed) throw repositoryError(ORDER_ERROR_CODES.DATABASE_FAILURE, 'The order repository is closed.');
+    authorizeDeviceRole(principal, ['kitchen', 'admin']);
+    const normalizedOrderId = normalizeUuid(orderId, 'orderId');
+    const normalizedOperationId = normalizeUuid(operationId, 'operationId');
+    if (!Number.isSafeInteger(orderItemId) || orderItemId < 1) throw repositoryError(ORDER_ERROR_CODES.INVALID_ORDER_REQUEST, 'orderItemId must be a positive integer.');
+    if (!['increase', 'decrease'].includes(direction)) throw repositoryError(ORDER_ERROR_CODES.INVALID_ORDER_REQUEST, 'direction must be increase or decrease.');
+    if (!Number.isSafeInteger(expectedBillableQuantity) || expectedBillableQuantity < 1 || expectedBillableQuantity > MAX_QUANTITY) throw repositoryError(ORDER_ERROR_CODES.INVALID_ORDER_REQUEST, 'expectedBillableQuantity must be between 1 and 99.');
+    if (typeof confirmZero !== 'boolean') throw repositoryError(ORDER_ERROR_CODES.INVALID_ORDER_REQUEST, 'confirmZero must be boolean.');
+    const normalizedReason = normalizeCancellationReason(reason);
+    if (direction === 'increase' && (confirmZero || normalizedReason !== null)) throw repositoryError(ORDER_ERROR_CODES.INVALID_ORDER_REQUEST, 'Increase operations cannot include cancellation confirmation or reason.');
+
+    let transactionOpen = false;
+    try {
+      database.exec('BEGIN IMMEDIATE;');
+      transactionOpen = true;
+
+      const priorOperations = statements.findQuantityOperation.all(normalizedOperationId, normalizedOperationId);
+      if (priorOperations.length > 0) {
+        if (priorOperations.length !== 1) {
+          throw repositoryError(ORDER_ERROR_CODES.ORDER_CONFLICT, 'The quantity operation ID is associated with conflicting saved operations.');
+        }
+        const priorOperation = priorOperations[0];
+        const priorDirection = priorOperation.action === 'added' ? 'increase'
+          : ['decreased', 'cancelled_at_zero'].includes(priorOperation.action) ? 'decrease' : null;
+        if (priorDirection !== direction
+          || priorOperation.order_id !== normalizedOrderId
+          || Number(priorOperation.order_item_id) !== orderItemId
+          || Number(priorOperation.previous_billable_quantity) !== expectedBillableQuantity
+          || Boolean(priorOperation.confirm_zero) !== confirmZero
+          || (priorOperation.reason ?? null) !== normalizedReason) {
+          throw repositoryError(ORDER_ERROR_CODES.ORDER_CONFLICT, 'The quantity operation ID is already associated with a different payload.');
+        }
+        const current = statements.findServingOrder.get(normalizedOrderId);
+        if (!current) throw repositoryError(ORDER_ERROR_CODES.ORDER_NOT_FOUND, 'The source order was not found.');
+        database.exec('COMMIT;');
+        transactionOpen = false;
+        return { idempotencyResult: 'replayed', order: loadOrder(current), event: null };
+      }
+      if (direction === 'increase' && statements.findOrder.get(normalizedOperationId)) {
+        throw repositoryError(ORDER_ERROR_CODES.ORDER_CONFLICT, 'The operation ID is already associated with another order.');
+      }
+
+      const target = statements.findQuantityChangeTarget.get(orderItemId, normalizedOrderId);
+      if (!target) throw repositoryError(ORDER_ERROR_CODES.ORDER_NOT_FOUND, 'The order item was not found.');
+      if (target.is_cancelled === 1) throw repositoryError(ORDER_ERROR_CODES.ORDER_CONFLICT, 'A cancelled order item cannot be adjusted.');
+      if (target.closed_at_ms != null || Number(target.checkout_was_ready) === 1 || Number(target.payment_recorded) === 1) {
+        throw repositoryError(ORDER_ERROR_CODES.ORDER_CONFLICT, 'A ready, paid, or closed table session cannot be changed.');
+      }
+      const currentQuantity = Number(target.quantity) - Number(target.quantity_reduced);
+      if (currentQuantity !== expectedBillableQuantity) throw repositoryError(ORDER_ERROR_CODES.ORDER_CONFLICT, 'The order quantity changed; reload the latest order before trying again.');
+
+      const changedAtMs = now();
+      if (!Number.isSafeInteger(changedAtMs) || changedAtMs < 0) throw repositoryError(ORDER_ERROR_CODES.DATABASE_FAILURE, 'now must return a non-negative integer timestamp.');
+      const actorLabel = typeof principal.deviceLabel === 'string' && principal.deviceLabel.trim()
+        ? principal.deviceLabel.trim().slice(0, 120)
+        : principal.deviceId;
+      const systemState = statements.findSystemState.get();
+      if (!systemState?.event_epoch) throw repositoryError(ORDER_ERROR_CODES.DATABASE_FAILURE, 'Current event epoch is unavailable.');
+      let eventType = 'order.updated';
+      let eventAggregateId = normalizedOrderId;
+      let eventPayload;
+
+      if (direction === 'decrease') {
+        let cancelledToZero = false;
+        if (currentQuantity === 1) {
+          if (!confirmZero) throw repositoryError(ORDER_ERROR_CODES.ORDER_CONFLICT, 'The last billable item requires explicit zero-quantity confirmation.');
+          const updated = statements.updateItemCancellation.run(1, changedAtMs, orderItemId, normalizedOrderId);
+          if (Number(updated.changes) !== 1) throw repositoryError(ORDER_ERROR_CODES.ORDER_CONFLICT, 'The order item changed while it was being updated.');
+          statements.insertCancellationEvent.run(
+            normalizedOrderId, orderItemId, 'cancelled', principal.deviceId, actorLabel,
+            changedAtMs, normalizedReason, target.is_served, target.served_at_ms,
+            target.served_by_device_id, normalizedOperationId,
+          );
+          cancelledToZero = true;
+        } else {
+          if (confirmZero || normalizedReason !== null) throw repositoryError(ORDER_ERROR_CODES.INVALID_ORDER_REQUEST, 'Zero-quantity confirmation is only valid for the last billable item.');
+          const nextQuantityReduced = Number(target.quantity_reduced) + 1;
+          const updated = statements.updateQuantityReduced.run(nextQuantityReduced, changedAtMs, orderItemId, normalizedOrderId);
+          if (Number(updated.changes) !== 1) throw repositoryError(ORDER_ERROR_CODES.ORDER_CONFLICT, 'The order item changed while it was being updated.');
+          statements.insertQuantityEvent.run(
+            normalizedOperationId, normalizedOrderId, orderItemId, 'decreased', -1,
+            currentQuantity, currentQuantity - 1, null, null, principal.deviceId,
+            actorLabel, changedAtMs, target.is_served, target.served_at_ms,
+            target.served_by_device_id,
+          );
+        }
+
+        const counts = statements.countBillableOrderItemStates.get(normalizedOrderId);
+        let nextStatus = target.status;
+        let completedAtMs = target.completed_at_ms;
+        if (Number(counts.billable_count) > 0) {
+          if (Number(counts.unserved_count) > 0) {
+            nextStatus = Number(counts.served_count) > 0 ? 'active' : 'new';
+            completedAtMs = null;
+          } else {
+            nextStatus = 'completed';
+            completedAtMs ??= changedAtMs;
+          }
+        }
+        statements.updateServingOrder.run(nextStatus, completedAtMs, normalizedOrderId);
+        if (nextStatus === 'completed' && target.status !== 'completed') eventType = 'order.completed';
+        eventPayload = JSON.stringify({ orderId: normalizedOrderId, orderItemId, quantityOperation: 'decrease', billableQuantity: currentQuantity - 1, cancelledToZero });
+      } else {
+        const sourceDevice = statements.findDevice.get(target.customer_device_id);
+        if (!sourceDevice || sourceDevice.role !== 'customer') throw repositoryError(ORDER_ERROR_CODES.ORDER_CONFLICT, 'The source order device is unavailable.');
+        const unitPriceYen = Number(target.adjusted_unit_price_yen ?? target.unit_price_yen_snapshot);
+        const newOrderId = idFactory();
+        validateGeneratedValues(newOrderId, changedAtMs);
+        const canonicalRequestJson = JSON.stringify({
+          operation: 'kitchen_item_addition',
+          sourceOrderId: normalizedOrderId,
+          sourceOrderItemId: orderItemId,
+          unitPriceYenSnapshot: unitPriceYen,
+        });
+        const requestFingerprint = fingerprintCanonicalIntent(canonicalRequestJson);
+        statements.insertKitchenAdditionOrder.run(
+          newOrderId,
+          normalizedOperationId,
+          requestFingerprint,
+          canonicalRequestJson,
+          target.customer_device_id,
+          target.table_id,
+          target.session_id,
+          target.table_number_snapshot,
+          unitPriceYen,
+          changedAtMs,
+          principal.deviceId,
+        );
+        const lineInsertion = statements.insertOrderItem.run(
+          newOrderId, 0, target.menu_item_id, target.formal_name_snapshot,
+          target.kitchen_alias_snapshot, unitPriceYen, 1, unitPriceYen,
+          target.variant_id, target.variant_name_snapshot, target.variant_volume_snapshot,
+          target.temperature_snapshot, target.serving_option_id,
+          target.serving_option_name_snapshot, changedAtMs, changedAtMs,
+        );
+        const newOrderItemId = Number(lineInsertion.lastInsertRowid);
+        statements.insertQuantityEvent.run(
+          normalizedOperationId, normalizedOrderId, orderItemId, 'added', 1,
+          currentQuantity, currentQuantity, newOrderId, newOrderItemId,
+          principal.deviceId, actorLabel, changedAtMs, target.is_served,
+          target.served_at_ms, target.served_by_device_id,
+        );
+        eventType = 'order.created';
+        eventAggregateId = newOrderId;
+        eventPayload = JSON.stringify({ orderId: newOrderId, tableId: target.table_id, tableNumberSnapshot: target.table_number_snapshot, sourceOrderId: normalizedOrderId, sourceOrderItemId: orderItemId, createdAtMs: changedAtMs });
+      }
+
+      if (target.session_id) {
+        const checkout = statements.findRequestedCheckoutForSession.get(target.session_id);
+        if (checkout) statements.updateRequestedCheckoutTotal.run(orderPricing.getSessionTotalYen(target.session_id), changedAtMs, checkout.checkout_request_id);
+      }
+
+      const eventInsertion = statements.insertOrderUpdateEvent.run(
+        systemState.event_epoch, eventType, eventAggregateId, principal.deviceId,
+        eventPayload, changedAtMs,
+      );
+      const updated = statements.findServingOrder.get(normalizedOrderId);
+      database.exec('COMMIT;');
+      transactionOpen = false;
+      return {
+        idempotencyResult: 'created',
+        order: loadOrder(updated),
+        event: { eventEpoch: systemState.event_epoch, eventId: Number(eventInsertion.lastInsertRowid) },
+      };
+    } catch (error) {
+      if (transactionOpen) { try { database.exec('ROLLBACK;'); } catch {} }
+      if (error instanceof OrderRepositoryError) throw error;
+      throw repositoryError(ORDER_ERROR_CODES.DATABASE_FAILURE, 'The kitchen order quantity adjustment failed.', { cause: error });
+    }
+  }
+
   function adjustItemUnitPrice({ principal, orderId, orderItemId, unitPriceYen } = {}) {
     if (closed) throw repositoryError(ORDER_ERROR_CODES.DATABASE_FAILURE, 'The order repository is closed.');
     authorizeDeviceRole(principal, ['kitchen', 'admin']);
@@ -1194,6 +1691,7 @@ export function createOrderRepository({ database, now = Date.now, idFactory = ra
       const checkout = target.session_id ? statements.findSessionCheckout.get(target.session_id) : null;
       if (target.closed_at_ms != null || Number(target.payment_recorded) === 1) throw repositoryError(ORDER_ERROR_CODES.ORDER_CONFLICT, 'A closed or paid table session cannot be changed.');
       if (checkout?.status === 'ready') throw repositoryError(ORDER_ERROR_CODES.ORDER_CONFLICT, 'A ready checkout cannot be changed.');
+      if (target.is_cancelled === 1) throw repositoryError(ORDER_ERROR_CODES.ORDER_CONFLICT, 'A cancelled order item cannot have its price adjusted.');
       const previous = target.adjusted_unit_price_yen == null ? Number(target.unit_price_yen_snapshot) : Number(target.adjusted_unit_price_yen);
       if (previous === unitPriceYen) {
         const unchanged = statements.findServingOrder.get(normalizedOrderId);
@@ -1230,6 +1728,9 @@ export function createOrderRepository({ database, now = Date.now, idFactory = ra
     getHistory,
     closeTableSession,
     markItemServed,
+    cancelOrderItem,
+    restoreOrderItemCancellation,
+    adjustKitchenOrderItemQuantity,
     adjustItemUnitPrice,
     close() {
       closed = true;

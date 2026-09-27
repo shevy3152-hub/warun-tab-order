@@ -175,6 +175,17 @@ export async function fetchAdminPaymentHistory({ env = globalThis, fetchImpl = e
   return body.payments;
 }
 
+export async function fetchAdminCheckoutRequests({ env = globalThis, fetchImpl = env.fetch } = {}) {
+  const token = configuredAdminToken(env);
+  const base = apiBase(env);
+  if (!token || !base || typeof fetchImpl !== "function") throw new Error("Admin checkout state is not configured.");
+  const response = await fetchImpl(`${base}/admin/checkout-requests`, { headers: { Accept: "application/json", Authorization: `Bearer ${token}` } });
+  if (!response.ok) throw new Error("Checkout state could not be loaded.");
+  const body = await response.json();
+  if (!Array.isArray(body?.checkouts)) throw new Error("Checkout state response was invalid.");
+  return body.checkouts;
+}
+
 export async function voidAdminPayment({ env = globalThis, paymentRecordId, expectedVersion, reason, fetchImpl = env.fetch } = {}) {
   const token = configuredAdminToken(env);
   const base = apiBase(env);

@@ -204,7 +204,7 @@ export function createCheckoutRepository({ database, now = Date.now, idFactory =
     return JSON.stringify(orderRows(sessionId).map((row) => [
       row.order_id, Number(row.order_item_id), row.formal_name_snapshot, row.variant_name_snapshot,
       row.variant_volume_snapshot, row.temperature_snapshot, row.serving_option_name_snapshot,
-      Number(row.unit_price_yen_snapshot), row.adjusted_unit_price_yen == null ? null : Number(row.adjusted_unit_price_yen), Number(row.quantity), Number(row.line_total_yen),
+      Number(row.unit_price_yen_snapshot), row.adjusted_unit_price_yen == null ? null : Number(row.adjusted_unit_price_yen), Number(row.quantity), Number(row.billable_quantity), Number(row.line_total_yen),
     ]));
   }
   function adjustmentTotal(checkoutRequestId) {
@@ -342,7 +342,11 @@ export function createCheckoutRepository({ database, now = Date.now, idFactory =
       if (Number(current.version) !== version) throw error(CHECKOUT_ERROR_CODES.VERSION_CONFLICT, 'Checkout request has changed since it was read.');
       const session = database.prepare('SELECT session_id, table_id, closed_at_ms, version FROM table_sessions WHERE session_id = ?').get(current.table_session_id);
       if (!session || session.closed_at_ms !== null) throw error(CHECKOUT_ERROR_CODES.PAYMENT_CONFLICT, 'The table session is already closed.');
-      const activeOrders = database.prepare("SELECT COUNT(*) AS count FROM orders WHERE session_id = ? AND status IN ('new', 'active')").get(current.table_session_id);
+      const activeOrders = database.prepare(`
+        SELECT COUNT(*) AS count FROM orders
+        WHERE session_id = ? AND status IN ('new', 'active')
+          AND EXISTS (SELECT 1 FROM order_items WHERE order_items.order_id = orders.order_id AND is_cancelled = 0 AND quantity_reduced < quantity)
+      `).get(current.table_session_id);
       if (Number(activeOrders.count) > 0) throw error(CHECKOUT_ERROR_CODES.PAYMENT_CONFLICT, 'All orders must be provided before payment is recorded.');
       const currentOrderTotal = orderTotal(current.table_session_id);
       const currentFingerprint = orderFingerprint(current.table_session_id);
@@ -360,7 +364,7 @@ export function createCheckoutRepository({ database, now = Date.now, idFactory =
       const eventEpoch = eventState();
       database.prepare(`INSERT INTO payment_records (payment_record_id, checkout_request_id, table_session_id, table_id, payment_method, confirmed_total_yen, paid_at_ms, status, version, created_at_ms, updated_at_ms) VALUES (?, ?, ?, ?, ?, ?, ?, 'paid', 1, ?, ?)`).run(paymentRecordId, id, current.table_session_id, session.table_id, method, confirmedTotalYen, paidAtMs, paidAtMs, paidAtMs);
       const insertItem = database.prepare(`INSERT INTO payment_order_items (payment_record_id, order_id, order_item_id, formal_name_snapshot, variant_name_snapshot, variant_volume_snapshot, temperature_snapshot, serving_option_name_snapshot, unit_price_yen_snapshot, adjusted_unit_price_yen, current_unit_price_yen, quantity, line_total_yen, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
-      for (const [index, row] of orderRows(current.table_session_id).entries()) insertItem.run(paymentRecordId, row.order_id, row.order_item_id, row.formal_name_snapshot, row.variant_name_snapshot, row.variant_volume_snapshot, row.temperature_snapshot, row.serving_option_name_snapshot, row.unit_price_yen_snapshot, row.adjusted_unit_price_yen, row.current_unit_price_yen, row.quantity, row.line_total_yen, index);
+      for (const [index, row] of orderRows(current.table_session_id).entries()) insertItem.run(paymentRecordId, row.order_id, row.order_item_id, row.formal_name_snapshot, row.variant_name_snapshot, row.variant_volume_snapshot, row.temperature_snapshot, row.serving_option_name_snapshot, row.unit_price_yen_snapshot, row.adjusted_unit_price_yen, row.current_unit_price_yen, row.billable_quantity, row.line_total_yen, index);
       const insertAdjustment = database.prepare('INSERT INTO payment_adjustments (payment_record_id, kind, label, amount_yen, sort_order) VALUES (?, ?, ?, ?, ?)');
       for (const [index, row] of findAdjustments.all(id).entries()) insertAdjustment.run(paymentRecordId, row.kind, row.label, row.amount_yen, index);
       const closedAtMs = paidAtMs;

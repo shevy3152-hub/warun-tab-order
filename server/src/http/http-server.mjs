@@ -90,7 +90,10 @@ const ROUTE_METHODS = new Map([
   ['/v1/customer/checkout-requests/current', 'GET'],
   ['/v1/kitchen/checkout-requests', 'GET'],
   ['/v1/kitchen/order-items/serve', 'POST'],
+  ['/v1/kitchen/order-items/cancel', 'POST'],
+  ['/v1/kitchen/order-items/restore', 'POST'],
   ['/v1/kitchen/order-items/price', 'POST'],
+  ['/v1/kitchen/order-items/quantity', 'POST'],
   ['/v1/tables/sessions/close', 'POST'],
   ['/v1/kitchen/order-history', 'GET'],
   ['/v1/admin/order-history', 'GET'],
@@ -866,6 +869,9 @@ function createConfiguredHttpServer({
       || typeof orderRepository.getHistory !== 'function'
       || typeof orderRepository.closeTableSession !== 'function'
       || typeof orderRepository.markItemServed !== 'function'
+      || typeof orderRepository.cancelOrderItem !== 'function'
+      || typeof orderRepository.restoreOrderItemCancellation !== 'function'
+      || typeof orderRepository.adjustKitchenOrderItemQuantity !== 'function'
       || !eventRepository
       || typeof eventRepository.replay !== 'function'
       || typeof eventRepository.readCommittedForPrincipal !== 'function'
@@ -1187,6 +1193,32 @@ function createConfiguredHttpServer({
         return;
       }
 
+      if (target.path === '/v1/kitchen/order-items/cancel' || target.path === '/v1/kitchen/order-items/restore') {
+        authorizeDeviceRole(principal, ['kitchen', 'admin']);
+        const restore = target.path.endsWith('/restore');
+        const orders = requireService(orderRepository, restore ? 'restoreOrderItemCancellation' : 'cancelOrderItem');
+        const body = await readJsonBody(request);
+        if (!body || typeof body !== 'object' || Array.isArray(body)
+          || Object.keys(body).some((key) => !['orderId', 'orderItemId', 'reason'].includes(key))) {
+          throw createHttpError(HTTP_ERROR_CODES.BAD_REQUEST);
+        }
+        const result = orders[restore ? 'restoreOrderItemCancellation' : 'cancelOrderItem']({
+          principal,
+          orderId: body?.orderId,
+          orderItemId: body?.orderItemId,
+          reason: body?.reason,
+        });
+        await notifyCommittedSafely(sseHub, result);
+        if (response.destroyed) return;
+        writeJsonResponse(response, {
+          statusCode: 200,
+          body: mapOrderHistoryResponse([result.order]),
+          requestId,
+          headers: { 'Idempotency-Result': result.idempotencyResult },
+        });
+        return;
+      }
+
       if (target.path === '/v1/tables/sessions/close') {
         authorizeDeviceRole(principal, ['kitchen', 'admin']);
         const orders = requireService(orderRepository, 'closeTableSession');
@@ -1274,6 +1306,35 @@ function createConfiguredHttpServer({
         await notifyCommittedSafely(sseHub, result);
         if (response.destroyed) return;
         writeJsonResponse(response, { statusCode: 200, body: mapOrderHistoryResponse([result.order]), requestId });
+        return;
+      }
+
+      if (target.path === '/v1/kitchen/order-items/quantity') {
+        authorizeDeviceRole(principal, ['kitchen', 'admin']);
+        const orders = requireService(orderRepository, 'adjustKitchenOrderItemQuantity');
+        const body = await readJsonBody(request);
+        if (!body || typeof body !== 'object' || Array.isArray(body)
+          || Object.keys(body).some((key) => !['orderId', 'orderItemId', 'direction', 'operationId', 'expectedBillableQuantity', 'confirmZero', 'reason'].includes(key))) {
+          throw createHttpError(HTTP_ERROR_CODES.BAD_REQUEST);
+        }
+        const result = orders.adjustKitchenOrderItemQuantity({
+          principal,
+          orderId: body.orderId,
+          orderItemId: body.orderItemId,
+          direction: body.direction,
+          operationId: body.operationId,
+          expectedBillableQuantity: body.expectedBillableQuantity,
+          confirmZero: body.confirmZero ?? false,
+          reason: body.reason ?? null,
+        });
+        await notifyCommittedSafely(sseHub, result);
+        if (response.destroyed) return;
+        writeJsonResponse(response, {
+          statusCode: 200,
+          body: mapOrderHistoryResponse([result.order]),
+          requestId,
+          headers: { 'Idempotency-Result': result.idempotencyResult },
+        });
         return;
       }
 

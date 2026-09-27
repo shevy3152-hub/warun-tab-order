@@ -406,6 +406,405 @@ test('per-line price adjustments obey the order snapshot ceiling, persist, and u
   });
 });
 
+test('order-item cancellation excludes full lines from requested checkout and restore preserves serving snapshots', async () => {
+  await withFixture(({ database }) => {
+    let clock = FIXED_NOW;
+    const nextTime = () => ++clock;
+    const customer = issuePrincipal(database, DEVICE_A, 1).principal;
+    const kitchen = issuePrincipal(database, DEVICE_KITCHEN, 5).principal;
+    const orders = makeRepository(database, { now: nextTime });
+    const checkout = createCheckoutRepository({ database, now: nextTime });
+    const created = orders.createOrder(orderRequest({ items: [
+      { menuItemId: 'edamame', quantity: 2 },
+      { menuItemId: 'beer', quantity: 1 },
+    ] })).order;
+    const unservedItem = created.items.find((item) => item.menuItemId === 'edamame');
+    const servedItem = created.items.find((item) => item.menuItemId === 'beer');
+    checkout.createCheckout({ principal: customer, checkoutRequestId: uuid(910), receiptRequested: false });
+    orders.markItemServed({ principal: kitchen, orderId: created.orderId, orderItemId: servedItem.orderItemId });
+    const servingSnapshot = { ...database.prepare('SELECT is_served, served_at_ms, served_by_device_id FROM order_items WHERE order_item_id = ?').get(servedItem.orderItemId) };
+
+    const cancelledUnserved = orders.cancelOrderItem({ principal: kitchen, orderId: created.orderId, orderItemId: unservedItem.orderItemId });
+    assert.equal(cancelledUnserved.order.items.find((item) => item.orderItemId === unservedItem.orderItemId).isCancelled, true);
+    assert.equal(cancelledUnserved.order.items.find((item) => item.orderItemId === unservedItem.orderItemId).isServed, false);
+    assert.equal(database.prepare('SELECT ordered_items_total_yen FROM checkout_requests WHERE checkout_request_id = ?').get(uuid(910)).ordered_items_total_yen, 680);
+
+    const cancelledServed = orders.cancelOrderItem({ principal: kitchen, orderId: created.orderId, orderItemId: servedItem.orderItemId, reason: '提供後の誤提供' });
+    assert.equal(cancelledServed.order.status, 'cancelled');
+    assert.equal(cancelledServed.order.totalAmountYen, 0);
+    assert.equal(cancelledServed.order.items.find((item) => item.orderItemId === servedItem.orderItemId).currentBillableAmountYen, 0);
+    assert.deepEqual({ ...database.prepare('SELECT is_served, served_at_ms, served_by_device_id FROM order_items WHERE order_item_id = ?').get(servedItem.orderItemId) }, servingSnapshot);
+    assert.equal(database.prepare('SELECT ordered_items_total_yen FROM checkout_requests WHERE checkout_request_id = ?').get(uuid(910)).ordered_items_total_yen, 0);
+    const historical = orders.getHistory(kitchen).find((order) => order.orderId === created.orderId);
+    assert.equal(historical.status, 'cancelled');
+    assert.deepEqual(historical.items.map((item) => item.unitPriceYenSnapshot), [680, 380]);
+    const servedHistory = historical.items.find((item) => item.orderItemId === servedItem.orderItemId).cancellationHistory;
+    assert.equal(servedHistory[0].reason, '提供後の誤提供');
+    assert.equal(servedHistory[0].actorDeviceId, DEVICE_KITCHEN);
+    assert.ok(servedHistory[0].occurredAtMs > servingSnapshot.served_at_ms);
+    assert.equal(servedHistory[0].isServedSnapshot, true);
+    assert.equal(servedHistory[0].servedAtMsSnapshot, servingSnapshot.served_at_ms);
+    assert.equal(servedHistory[0].servedByDeviceIdSnapshot, DEVICE_KITCHEN);
+
+    const restoredServed = orders.restoreOrderItemCancellation({ principal: kitchen, orderId: created.orderId, orderItemId: servedItem.orderItemId });
+    assert.equal(restoredServed.order.status, 'completed');
+    assert.equal(restoredServed.order.totalAmountYen, 680);
+    const restoredServedItem = restoredServed.order.items.find((item) => item.orderItemId === servedItem.orderItemId);
+    assert.equal(restoredServedItem.isServed, true);
+    assert.equal(restoredServedItem.servedByDeviceId, DEVICE_KITCHEN);
+    assert.equal(restoredServedItem.cancellationHistory[1].action, 'restored');
+    assert.equal(restoredServedItem.cancellationHistory[1].actorDeviceId, DEVICE_KITCHEN);
+    assert.equal(restoredServedItem.cancellationHistory[1].reason, null);
+    assert.ok(restoredServedItem.cancellationHistory[1].occurredAtMs > servedHistory[0].occurredAtMs);
+    assert.equal(database.prepare('SELECT ordered_items_total_yen FROM checkout_requests WHERE checkout_request_id = ?').get(uuid(910)).ordered_items_total_yen, 680);
+
+    const restoredUnserved = orders.restoreOrderItemCancellation({ principal: kitchen, orderId: created.orderId, orderItemId: unservedItem.orderItemId, reason: '誤操作の復元' });
+    assert.equal(restoredUnserved.order.status, 'active');
+    assert.equal(restoredUnserved.order.totalAmountYen, 1440);
+    const restoredUnservedItem = restoredUnserved.order.items.find((item) => item.orderItemId === unservedItem.orderItemId);
+    assert.equal(restoredUnservedItem.isServed, false);
+    assert.equal(restoredUnservedItem.cancellationHistory[1].reason, '誤操作の復元');
+    assert.equal(database.prepare('SELECT ordered_items_total_yen FROM checkout_requests WHERE checkout_request_id = ?').get(uuid(910)).ordered_items_total_yen, 1440);
+    assert.deepEqual({ ...database.prepare('SELECT unit_price_yen_snapshot, line_total_yen FROM order_items WHERE order_item_id = ?').get(unservedItem.orderItemId) }, { unit_price_yen_snapshot: 380, line_total_yen: 760 });
+    assert.equal(database.prepare('PRAGMA integrity_check').get().integrity_check, 'ok');
+    assert.deepEqual(database.prepare('PRAGMA foreign_key_check').all(), []);
+    checkout.close();
+    orders.close();
+  });
+});
+
+test('kitchen quantity controls preserve snapshots and serving history while updating requested totals', async () => {
+  await withFixture(async ({ database, openAdditionalConnection }) => {
+    let clock = FIXED_NOW;
+    const nextTime = () => ++clock;
+    const customer = issuePrincipal(database, DEVICE_A, 1).principal;
+    const kitchen = issuePrincipal(database, DEVICE_KITCHEN, 5).principal;
+    const orders = makeRepository(database, { now: nextTime });
+    const checkout = createCheckoutRepository({ database, now: nextTime });
+    const created = orders.createOrder(orderRequest({ items: [
+      { menuItemId: 'edamame', quantity: 3 },
+      { menuItemId: 'beer', quantity: 2 },
+    ] })).order;
+    const edamame = created.items.find((item) => item.menuItemId === 'edamame');
+    const beer = created.items.find((item) => item.menuItemId === 'beer');
+    orders.adjustItemUnitPrice({ principal: kitchen, orderId: created.orderId, orderItemId: edamame.orderItemId, unitPriceYen: 300 });
+    checkout.createCheckout({ principal: customer, checkoutRequestId: uuid(912), receiptRequested: false });
+    assert.equal(database.prepare('SELECT ordered_items_total_yen FROM checkout_requests WHERE checkout_request_id = ?').get(uuid(912)).ordered_items_total_yen, 2260);
+
+    orders.markItemServed({ principal: kitchen, orderId: created.orderId, orderItemId: beer.orderItemId });
+    const servedBefore = { ...database.prepare('SELECT is_served, served_at_ms, served_by_device_id FROM order_items WHERE order_item_id = ?').get(beer.orderItemId) };
+    const reducedUnserved = orders.adjustKitchenOrderItemQuantity({
+      principal: kitchen, orderId: created.orderId, orderItemId: edamame.orderItemId,
+      direction: 'decrease', operationId: uuid(930), expectedBillableQuantity: 3,
+    });
+    const reducedBeanRow = reducedUnserved.order.items.find((item) => item.orderItemId === edamame.orderItemId);
+    assert.equal(reducedBeanRow.quantity, 3);
+    assert.equal(reducedBeanRow.quantityReduced, 1);
+    assert.equal(reducedBeanRow.billableQuantity, 2);
+    assert.equal(reducedBeanRow.isServed, false);
+    assert.equal(reducedBeanRow.lineTotalYenSnapshot, 1140);
+    assert.equal(reducedBeanRow.lineTotalYen, 600);
+    assert.equal(database.prepare('SELECT ordered_items_total_yen FROM checkout_requests WHERE checkout_request_id = ?').get(uuid(912)).ordered_items_total_yen, 1960);
+    const replayedReduction = orders.adjustKitchenOrderItemQuantity({
+      principal: kitchen, orderId: created.orderId, orderItemId: edamame.orderItemId,
+      direction: 'decrease', operationId: uuid(930), expectedBillableQuantity: 3,
+    });
+    assert.equal(replayedReduction.idempotencyResult, 'replayed');
+    assert.equal(replayedReduction.event, null);
+    assert.equal(database.prepare('SELECT COUNT(*) AS count FROM order_item_quantity_events WHERE operation_id = ?').get(uuid(930)).count, 1);
+    assertOrderError(() => orders.adjustKitchenOrderItemQuantity({
+      principal: kitchen, orderId: created.orderId, orderItemId: edamame.orderItemId,
+      direction: 'decrease', operationId: uuid(930), expectedBillableQuantity: 2,
+    }), ORDER_ERROR_CODES.ORDER_CONFLICT);
+    assert.equal(database.prepare('SELECT COUNT(*) AS count FROM order_item_quantity_events WHERE operation_id = ?').get(uuid(930)).count, 1);
+    assert.deepEqual({ ...database.prepare('SELECT unit_price_yen_snapshot, adjusted_unit_price_yen, quantity, quantity_reduced, line_total_yen FROM order_items WHERE order_item_id = ?').get(edamame.orderItemId) }, {
+      unit_price_yen_snapshot: 380, adjusted_unit_price_yen: 300, quantity: 3, quantity_reduced: 1, line_total_yen: 1140,
+    });
+
+    const addedFromUnserved = orders.adjustKitchenOrderItemQuantity({
+      principal: kitchen, orderId: created.orderId, orderItemId: edamame.orderItemId,
+      direction: 'increase', operationId: uuid(931), expectedBillableQuantity: 2,
+    });
+    assert.equal(addedFromUnserved.idempotencyResult, 'created');
+    assert.equal(addedFromUnserved.order.items.find((item) => item.orderItemId === edamame.orderItemId).billableQuantity, 2);
+    const addedBeanOrderId = ORDER_B;
+    const addedBeanOrder = orders.getCustomerHistory(customer).find((order) => order.orderId === addedBeanOrderId);
+    assert.equal(addedBeanOrder.orderOrigin, 'kitchen_addition');
+    assert.equal(addedBeanOrder.createdByDeviceId, DEVICE_KITCHEN);
+    assert.equal(addedBeanOrder.items[0].unitPriceYenSnapshot, 300);
+    assert.equal(addedBeanOrder.items[0].isServed, false);
+    assert.equal(database.prepare('SELECT ordered_items_total_yen FROM checkout_requests WHERE checkout_request_id = ?').get(uuid(912)).ordered_items_total_yen, 2260);
+
+    const reducedServed = orders.adjustKitchenOrderItemQuantity({
+      principal: kitchen, orderId: created.orderId, orderItemId: beer.orderItemId,
+      direction: 'decrease', operationId: uuid(932), expectedBillableQuantity: 2,
+    });
+    const reducedBeer = reducedServed.order.items.find((item) => item.orderItemId === beer.orderItemId);
+    assert.equal(reducedBeer.quantity, 2);
+    assert.equal(reducedBeer.quantityReduced, 1);
+    assert.equal(reducedBeer.billableQuantity, 1);
+    assert.equal(reducedBeer.isServed, true);
+    assert.deepEqual({ ...database.prepare('SELECT is_served, served_at_ms, served_by_device_id FROM order_items WHERE order_item_id = ?').get(beer.orderItemId) }, servedBefore);
+    assert.equal(reducedBeer.quantityHistory.at(-1).isServedSnapshot, true);
+    assert.equal(reducedBeer.quantityHistory.at(-1).servedAtMsSnapshot, servedBefore.served_at_ms);
+    assert.equal(reducedBeer.quantityHistory.at(-1).servedByDeviceIdSnapshot, DEVICE_KITCHEN);
+    assert.equal(database.prepare('SELECT ordered_items_total_yen FROM checkout_requests WHERE checkout_request_id = ?').get(uuid(912)).ordered_items_total_yen, 1580);
+
+    const addedFromServed = orders.adjustKitchenOrderItemQuantity({
+      principal: kitchen, orderId: created.orderId, orderItemId: beer.orderItemId,
+      direction: 'increase', operationId: uuid(933), expectedBillableQuantity: 1,
+    });
+    assert.equal(addedFromServed.order.items.find((item) => item.orderItemId === beer.orderItemId).isServed, true);
+    const addedBeerOrderId = ORDER_C;
+    const addedBeerOrder = orders.getCustomerHistory(customer).find((order) => order.orderId === addedBeerOrderId);
+    assert.equal(addedBeerOrder.items[0].billableQuantity, 1);
+    assert.equal(addedBeerOrder.items[0].isServed, false);
+    assert.equal(addedBeerOrder.items[0].servedAtMs, null);
+    assert.deepEqual({ ...database.prepare('SELECT is_served, served_at_ms, served_by_device_id FROM order_items WHERE order_item_id = ?').get(beer.orderItemId) }, servedBefore);
+
+    const cancelledServed = orders.cancelOrderItem({ principal: kitchen, orderId: created.orderId, orderItemId: beer.orderItemId, reason: '提供後の取消し確認' });
+    const cancelledBeer = cancelledServed.order.items.find((item) => item.orderItemId === beer.orderItemId);
+    assert.equal(cancelledBeer.isCancelled, true);
+    assert.equal(cancelledBeer.isServed, true);
+    assert.equal(cancelledBeer.cancellationHistory.at(-1).reason, '提供後の取消し確認');
+    assert.equal(cancelledBeer.cancellationHistory.at(-1).operationId, null);
+    assert.deepEqual({ ...database.prepare('SELECT is_served, served_at_ms, served_by_device_id FROM order_items WHERE order_item_id = ?').get(beer.orderItemId) }, servedBefore);
+    assert.equal(database.prepare('SELECT ordered_items_total_yen FROM checkout_requests WHERE checkout_request_id = ?').get(uuid(912)).ordered_items_total_yen, 1580);
+    const restoredServed = orders.restoreOrderItemCancellation({ principal: kitchen, orderId: created.orderId, orderItemId: beer.orderItemId });
+    const restoredBeer = restoredServed.order.items.find((item) => item.orderItemId === beer.orderItemId);
+    assert.equal(restoredBeer.isCancelled, false);
+    assert.equal(restoredBeer.isServed, true);
+    assert.equal(restoredBeer.billableQuantity, 1);
+    assert.equal(restoredBeer.cancellationHistory.at(-1).action, 'restored');
+    assert.deepEqual({ ...database.prepare('SELECT is_served, served_at_ms, served_by_device_id FROM order_items WHERE order_item_id = ?').get(beer.orderItemId) }, servedBefore);
+
+    const zeroWithoutConfirmation = () => orders.adjustKitchenOrderItemQuantity({
+      principal: kitchen, orderId: addedBeanOrderId, orderItemId: addedBeanOrder.items[0].orderItemId,
+      direction: 'decrease', operationId: uuid(934), expectedBillableQuantity: 1,
+    });
+    assertOrderError(zeroWithoutConfirmation, ORDER_ERROR_CODES.ORDER_CONFLICT);
+    const zeroed = orders.adjustKitchenOrderItemQuantity({
+      principal: kitchen, orderId: addedBeanOrderId, orderItemId: addedBeanOrder.items[0].orderItemId,
+      direction: 'decrease', operationId: uuid(934), expectedBillableQuantity: 1,
+      confirmZero: true, reason: '最終1点の取消し',
+    });
+    const zeroedItem = zeroed.order.items[0];
+    assert.equal(zeroedItem.isCancelled, true);
+    assert.equal(zeroedItem.quantity, 1);
+    assert.equal(zeroedItem.cancellationHistory.at(-1).reason, '最終1点の取消し');
+    assert.equal(zeroedItem.cancellationHistory.at(-1).operationId, uuid(934));
+    const replayedZero = orders.adjustKitchenOrderItemQuantity({
+      principal: kitchen, orderId: addedBeanOrderId, orderItemId: zeroedItem.orderItemId,
+      direction: 'decrease', operationId: uuid(934), expectedBillableQuantity: 1,
+      confirmZero: true, reason: '最終1点の取消し',
+    });
+    assert.equal(replayedZero.idempotencyResult, 'replayed');
+    assert.equal(database.prepare('SELECT COUNT(*) AS count FROM order_item_cancellation_events WHERE operation_id = ?').get(uuid(934)).count, 1);
+    assertOrderError(() => orders.adjustKitchenOrderItemQuantity({
+      principal: kitchen, orderId: addedBeanOrderId, orderItemId: zeroedItem.orderItemId,
+      direction: 'decrease', operationId: uuid(934), expectedBillableQuantity: 1,
+      confirmZero: true, reason: '異なる理由',
+    }), ORDER_ERROR_CODES.ORDER_CONFLICT);
+    assert.equal(database.prepare('SELECT ordered_items_total_yen FROM checkout_requests WHERE checkout_request_id = ?').get(uuid(912)).ordered_items_total_yen, 1960);
+    const restoredZero = orders.restoreOrderItemCancellation({ principal: kitchen, orderId: addedBeanOrderId, orderItemId: zeroedItem.orderItemId });
+    assert.equal(restoredZero.order.items[0].isCancelled, false);
+    assert.equal(restoredZero.order.items[0].isServed, false);
+    assert.equal(restoredZero.order.items[0].billableQuantity, 1);
+    assert.equal(database.prepare('SELECT ordered_items_total_yen FROM checkout_requests WHERE checkout_request_id = ?').get(uuid(912)).ordered_items_total_yen, 2260);
+
+    const sourceHistory = orders.getCustomerHistory(customer).find((order) => order.orderId === created.orderId);
+    const persistedBean = sourceHistory.items.find((item) => item.orderItemId === edamame.orderItemId);
+    const persistedBeer = sourceHistory.items.find((item) => item.orderItemId === beer.orderItemId);
+    assert.equal(persistedBean.quantity, 3);
+    assert.equal(persistedBean.billableQuantity, 2);
+    assert.deepEqual(persistedBean.quantityHistory.map((event) => event.action), ['decreased', 'added']);
+    assert.equal(persistedBean.quantityHistory[1].relatedOrderId, addedBeanOrderId);
+    assert.equal(persistedBeer.quantityHistory[0].servedByDeviceIdSnapshot, DEVICE_KITCHEN);
+    assert.deepEqual(persistedBeer.cancellationHistory.map((event) => event.action), ['cancelled', 'restored']);
+    assert.equal(persistedBeer.cancellationHistory[0].reason, '提供後の取消し確認');
+    assert.equal(database.prepare('SELECT COUNT(*) AS count FROM order_item_price_adjustments WHERE order_item_id = ?').get(edamame.orderItemId).count, 1);
+    assert.equal(database.prepare('SELECT unit_price_yen_snapshot FROM order_items WHERE order_item_id = ?').get(edamame.orderItemId).unit_price_yen_snapshot, 380);
+    assert.equal(database.prepare('SELECT COUNT(*) AS count FROM payment_records').get().count, 0);
+    assert.equal(database.prepare('PRAGMA integrity_check').get().integrity_check, 'ok');
+    assert.deepEqual(database.prepare('PRAGMA foreign_key_check').all(), []);
+
+    checkout.close();
+    orders.close();
+    const reopened = openAdditionalConnection();
+    const reopenedOrders = makeRepository(reopened);
+    const afterReload = reopenedOrders.getCustomerHistory(customer);
+    const reloadedSource = afterReload.find((order) => order.orderId === created.orderId);
+    assert.equal(reloadedSource.items.find((item) => item.orderItemId === edamame.orderItemId).quantityHistory.length, 2);
+    assert.equal(reloadedSource.items.find((item) => item.orderItemId === beer.orderItemId).isServed, true);
+    assert.equal(reloadedSource.totalAmountYen, 1280);
+    assert.equal(database.prepare('SELECT ordered_items_total_yen FROM checkout_requests WHERE checkout_request_id = ?').get(uuid(912)).ordered_items_total_yen, 2260);
+    reopenedOrders.close();
+  });
+});
+
+test('cancelling after a reduction removes only the remaining requested amount and preserves the order snapshot', async () => {
+  await withFixture(({ database }) => {
+    const customer = issuePrincipal(database, DEVICE_A, 1).principal;
+    const kitchen = issuePrincipal(database, DEVICE_KITCHEN, 5).principal;
+    let clock = FIXED_NOW;
+    const nextTime = () => ++clock;
+    const orders = makeRepository(database, { now: nextTime });
+    const checkout = createCheckoutRepository({ database, now: nextTime });
+    const created = orders.createOrder(orderRequest({ items: [{ menuItemId: 'edamame', quantity: 3 }] })).order;
+    const itemId = created.items[0].orderItemId;
+    orders.adjustItemUnitPrice({ principal: kitchen, orderId: created.orderId, orderItemId: itemId, unitPriceYen: 300 });
+    checkout.createCheckout({ principal: customer, checkoutRequestId: uuid(960), receiptRequested: false });
+    const reduced = orders.adjustKitchenOrderItemQuantity({
+      principal: kitchen, orderId: created.orderId, orderItemId: itemId,
+      direction: 'decrease', operationId: uuid(961), expectedBillableQuantity: 3,
+    });
+    assert.equal(reduced.order.items[0].billableQuantity, 2);
+    assert.equal(reduced.order.items[0].lineTotalYen, 600);
+    assert.equal(database.prepare('SELECT ordered_items_total_yen FROM checkout_requests WHERE checkout_request_id = ?').get(uuid(960)).ordered_items_total_yen, 600);
+
+    const cancelled = orders.cancelOrderItem({ principal: kitchen, orderId: created.orderId, orderItemId: itemId });
+    const cancelledItem = cancelled.order.items[0];
+    assert.equal(cancelled.order.status, 'cancelled');
+    assert.equal(cancelledItem.quantity, 3);
+    assert.equal(cancelledItem.quantityReduced, 1);
+    assert.equal(cancelledItem.billableQuantity, 2);
+    assert.equal(cancelledItem.lineTotalYen, 600);
+    assert.equal(cancelledItem.currentBillableAmountYen, 0);
+    assert.equal(cancelledItem.cancellationHistory.at(-1).reason, null);
+    assert.equal(cancelledItem.cancellationHistory.at(-1).operationId, null);
+    assert.equal(cancelled.order.totalAmountYen, 0);
+    assert.equal(database.prepare('SELECT ordered_items_total_yen FROM checkout_requests WHERE checkout_request_id = ?').get(uuid(960)).ordered_items_total_yen, 0);
+
+    const persisted = orders.getCustomerHistory(customer).find((order) => order.orderId === created.orderId).items[0];
+    assert.equal(persisted.quantity, 3);
+    assert.equal(persisted.unitPriceYenSnapshot, 380);
+    assert.equal(persisted.lineTotalYenSnapshot, 1140);
+    assert.equal(persisted.billableQuantity, 2);
+    assert.equal(persisted.currentBillableAmountYen, 0);
+    assert.equal(database.prepare('PRAGMA integrity_check').get().integrity_check, 'ok');
+    assert.deepEqual(database.prepare('PRAGMA foreign_key_check').all(), []);
+    orders.close();
+    checkout.close();
+  });
+});
+
+test('ready and paid checkout details use the adjusted unit price and reduced billable quantity', async () => {
+  await withFixture(({ database }) => {
+    const customer = issuePrincipal(database, DEVICE_A, 1).principal;
+    const kitchen = issuePrincipal(database, DEVICE_KITCHEN, 5).principal;
+    let clock = FIXED_NOW;
+    const nextTime = () => ++clock;
+    const orders = makeRepository(database, { now: nextTime });
+    const checkout = createCheckoutRepository({ database, now: nextTime });
+    const created = orders.createOrder(orderRequest({ items: [{ menuItemId: 'edamame', quantity: 3 }] })).order;
+    const itemId = created.items[0].orderItemId;
+    orders.adjustItemUnitPrice({ principal: kitchen, orderId: created.orderId, orderItemId: itemId, unitPriceYen: 300 });
+    checkout.createCheckout({ principal: customer, checkoutRequestId: uuid(962), receiptRequested: false });
+    orders.adjustKitchenOrderItemQuantity({
+      principal: kitchen, orderId: created.orderId, orderItemId: itemId,
+      direction: 'decrease', operationId: uuid(963), expectedBillableQuantity: 3,
+    });
+    orders.markItemServed({ principal: kitchen, orderId: created.orderId, orderItemId: itemId });
+
+    const requestedVersion = database.prepare('SELECT version FROM checkout_requests WHERE checkout_request_id = ?').get(uuid(962)).version;
+    const ready = checkout.ready({ principal: kitchen, checkoutRequestId: uuid(962), expectedVersion: requestedVersion });
+    assert.equal(ready.request.status, 'ready');
+    assert.equal(ready.request.orderedItemsTotalYen, 600);
+    assert.equal(ready.request.grandTotalYen, 600);
+    const paid = checkout.pay({ principal: kitchen, checkoutRequestId: uuid(962), expectedVersion: ready.request.version, paymentMethod: 'cash' });
+    assert.equal(paid.payment.status, 'paid');
+    assert.deepEqual(paid.payment.orderItems.map((item) => ({ quantity: item.quantity, currentUnitPriceYen: item.currentUnitPriceYen, lineTotalYen: item.lineTotalYen })), [
+      { quantity: 2, currentUnitPriceYen: 300, lineTotalYen: 600 },
+    ]);
+    assert.deepEqual({ ...database.prepare('SELECT unit_price_yen_snapshot, adjusted_unit_price_yen, quantity, quantity_reduced FROM order_items WHERE order_item_id = ?').get(itemId) }, {
+      unit_price_yen_snapshot: 380, adjusted_unit_price_yen: 300, quantity: 3, quantity_reduced: 1,
+    });
+    assert.deepEqual({ ...database.prepare('SELECT quantity, current_unit_price_yen, line_total_yen FROM payment_order_items WHERE payment_record_id = ?').get(paid.payment.paymentRecordId) }, {
+      quantity: 2, current_unit_price_yen: 300, line_total_yen: 600,
+    });
+    assert.equal(database.prepare('PRAGMA integrity_check').get().integrity_check, 'ok');
+    assert.deepEqual(database.prepare('PRAGMA foreign_key_check').all(), []);
+    orders.close();
+    checkout.close();
+  });
+});
+
+test('a served item can be cancelled without a reason while preserving its served record', async () => {
+  await withFixture(({ database }) => {
+    const kitchen = issuePrincipal(database, DEVICE_KITCHEN, 5).principal;
+    const orders = makeRepository(database);
+    const created = orders.createOrder(orderRequest({ items: [{ menuItemId: 'beer', quantity: 1 }] })).order;
+    const itemId = created.items[0].orderItemId;
+    orders.markItemServed({ principal: kitchen, orderId: created.orderId, orderItemId: itemId });
+    const before = database.prepare('SELECT is_served, served_at_ms, served_by_device_id FROM order_items WHERE order_item_id = ?').get(itemId);
+    const cancelled = orders.cancelOrderItem({ principal: kitchen, orderId: created.orderId, orderItemId: itemId });
+    const item = cancelled.order.items[0];
+    assert.equal(item.isCancelled, true);
+    assert.equal(item.isServed, true);
+    assert.equal(item.cancellationHistory.at(-1).reason, null);
+    assert.deepEqual({ ...database.prepare('SELECT is_served, served_at_ms, served_by_device_id FROM order_items WHERE order_item_id = ?').get(itemId) }, { ...before });
+    assert.equal(database.prepare('PRAGMA integrity_check').get().integrity_check, 'ok');
+    assert.deepEqual(database.prepare('PRAGMA foreign_key_check').all(), []);
+    orders.close();
+  });
+});
+
+test('cancellation is rejected after checkout ready or session closure without changing order items', async () => {
+  await withFixture(({ database }) => {
+    const customer = issuePrincipal(database, DEVICE_A, 1).principal;
+    const kitchen = issuePrincipal(database, DEVICE_KITCHEN, 5).principal;
+    const orders = makeRepository(database);
+    const checkout = createCheckoutRepository({ database, now: () => FIXED_NOW + 30 });
+    const created = orders.createOrder(orderRequest()).order;
+    const itemId = created.items[0].orderItemId;
+    orders.markItemServed({ principal: kitchen, orderId: created.orderId, orderItemId: itemId });
+    checkout.createCheckout({ principal: customer, checkoutRequestId: uuid(911), receiptRequested: false });
+    const ready = checkout.ready({ principal: kitchen, checkoutRequestId: uuid(911), expectedVersion: 1 });
+    assertOrderError(
+      () => orders.cancelOrderItem({ principal: kitchen, orderId: created.orderId, orderItemId: itemId, reason: '訂正' }),
+      ORDER_ERROR_CODES.ORDER_CONFLICT,
+    );
+    assertOrderError(() => orders.adjustKitchenOrderItemQuantity({
+      principal: kitchen, orderId: created.orderId, orderItemId: itemId,
+      direction: 'decrease', operationId: uuid(964), expectedBillableQuantity: 1,
+    }), ORDER_ERROR_CODES.ORDER_CONFLICT);
+    assert.equal(database.prepare('SELECT COUNT(*) AS count FROM order_item_quantity_events WHERE operation_id = ?').get(uuid(964)).count, 0);
+    assert.equal(database.prepare('SELECT is_cancelled FROM order_items WHERE order_item_id = ?').get(itemId).is_cancelled, 0);
+    assert.equal(database.prepare('SELECT COUNT(*) AS count FROM order_item_cancellation_events').get().count, 0);
+
+    const payment = checkout.pay({ principal: kitchen, checkoutRequestId: uuid(911), expectedVersion: ready.request.version, paymentMethod: 'cash' }).payment;
+    const paymentRecordBefore = { ...database.prepare('SELECT * FROM payment_records WHERE payment_record_id = ?').get(payment.paymentRecordId) };
+    const paymentItemsBefore = database.prepare('SELECT * FROM payment_order_items WHERE payment_record_id = ? ORDER BY payment_order_item_id').all(payment.paymentRecordId).map((row) => ({ ...row }));
+    assertOrderError(
+      () => orders.cancelOrderItem({ principal: kitchen, orderId: created.orderId, orderItemId: itemId, reason: '支払後訂正' }),
+      ORDER_ERROR_CODES.ORDER_CONFLICT,
+    );
+    assertOrderError(() => orders.adjustKitchenOrderItemQuantity({
+      principal: kitchen, orderId: created.orderId, orderItemId: itemId,
+      direction: 'decrease', operationId: uuid(965), expectedBillableQuantity: 1,
+    }), ORDER_ERROR_CODES.ORDER_CONFLICT);
+    assert.equal(database.prepare('SELECT COUNT(*) AS count FROM order_item_quantity_events WHERE operation_id = ?').get(uuid(965)).count, 0);
+    assert.equal(database.prepare('SELECT status FROM payment_records LIMIT 1').get().status, 'paid');
+    assert.equal(database.prepare('SELECT is_cancelled FROM order_items WHERE order_item_id = ?').get(itemId).is_cancelled, 0);
+    assert.deepEqual({ ...database.prepare('SELECT * FROM payment_records WHERE payment_record_id = ?').get(payment.paymentRecordId) }, paymentRecordBefore);
+    assert.deepEqual(database.prepare('SELECT * FROM payment_order_items WHERE payment_record_id = ? ORDER BY payment_order_item_id').all(payment.paymentRecordId).map((row) => ({ ...row })), paymentItemsBefore);
+
+    const closedOrder = orders.createOrder(orderRequest({ clientOrderId: CLIENT_ORDER_B })).order;
+    database.prepare('UPDATE table_sessions SET closed_at_ms = ? WHERE session_id = ?').run(FIXED_NOW + 40, closedOrder.sessionId);
+    assertOrderError(
+      () => orders.cancelOrderItem({ principal: kitchen, orderId: closedOrder.orderId, orderItemId: closedOrder.items[0].orderItemId }),
+      ORDER_ERROR_CODES.ORDER_CONFLICT,
+    );
+    assertOrderError(() => orders.adjustKitchenOrderItemQuantity({
+      principal: kitchen, orderId: closedOrder.orderId, orderItemId: closedOrder.items[0].orderItemId,
+      direction: 'decrease', operationId: uuid(966), expectedBillableQuantity: 1,
+    }), ORDER_ERROR_CODES.ORDER_CONFLICT);
+    assert.equal(database.prepare('SELECT is_cancelled FROM order_items WHERE order_item_id = ?').get(closedOrder.items[0].orderItemId).is_cancelled, 0);
+    checkout.close();
+    orders.close();
+  });
+});
+
 test('new order inserts exactly one orders row', async () => {
   await withFixture(({ database }) => {
     makeRepository(database).createOrder(orderRequest());

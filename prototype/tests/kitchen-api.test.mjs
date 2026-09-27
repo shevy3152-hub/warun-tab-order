@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { adjustKitchenItemUnitPrice, cancelKitchenCheckout, closeKitchenTableSession, fetchKitchenCheckoutRequests, fetchKitchenOrderHistory, fetchKitchenOrders, fetchKitchenPaymentHistory, fetchKitchenSnapshot, kitchenApiConfigured, markKitchenItemServed, payKitchenCheckout, readyKitchenCheckout, saveKitchenCheckoutAdjustments, voidKitchenPayment } from "../src/kitchen-api.js";
+import { adjustKitchenItemUnitPrice, adjustKitchenOrderItemQuantity, cancelKitchenCheckout, cancelKitchenOrderItem, closeKitchenTableSession, fetchKitchenCheckoutRequests, fetchKitchenOrderHistory, fetchKitchenOrders, fetchKitchenPaymentHistory, fetchKitchenSnapshot, kitchenApiConfigured, markKitchenItemServed, payKitchenCheckout, readyKitchenCheckout, restoreKitchenOrderItem, saveKitchenCheckoutAdjustments, voidKitchenPayment } from "../src/kitchen-api.js";
 
 const TOKEN = "fixture-kitchen-runtime-token";
 
@@ -26,7 +26,7 @@ test("kitchen API uses the runtime token and maps active snapshot orders", async
             acceptedAtMs: 1786786940836,
             status: "new",
             totalAmountYen: 960,
-            items: [{ orderItemId: 11, menuItemId: "edamame", formalNameSnapshot: "枝豆", kitchenAliasSnapshot: "枝豆", variantNameSnapshot: "徳利2合", variantVolumeSnapshot: "360ml", temperatureSnapshot: "冷酒", quantity: 1, isServed: false, servedAtMs: null }],
+            items: [{ orderItemId: 11, menuItemId: "edamame", formalNameSnapshot: "枝豆", kitchenAliasSnapshot: "枝豆", variantNameSnapshot: "徳利2合", variantVolumeSnapshot: "360ml", temperatureSnapshot: "冷酒", quantity: 2, quantityReduced: 1, billableQuantity: 1, quantityHistory: [{ eventId: 1, operationId: "00000000-0000-4000-8000-000000000001", action: "decreased", quantityDelta: -1, previousBillableQuantity: 2, nextBillableQuantity: 1, relatedOrderId: null, relatedOrderItemId: null, actorLabel: "架空厨房スタッフ", occurredAtMs: 1786786940837, isServedSnapshot: false, servedAtMsSnapshot: null, servedByDeviceIdSnapshot: null }], isServed: false, servedAtMs: null }],
           }],
         };
       },
@@ -37,6 +37,9 @@ test("kitchen API uses the runtime token and maps active snapshot orders", async
   const orders = await fetchKitchenOrders({ env });
   assert.equal(orders[0].tableId, "1");
   assert.equal(orders[0].items[0].isServed, false);
+  assert.equal(orders[0].items[0].quantity, 2);
+  assert.equal(orders[0].items[0].billableQuantity, 1);
+  assert.equal(orders[0].items[0].quantityHistory[0].quantityDelta, -1);
   assert.equal(orders[0].items[0].temperatureSnapshot, "冷酒");
   assert.equal(calls[0].url, "http://192.168.1.10:5173/v1/snapshot");
   assert.equal(calls[0].options.headers.Authorization, `Bearer ${TOKEN}`);
@@ -74,6 +77,42 @@ test("kitchen serving update uses the same runtime token", async () => {
   assert.deepEqual(JSON.parse(calls[0].options.body), { orderId: "order-1", orderItemId: 11 });
 });
 
+test("kitchen item cancellation and restore send the reason and return the updated order", async () => {
+  const calls = [];
+  const env = environment(async (url, options) => {
+    calls.push({ url, options });
+    return { ok: true, async json() { return { orders: [{ orderId: "order-1", status: "cancelled" }] }; } };
+  });
+
+  const cancelled = await cancelKitchenOrderItem({ env, orderId: "order-1", orderItemId: "11", reason: "提供済み誤注文" });
+  const restored = await restoreKitchenOrderItem({ env, orderId: "order-1", orderItemId: 11 });
+  assert.equal(cancelled.status, "cancelled");
+  assert.equal(restored.orderId, "order-1");
+  assert.equal(calls[0].url, "http://192.168.1.10:5173/v1/kitchen/order-items/cancel");
+  assert.equal(calls[1].url, "http://192.168.1.10:5173/v1/kitchen/order-items/restore");
+  assert.deepEqual(JSON.parse(calls[0].options.body), { orderId: "order-1", orderItemId: 11, reason: "提供済み誤注文" });
+  assert.deepEqual(JSON.parse(calls[1].options.body), { orderId: "order-1", orderItemId: 11, reason: null });
+  assert.equal(calls[0].options.headers.Authorization, `Bearer ${TOKEN}`);
+});
+
+test("admin token can use only the staff cancellation API transport when no kitchen token is present", async () => {
+  const calls = [];
+  const adminToken = "fixture-admin-runtime-token";
+  const env = {
+    location: { origin: "http://192.168.1.10:5173" },
+    WARUN_RUNTIME_CONFIG: { adminToken },
+    fetch: async (url, options) => {
+      calls.push({ url, options });
+      return { ok: true, async json() { return { orders: [{ orderId: "order-2", status: "cancelled" }] }; } };
+    },
+  };
+
+  const result = await cancelKitchenOrderItem({ env, orderId: "order-2", orderItemId: 22 });
+  assert.equal(result.status, "cancelled");
+  assert.equal(calls[0].url, "http://192.168.1.10:5173/v1/kitchen/order-items/cancel");
+  assert.equal(calls[0].options.headers.Authorization, `Bearer ${adminToken}`);
+});
+
 test("kitchen item price adjustment posts only the selected order row", async () => {
   const calls = [];
   const env = environment(async (url, options) => {
@@ -90,6 +129,38 @@ test("kitchen item price adjustment posts only the selected order row", async ()
 
   const rejectedEnv = environment(async () => ({ ok: false, status: 400, async json() { return { error: { code: "PRICE_CEILING_EXCEEDED" } }; } }));
   await assert.rejects(adjustKitchenItemUnitPrice({ env: rejectedEnv, orderId: "order-1", orderItemId: 11, unitPriceYen: 501 }), (error) => error.code === "PRICE_CEILING_EXCEEDED");
+});
+
+test("kitchen quantity API sends row identity, idempotency, confirmation, and optional reason", async () => {
+  const calls = [];
+  const env = environment(async (url, options) => {
+    calls.push({ url, options });
+    return { ok: true, async json() { return { orders: [{ orderId: "order-1" }] }; } };
+  });
+
+  const updated = await adjustKitchenOrderItemQuantity({
+    env,
+    orderId: "order-1",
+    orderItemId: "11",
+    direction: "decrease",
+    operationId: "00000000-0000-4000-8000-000000000932",
+    expectedBillableQuantity: 1,
+    confirmZero: true,
+    reason: "理由は任意",
+  });
+  assert.equal(updated.orderId, "order-1");
+  assert.equal(calls[0].url, "http://192.168.1.10:5173/v1/kitchen/order-items/quantity");
+  assert.equal(calls[0].options.method, "POST");
+  assert.equal(calls[0].options.headers.Authorization, `Bearer ${TOKEN}`);
+  assert.deepEqual(JSON.parse(calls[0].options.body), {
+    orderId: "order-1",
+    orderItemId: 11,
+    direction: "decrease",
+    operationId: "00000000-0000-4000-8000-000000000932",
+    expectedBillableQuantity: 1,
+    confirmZero: true,
+    reason: "理由は任意",
+  });
 });
 
 test("kitchen snapshot exposes open sessions and close uses the runtime token", async () => {

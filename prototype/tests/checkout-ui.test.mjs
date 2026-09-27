@@ -26,12 +26,13 @@ test("checkout panel keeps the order area independently usable and compact", () 
 test("kitchen history starts with today's completed orders and can reveal past orders", () => {
   assert.match(appSource, /function isSameLocalDate\(value, reference = new Date\(\)\)/);
   assert.match(appSource, /showPastOrders, setShowPastOrders\] = useState\(false\)/);
-  assert.match(appSource, /const completedToday = completed\.filter\(\(order\) => isSameLocalDate\(order\.completedAt\)\)/);
-  assert.match(appSource, /const visibleCompleted = showPastOrders \? completed : completedToday/);
+  assert.match(appSource, /const historyOrders = sourceOrders\.filter\(\(order\) => order\.status === "completed" \|\| order\.status === "cancelled"\)/);
+  assert.match(appSource, /const completedToday = completed\.filter\(\(order\) => isSameLocalDate\(order\.completedAt \?\? order\.createdAt\)\)/);
+  assert.match(appSource, /const visibleOrders = showPastOrders \? historyOrders : visibleToday/);
   assert.match(appSource, /本日の注文商品合計/);
   assert.match(appSource, /過去の注文も表示/);
   assert.match(appSource, /本日の注文だけ表示/);
-  assert.match(appSource, /本日提供完了した注文はありません/);
+  assert.match(appSource, /本日完了・キャンセルになった注文はありません/);
   assert.match(appSource, /sessionGroups/);
   assert.match(appSource, /history-session-divider/);
   assert.match(appSource, /会計済み/);
@@ -40,4 +41,21 @@ test("kitchen history starts with today's completed orders and can reveal past o
   assert.match(appSource, /record\.status === "paid"/);
   assert.match(styles, /\.history-past-notice/);
   assert.match(styles, /\.history-session-divider/);
+});
+
+test("history item operations fail closed until checkout state is known and lock ready, paid, and closed sessions", () => {
+  assert.match(appSource, /loadCheckoutRequests=\{loadCheckoutRequests\}/);
+  assert.match(appSource, /const readySessionIds = new Set\(checkoutRemoteState\.checkouts\.filter\(\(checkout\) => checkout\.status === "ready"\)/);
+  assert.match(appSource, /const paidSessionIds = new Set\(paymentRemoteState\.payments\.filter\(\(payment\) => payment\.status === "paid"\)/);
+  assert.match(appSource, /order\.sessionClosedAtMs != null\s*\|\|\s*readySessionIds\.has\(order\.sessionId\)\s*\|\|\s*paidSessionIds\.has\(order\.sessionId\)/);
+  assert.match(appSource, /disabled=\{historyOperationLocked\(order\)\}/);
+  assert.match(appSource, /!checkoutState \|\| checkoutState\.loading \|\| checkoutState\.error/);
+});
+
+test("cancellation confirmation keeps accepted copy and shows the current billable quantity and amount", () => {
+  assert.match(appSource, /\$\{cancellationProductName\} \$\{cancellationQuantity\}点をキャンセルし、今回の会計から外します。注文の記録は残ります。提供済みの場合、提供した記録も残ります。/);
+  assert.match(appSource, /今回の会計から外す金額：\{yen\(cancellationUnitPrice\)\} × \{cancellationQuantity\}点/);
+  assert.match(appSource, /function cancelledQuantityForDisplay\(item\)/);
+  assert.match(appSource, /会計から除外 \{cancelledQuantity\}点／\{yen\(excludedAmount\)\}/);
+  assert.match(appSource, /数量0点化によるキャンセル/);
 });

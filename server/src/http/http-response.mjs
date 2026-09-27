@@ -1,7 +1,7 @@
 import { HTTP_ERROR_CODES, createHttpError } from './http-errors.mjs';
 
 const DEVICE_ROLES = new Set(['customer', 'kitchen', 'admin']);
-const ORDER_STATUSES = new Set(['new', 'active', 'completed']);
+const ORDER_STATUSES = new Set(['new', 'active', 'completed', 'cancelled']);
 const STAFF_CALL_STATUSES = new Set(['open', 'resolved']);
 const EVENT_RESOURCES = new Set(['orders', 'menu', 'staffCalls', 'deviceConfig', 'businessHours', 'rideGuidance', 'checkout']);
 const EVENT_TYPES_BY_ROLE = Object.freeze({
@@ -45,7 +45,7 @@ const EVENT_TYPES_BY_ROLE = Object.freeze({
     'table.assignment_updated',
   ]),
 });
-const SUPPORTED_SCHEMA_VERSION = 14;
+const SUPPORTED_SCHEMA_VERSION = 16;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const OPAQUE_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
 
@@ -87,6 +87,11 @@ function requireUuid(value) {
 
 function requireInteger(value, minimum = 0) {
   if (!Number.isSafeInteger(value) || value < minimum) throw invalidDto();
+  return value;
+}
+
+function requireSignedInteger(value) {
+  if (!Number.isSafeInteger(value)) throw invalidDto();
   return value;
 }
 
@@ -274,6 +279,11 @@ function requireSameCursor(value, cursor) {
 
 function mapStaffOrderItem(item) {
   requireObject(item);
+  const isCancelled = item.isCancelled === undefined ? false : requireBoolean(item.isCancelled);
+  const quantity = requireInteger(item.quantity, 1);
+  const quantityReduced = requireInteger(item.quantityReduced ?? 0);
+  const billableQuantity = requireInteger(item.billableQuantity ?? quantity - quantityReduced);
+  if (quantity > 99 || quantityReduced > quantity || billableQuantity !== quantity - quantityReduced) throw invalidDto();
   const response = {
     orderItemId: requireInteger(item.orderItemId, 1),
     formalNameSnapshot: requireString(item.formalNameSnapshot),
@@ -281,18 +291,62 @@ function mapStaffOrderItem(item) {
     unitPriceYenSnapshot: requireInteger(item.unitPriceYenSnapshot),
     currentUnitPriceYen: requireInteger(item.currentUnitPriceYen ?? item.unitPriceYenSnapshot),
     adjustedUnitPriceYen: item.adjustedUnitPriceYen == null ? null : requireInteger(item.adjustedUnitPriceYen),
-    quantity: requireInteger(item.quantity, 1),
+    quantity,
+    quantityReduced,
+    billableQuantity,
     lineTotalYen: requireInteger(item.lineTotalYen),
     lineTotalYenSnapshot: requireInteger(item.lineTotalYenSnapshot ?? item.lineTotalYen),
+    currentBillableAmountYen: requireInteger(item.currentBillableAmountYen ?? (isCancelled ? 0 : item.lineTotalYen)),
     isServed: requireBoolean(item.isServed),
+    isCancelled,
+    cancellationHistory: requireArray(item.cancellationHistory ?? []).map((source) => {
+      requireObject(source);
+      return {
+        eventId: requireInteger(source.eventId, 1),
+        operationId: source.operationId == null ? null : requireUuid(source.operationId),
+        action: requireOneOf(source.action, new Set(['cancelled', 'restored'])),
+        actorDeviceId: requireString(source.actorDeviceId),
+        actorLabel: requireString(source.actorLabel),
+        occurredAtMs: requireInteger(source.occurredAtMs),
+        reason: source.reason === null ? null : requireString(source.reason),
+        isServedSnapshot: requireBoolean(source.isServedSnapshot),
+        servedAtMsSnapshot: source.servedAtMsSnapshot === null ? null : requireInteger(source.servedAtMsSnapshot),
+        servedByDeviceIdSnapshot: source.servedByDeviceIdSnapshot === null ? null : requireString(source.servedByDeviceIdSnapshot),
+      };
+    }),
+    quantityHistory: requireArray(item.quantityHistory ?? []).map((source) => {
+      requireObject(source);
+      const event = {
+        eventId: requireInteger(source.eventId, 1),
+        operationId: requireUuid(source.operationId),
+        action: requireOneOf(source.action, new Set(['added', 'decreased'])),
+        quantityDelta: requireSignedInteger(source.quantityDelta),
+        previousBillableQuantity: requireInteger(source.previousBillableQuantity, 1),
+        nextBillableQuantity: requireInteger(source.nextBillableQuantity, 1),
+        relatedOrderId: source.relatedOrderId === null ? null : requireUuid(source.relatedOrderId),
+        relatedOrderItemId: source.relatedOrderItemId === null ? null : requireInteger(source.relatedOrderItemId, 1),
+        actorDeviceId: requireString(source.actorDeviceId),
+        actorLabel: requireString(source.actorLabel),
+        occurredAtMs: requireInteger(source.occurredAtMs),
+        isServedSnapshot: requireBoolean(source.isServedSnapshot),
+        servedAtMsSnapshot: source.servedAtMsSnapshot === null ? null : requireInteger(source.servedAtMsSnapshot),
+        servedByDeviceIdSnapshot: source.servedByDeviceIdSnapshot === null ? null : requireString(source.servedByDeviceIdSnapshot),
+      };
+      if (event.action === 'added') {
+        if (event.quantityDelta !== 1 || event.previousBillableQuantity !== event.nextBillableQuantity || !event.relatedOrderId || !event.relatedOrderItemId) throw invalidDto();
+      } else if (event.quantityDelta !== -1 || event.nextBillableQuantity !== event.previousBillableQuantity - 1 || event.relatedOrderId !== null || event.relatedOrderItemId !== null) {
+        throw invalidDto();
+      }
+      return event;
+    }),
   };
-  if (response.quantity > 99) throw invalidDto();
   if (Object.hasOwn(item, 'menuItemId')) {
     response.menuItemId = requireOpaqueId(item.menuItemId);
   }
   if (Object.hasOwn(item, 'servedAtMs') && item.servedAtMs !== null) {
     response.servedAtMs = requireInteger(item.servedAtMs);
   }
+  optionalStringField(item, response, 'servedByDeviceId');
   for (const key of ['variantId', 'variantNameSnapshot', 'variantVolumeSnapshot', 'temperatureSnapshot', 'servingOptionId', 'servingOptionNameSnapshot']) {
     optionalStringField(item, response, key);
   }
@@ -315,6 +369,8 @@ function mapStaffOrder(order) {
     items: items.map(mapStaffOrderItem),
   };
   if (Object.hasOwn(order, 'sessionId')) response.sessionId = requireUuid(order.sessionId);
+  if (Object.hasOwn(order, 'orderOrigin')) response.orderOrigin = requireOneOf(order.orderOrigin, new Set(['customer', 'kitchen_addition']));
+  if (Object.hasOwn(order, 'createdByDeviceId')) response.createdByDeviceId = requireUuid(order.createdByDeviceId);
   if (Object.hasOwn(order, 'sessionOpenedAtMs') && order.sessionOpenedAtMs !== null) response.sessionOpenedAtMs = requireInteger(order.sessionOpenedAtMs);
   if (Object.hasOwn(order, 'sessionClosedAtMs') && order.sessionClosedAtMs !== null) response.sessionClosedAtMs = requireInteger(order.sessionClosedAtMs);
   if (Object.hasOwn(order, 'completedAtMs') && order.completedAtMs !== null) {

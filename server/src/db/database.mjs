@@ -5,7 +5,7 @@ import { DatabaseSync } from 'node:sqlite';
 
 export const LEGACY_SCHEMA_VERSION = 1;
 export const SESSION_SCHEMA_VERSION = 2;
-export const SCHEMA_VERSION = 14;
+export const SCHEMA_VERSION = 16;
 
 export const REQUIRED_TABLES = Object.freeze([
   'system_state',
@@ -138,6 +138,12 @@ export const DEFAULT_V13_MIGRATION_PATH = resolve(
 );
 export const DEFAULT_V14_MIGRATION_PATH = resolve(
   moduleDirectory, '..', '..', '..', 'docs', 'schema-v14-migration.sql',
+);
+export const DEFAULT_V15_MIGRATION_PATH = resolve(
+  moduleDirectory, '..', '..', '..', 'docs', 'schema-v15-migration.sql',
+);
+export const DEFAULT_V16_MIGRATION_PATH = resolve(
+  moduleDirectory, '..', '..', '..', 'docs', 'schema-v16-migration.sql',
 );
 
 export class DatabaseInitializationError extends Error {
@@ -494,6 +500,22 @@ function migrateSchemaV13ToV14(database, migrationPath) {
   }
 }
 
+function migrateSchemaV14ToV15(database, migrationPath) {
+  try { database.exec(readFileSync(migrationPath, 'utf8')); }
+  catch (error) {
+    try { if (database.isTransaction) database.exec('ROLLBACK;'); } catch {}
+    throw new DatabaseInitializationError('MIGRATION_FAILED', 'The order-item cancellation migration failed.', { cause: error });
+  }
+}
+
+function migrateSchemaV15ToV16(database, migrationPath) {
+  try { database.exec(readFileSync(migrationPath, 'utf8')); }
+  catch (error) {
+    try { if (database.isTransaction) database.exec('ROLLBACK;'); } catch {}
+    throw new DatabaseInitializationError('MIGRATION_FAILED', 'The order-item quantity adjustment migration failed.', { cause: error });
+  }
+}
+
 function migrateSchemaV1ToV2(database) {
   let transactionOpen = false;
   try {
@@ -684,8 +706,21 @@ function validateSchema(database) {
   assertRequiredNames(schemaObjectNames(database, 'table'), REQUIRED_TABLES, 'tables');
   assertRequiredNames(schemaObjectNames(database, 'index'), REQUIRED_INDEXES, 'indexes');
   assertRequiredNames(schemaObjectNames(database, 'trigger'), REQUIRED_TRIGGERS, 'triggers');
+  assertRequiredNames(schemaObjectNames(database, 'trigger'), ['trg_order_item_cancellation_events_immutable_update', 'trg_order_item_cancellation_events_immutable_delete'], 'cancellation history triggers');
   assertRequiredNames(schemaObjectNames(database, 'table'), ['order_item_price_adjustments'], 'tables');
+  assertRequiredNames(schemaObjectNames(database, 'table'), ['order_item_cancellation_events'], 'tables');
+  assertRequiredNames(schemaObjectNames(database, 'table'), ['order_item_quantity_events'], 'tables');
   assertRequiredNames(schemaObjectNames(database, 'index'), ['idx_order_item_price_adjustments_item'], 'indexes');
+  assertRequiredNames(schemaObjectNames(database, 'index'), ['idx_order_item_cancellation_events_item'], 'indexes');
+  assertRequiredNames(schemaObjectNames(database, 'index'), ['idx_order_items_order_cancelled_served'], 'indexes');
+  assertRequiredNames(schemaObjectNames(database, 'index'), ['idx_order_item_quantity_events_item'], 'indexes');
+  assertRequiredNames(schemaObjectNames(database, 'index'), ['idx_order_item_cancellation_events_operation'], 'indexes');
+  assertRequiredNames(tableColumns(database, 'order_items'), ['is_cancelled'], 'order_items cancellation columns');
+  assertRequiredNames(tableColumns(database, 'order_items'), ['quantity_reduced'], 'order_items quantity columns');
+  assertRequiredNames(tableColumns(database, 'orders'), ['order_origin', 'created_by_device_id'], 'order origin columns');
+  assertRequiredNames(schemaObjectNames(database, 'trigger'), ['trg_order_item_quantity_events_immutable_update', 'trg_order_item_quantity_events_immutable_delete'], 'quantity history triggers');
+  assertRequiredNames(tableColumns(database, 'order_item_quantity_events'), ['quantity_event_id', 'operation_id', 'order_id', 'order_item_id', 'action', 'quantity_delta', 'previous_billable_quantity', 'next_billable_quantity', 'related_order_id', 'related_order_item_id', 'actor_device_id', 'actor_label_snapshot', 'occurred_at_ms', 'is_served_snapshot', 'served_at_ms_snapshot', 'served_by_device_id_snapshot'], 'order item quantity event columns');
+  assertRequiredNames(tableColumns(database, 'order_item_cancellation_events'), ['cancellation_event_id', 'order_id', 'order_item_id', 'action', 'actor_device_id', 'actor_label_snapshot', 'occurred_at_ms', 'reason', 'is_served_snapshot', 'served_at_ms_snapshot', 'served_by_device_id_snapshot', 'operation_id'], 'order item cancellation event columns');
   assertRequiredNames(tableColumns(database, 'categories'), ['section_key'], 'categories columns');
   assertRequiredNames(tableColumns(database, 'menu_items'), ['ordering_mode'], 'menu_items columns');
   assertRequiredNames(tableColumns(database, 'menu_item_variants'), ['temperature_options_json'], 'menu_item_variants columns');
@@ -811,6 +846,8 @@ export function initializeDatabase({
   v12MigrationPath = DEFAULT_V12_MIGRATION_PATH,
   v13MigrationPath = DEFAULT_V13_MIGRATION_PATH,
   v14MigrationPath = DEFAULT_V14_MIGRATION_PATH,
+  v15MigrationPath = DEFAULT_V15_MIGRATION_PATH,
+  v16MigrationPath = DEFAULT_V16_MIGRATION_PATH,
 } = {}) {
   const resolvedDatabasePath = resolveFilePath(databasePath, 'databasePath');
   const resolvedSchemaPath = resolveFilePath(schemaPath, 'schemaPath');
@@ -826,6 +863,8 @@ export function initializeDatabase({
   const resolvedV12MigrationPath = resolveFilePath(v12MigrationPath, 'v12MigrationPath');
   const resolvedV13MigrationPath = resolveFilePath(v13MigrationPath, 'v13MigrationPath');
   const resolvedV14MigrationPath = resolveFilePath(v14MigrationPath, 'v14MigrationPath');
+  const resolvedV15MigrationPath = resolveFilePath(v15MigrationPath, 'v15MigrationPath');
+  const resolvedV16MigrationPath = resolveFilePath(v16MigrationPath, 'v16MigrationPath');
 
   mkdirSync(dirname(resolvedDatabasePath), { recursive: true });
 
@@ -909,6 +948,16 @@ export function initializeDatabase({
     }
     if (currentVersion === 13) {
       migrateSchemaV13ToV14(database, resolvedV14MigrationPath);
+      enableWriteAheadLogging(database);
+      currentVersion = 14;
+    }
+    if (currentVersion === 14) {
+      migrateSchemaV14ToV15(database, resolvedV15MigrationPath);
+      enableWriteAheadLogging(database);
+      currentVersion = 15;
+    }
+    if (currentVersion === 15) {
+      migrateSchemaV15ToV16(database, resolvedV16MigrationPath);
       enableWriteAheadLogging(database);
       currentVersion = SCHEMA_VERSION;
     }

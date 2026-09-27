@@ -764,3 +764,34 @@
 - この追補ではUI・テスト・設計記録のみ変更。元dirty worktree、実DB、schema migration、安全copy、現行checkout、API/server設定、remoteは変更なし。migration・commit・pushなし。
 
 次: 隔離worktreeの累積差分をレビューし、別途依頼があるまでmigration・commit・push・safe-copy反映をしない。
+
+## 注文行キャンセル・取消し 隔離実装 2026-09-26
+
+- 基準は価格集計統一commit `04d072651a83c9f4be16aca5fa8df64417375f70`。専用worktree `C:\Users\user\.codex\worktrees\price-aggregation\タブレットオーダーシステム` / branch `codex/price-aggregation` に未commit実装を保持。元dirty worktreeは変更していない。
+- schema v15のmigration案を追加。`order_items.is_cancelled`を請求対象の正とし、キャンセル／取消しは操作者・時刻・任意理由を追記専用監査表に記録する。全品キャンセルの`cancelled`はAPI／履歴で導出し、保存済み注文snapshotや提供状態・提供時刻・担当者を変更しない。
+- 厨房／管理者限定の行単位APIと厨房画面操作を追加。キャンセル理由は未提供・提供済み品とも任意で、入力時は取消監査へ保存する。requested checkoutだけ商品合計を再計算し、ready・支払済み・閉鎖sessionは拒否する。注文・会計履歴で注文時snapshot、現在請求額、取消監査を区別する。
+- 隔離検証: prototype 134/134、server 402/402、Vite production build・Sites build preparation・inline-client成功、Sites 4/4を含む。`pnpm run build`はesbuild install script未承認ポリシーで停止したため、既存の隔離worktree内Vite／buildスクリプトを直接実行した。`git diff --check`成功。
+- 1280×800・1637×602の架空demo厨房画面を隔離ブラウザーで目視し、テーブル別slot、展開中追加料金欄、会計操作、注文行のキャンセルボタンと提供済み区分を確認。履歴導線も開いて確認したがdemo履歴は空で、監査行を含む履歴描画はテストで補完。スクリーンショットは撮影出力として確認したがローカル保存していない。注文・会計操作は行っていない。
+- safe-copy、実DB、実DB migration、既存checkout、remote、commit/pushは未実施。migrationは未適用。残作業は隔離差分レビューと、明示依頼後の隔離画面／履歴監査行データを使った追加受入確認。
+
+次: 隔離worktreeの注文キャンセル差分をレビューし、別途明示依頼があるまでmigration適用・safe-copy反映・commit・pushを行わない。
+
+## 厨房注文行の数量調整・理由任意 2026-09-26
+
+- 数量調整と商品キャンセルを別操作にした。キャンセル理由は未提供／提供済みのどちらも任意で、入力値は監査履歴へ保存する。＋は同じ商品を新しい厨房追加注文として未提供状態で作成し、既存行・提供記録は変えない。−は請求対象数を1点下げ、0点化だけ確認後にキャンセル扱いとして行を残す。
+- schema v16 migration案に `quantity_reduced` と追記専用数量操作履歴を追加した。提供済み行の数量調整でも `is_served`・提供時刻・担当者と注文時snapshotを維持し、既存支払記録は変更しない。注文・checkoutは共通価格計算を使用する。migrationは隔離テスト用DBだけに適用し、実DB／safe-copyへは適用していない。
+- 隔離検証: prototype 135/135、server 397/397（safe-copy provisioning 2テストはsafe-copy領域への書込みを避けるため除外）、Sites 4/4、Vite production build（4,585 modules）、Sites build preparation、inline-client、`git diff --check` PASS。
+- 架空demoの厨房画面・数量編集パネルを確認。PNG: `C:\Users\user\.codex\visualizations\2026\09\23\01a0ce57-ec42-7d03-a559-db26ed12f8db\kitchen-quantity-board-1280x800.png`、`...\kitchen-quantity-editor-1280x800.png`、`...\kitchen-quantity-board-1637x602.png`、`...\kitchen-quantity-editor-1637x602.png`。1280×800はCSS viewport実測、1637×602はブラウザーAPIの整数サイズ制約によりCSS実測1638×603から出力画像を1pxずつトリミングしたもの。両サイズで数量操作・単価保存ボタンのDOM boundsがviewport内にあることを確認。画面上では増減・保存を実行していない。
+- safe-copy、実DB、既存checkout、commit／pushは未実施。未適用migrationと既存の未commit差分はworktree内に保持。作業branch `codex/price-aggregation`、HEAD `04d072651a83c9f4be16aca5fa8df64417375f70`。
+
+次: 隔離worktreeの数量調整・キャンセル差分をレビューし、別途依頼があるまでmigration／safe-copy反映／commit／pushを行わない。
+
+## 注文キャンセル・数量操作 最終受入 2026-09-27
+
+- 注文行キャンセル／取消しと数量調整を実装。キャンセル理由は未提供・提供済みとも任意。数量を0点にする場合は確認を挟み、＋は既存行を変更せず厨房追加注文として記録する。注文時snapshot、提供記録、監査履歴を保持し、ready・支払済み・session終了後の履歴操作はロックする。
+- `admin-pairing.js` の `fetchAdminCheckoutRequests` は、管理者tokenのみの履歴画面で会計状態を取得し、状態不明時やready／支払済み／session終了時の注文行操作を無効化するため必要。対応テストとともに今回の機能範囲に含めた。
+- 記録済み検証: prototype 138/138、server 399/399（provisioning系3ファイルを除外）、Sites 4/4、Vite build PASS。今回の画面確認後はテスト／build未再実行。文書更新後の `git diff --check` PASS。
+- 1280×800と1637×602 CSS viewportで通常画面・数量編集・キャンセル確認の計6状態を受入。1637×602を含め、viewportから直接取得した無加工PNGで確認し、切り抜き・リサイズはしていない。画像は `C:\Users\user\AppData\Local\Temp\warun-price-ui-acceptance-ceaf-20260926-7d9fa221` に保存し、文字・操作ボタン・モーダル表示を確認した。
+- 本worktreeの最終対象はtracked 27ファイルとschema v15／v16 migration 2ファイル。既存差分を保全して1つのローカル機能commitにまとめる。safe-copy、実DB、既存checkoutには接続・変更せず、migrationは未適用。pushなし。
+
+次: migration適用やsafe-copy反映が必要になった場合は、対象環境・backup・復旧手順を別途確認してから実施する。

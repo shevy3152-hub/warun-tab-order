@@ -77,3 +77,29 @@ final result: passed
 - Compact receipt layout keeps checkout actions and live orders visible at both exact CSS viewports. At 1280×800, both checkout action rows and table 1's first two unserved rows (y=447–563) are inside its receipt (y=108–741). At 1637×602, both active checkout action rows (y=343–383 and 382–422) and table 1's first two unserved rows (y=435–539) fit within the receipt (y=96–555); the second active table contains only served rows in this fictional fixture. No document-level horizontal overflow.
 - Screenshots: `C:\Users\user\.codex\visualizations\2026\09\23\01a0ce57-ec42-7d03-a559-db26ed12f8db\kitchen-fees-always-open-1280x800.png` and `...\kitchen-fees-always-open-1637x602.png`. Built-in fictional demo checkouts/orders only; all requests outside local Vite 5174 were blocked and none occurred. Disclosure collapse/reopen and optional-fee row addition were verified in ephemeral page state; no checkout control was activated.
 - Verification: prototype 131/131, Sites 4/4, Vite build (4,585 modules), Sites build preparation, inline-client generation. The pnpm launcher stopped on its ignored-esbuild-build-script safety check; the existing Vite binary and build scripts were run directly without approving or running that install script.
+
+## 注文行キャンセル・取消し UI確認 2026-09-26
+
+- 基準commit `04d072651a83c9f4be16aca5fa8df64417375f70`から作成した隔離worktreeのVite demo（`?demo=1#/kitchen`）を、1280×800と1637×602のCSS viewportで確認。架空注文／会計データのみを使用。
+- 両サイズでテーブル別slot、展開中の席料・深夜チャージ・延長料金欄、会計操作、注文行ごとの単価／キャンセル操作、提供済み区分を確認。長い注文内容はテーブルslot内の縦スクロールで続けて確認できる。状態変更ボタンは押していない。
+- 左レールの「注文・会計履歴」から履歴画面へ遷移することを確認。demo履歴レスポンスは空のため監査情報を含む実表示は未確認。注文snapshot／現在請求額／キャンセル・取消し操作者／時刻／理由のフィールドと表示は関連テストで補完。
+- ブラウザー撮影出力は確認したが、ローカルPNGとしては保存していない。safe-copy、実DB、checkout、API書込み、会計操作は未使用。
+
+visual result: isolated kitchen layout inspected at both target viewports; populated cancellation-history rendering remains unverified in browser.
+
+## 厨房注文行の数量調整 UI 2026-09-26（過去の近似viewport記録）
+
+- 商品名のキャンセル確認とは別に「単価と数量を編集」パネルを表示。請求対象数量の−／＋、注文時単価snapshot、現在単価、変更後行合計を確認した。理由欄は0点キャンセルの確認内に任意入力として表示し、通常のキャンセル理由も任意で保存する。
+- これは当時の近似viewportによる予備確認記録である。1280×800 CSS viewportと1638×603でDOM geometryを測定し、後者は当時のviewport API制約により1637×602を直接指定できず、記録したPNGを各1px切り詰めた。次項の2026-09-27最終受入では1637×602を無加工で直接撮影しているため、この近似記録は最終判定に使用しない。数量・価格変更は画面上で実行せず、隔離DBテストで検証した。
+- 操作なしの厨房画面と数量編集画面のPNG: `C:\Users\user\.codex\visualizations\2026\09\23\01a0ce57-ec42-7d03-a559-db26ed12f8db\kitchen-quantity-board-1280x800.png`、`...\kitchen-quantity-editor-1280x800.png`、`...\kitchen-quantity-board-1637x602.png`、`...\kitchen-quantity-editor-1637x602.png`。safe-copyと実DBは未使用。
+
+visual result: DOM geometry confirms that quantity controls and price-save action fit at the measured CSS viewports; 1637×602 CSS viewport itself was approximated by 1638×603 due browser viewport API granularity.
+
+## 注文キャンセル・数量操作 最終画面受入 2026-09-27
+
+- 1280×800と1637×602のCSS viewport、100% browser zoomで各3状態（通常画面・数量編集・キャンセル確認）を確認。各viewportを直接指定してPNGを取得し、6枚とも切り抜き・リサイズなしで実寸を確認した。
+- 1280×800: `C:\Users\user\AppData\Local\Temp\warun-price-ui-acceptance-ceaf-20260926-7d9fa221\normal-1280x800.png`、`...\quantity-1280x800.png`、`...\cancel-1280x800.png`。1637×602: `...\normal-1637x602.png`、`...\quantity-1637x602.png`、`...\cancel-1637x602.png`。
+- 通常画面のテーブルslotと横スクロール、数量編集パネルの数量stepper・単価欄・保存操作、キャンセル確認の任意理由欄・金額・戻る／確定ボタンを目視。文字や主要操作の欠け、モーダル下端の切れは見られず、6状態すべてPASS。
+- 架空demoデータのみを表示し、キャンセル・数量変更・注文送信は行っていない。ブラウザーとViteは停止済み。監査履歴が複数行ある状態のブラウザー表示は別途未確認で、関連するAPI／保存／lock動作は隔離テストで検証済み。
+
+visual result: passed — six unmodified viewport captures at 1280×800 and 1637×602.

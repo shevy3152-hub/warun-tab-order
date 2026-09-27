@@ -54,7 +54,7 @@ test('checkout HTTP contract enforces roles and hides customer breakdown', async
   const checkout = createCheckoutRepository({ database: connection.database, now: () => 2000 });
   const noop = () => {};
   const catalog = { getDeviceSettings() { return {}; }, getMenuForPrincipal() { return {}; }, writeMenuItem() {}, writeImageLayouts() {}, writeCategory() {}, writeMenuOrdering() {}, close: noop };
-  const orders = { createOrder() {}, getCustomerHistory() {}, getHistory() {}, closeTableSession() {}, markItemServed() {}, close: noop };
+  const orders = { createOrder() {}, getCustomerHistory() {}, getHistory() {}, closeTableSession() {}, markItemServed() {}, cancelOrderItem() {}, restoreOrderItemCancellation() {}, adjustKitchenOrderItemQuantity() {}, close: noop };
   const events = { replay() {}, readCommittedForPrincipal() {}, getCurrentCursor() { return { eventEpoch: uuid(99), lastEventId: 0 }; }, close: noop };
   const snapshots = { getSnapshot() {}, close: noop };
   const hub = { notifyCommitted() {}, attach() {}, close: noop };

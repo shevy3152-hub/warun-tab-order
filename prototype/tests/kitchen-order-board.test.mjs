@@ -75,6 +75,24 @@ test("a fully served order stays available to a requested checkout and is restor
   assert.equal(restored.session.sessionId, "session-1");
 });
 
+test("fully cancelled orders are not new work but remain available during a requested checkout", () => {
+  const sessions = [{ tableId: "1", sessionId: "session-1", openedAt: "2026-09-23T09:00:00Z" }];
+  const cancelled = order("cancelled-1", "1", [row("cancelled-row", "food")], "2026-09-23T09:05:00Z", "session-1");
+  cancelled.status = "cancelled";
+  cancelled.items[0].isCancelled = true;
+  const withoutCheckout = buildKitchenTableGroups({ orders: [cancelled], sessions, menuItems, drinkCategoryIds });
+  assert.equal(withoutCheckout[0].orders.length, 0);
+
+  const withCheckout = buildKitchenTableGroups({
+    orders: [cancelled], sessions, menuItems, drinkCategoryIds,
+    checkouts: [{ tableSessionId: "session-1", status: "requested" }],
+  });
+  assert.equal(withCheckout[0].orders[0].status, "cancelled");
+  assert.equal(withCheckout[0].orders[0].hasUnservedItems, false);
+  assert.equal(withCheckout[0].hasUnservedOrders, false);
+  assert.equal(withCheckout[0].isCompletedSide, true);
+});
+
 test("simultaneous requested checkouts get side-by-side table slots before other tables", () => {
   const sessions = [
     { tableId: "1", sessionId: "session-1", openedAt: "2026-09-23T09:00:00Z" },
@@ -127,7 +145,23 @@ test("kitchen markup prioritizes live horizontal table slots and keeps histories
   assert.match(app, /route: "\/history", label: "注文・会計履歴"/);
   assert.doesNotMatch(screen, /席をリセット/);
   assert.doesNotMatch(screen, /onCloseSession/);
-  assert.match(screen, /toggleServed\(order\.id \?\? order\.orderId, item\.id\)/);
+  assert.match(screen, /toggleServed\(orderId, item\.id\)/);
+  assert.match(screen, /aria-label=\{`\$\{kitchenMenuName\(item, kitchenAliases\)\}のキャンセル確認を開く`\}/);
+  assert.match(screen, /aria-label=\{`\$\{kitchenMenuName\(item, kitchenAliases\)\}の単価と数量を編集`\}/);
+  assert.match(screen, /aria-label="数量を1点減らす"/);
+  assert.match(screen, /aria-label="同じ商品を1点追加注文"/);
+  assert.match(screen, /理由（任意）/);
+  assert.match(screen, /会計から除外 \{cancelledQuantity\}点／\{yen\(excludedAmount\)\}/);
+  assert.match(screen, /className="order-item-restore"/);
+  assert.match(historyScreen, /currentBillableAmountYen/);
+  assert.match(historyScreen, /cancellationHistory \?\? \[\]\)\.map/);
+  const cancellationModal = app.slice(app.indexOf("function OrderItemCancellationModal"), app.indexOf("function HistoryScreen"));
+  assert.match(cancellationModal, /\$\{cancellationProductName\} \$\{cancellationQuantity\}点をキャンセルし、今回の会計から外します。注文の記録は残ります。提供済みの場合、提供した記録も残ります。/);
+  assert.match(cancellationModal, /const cancelButtonLabel = `\$\{cancellationProductName\} \$\{cancellationQuantity\}点をキャンセル`/);
+  assert.match(cancellationModal, /<span>理由（任意）<\/span>/);
+  assert.match(cancellationModal, /キャンセルを取り消しますか？/);
+  assert.match(cancellationModal, /restoring \? "キャンセルを取り消す"/);
+  assert.match(cancellationModal, /busy \? "処理中…"/);
   assert.match(styles, /\.staff-app--kitchen \.table-scroll \{ display: grid;/);
   assert.match(styles, /grid-auto-flow: column;[\s\S]*?grid-auto-columns: calc\(50vw - 160px\)/);
   assert.match(styles, /overflow-x: auto;[\s\S]*?scroll-snap-type: x proximity;/);

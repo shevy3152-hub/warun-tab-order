@@ -6,7 +6,10 @@ export function buildKitchenTableGroups({ orders, sessions, menuItems, drinkCate
   const completedCheckoutOrders = orders.filter((order) => order.status === "completed"
     && order.sessionId
     && requestedCheckoutSessions.has(order.sessionId));
-  const boardOrders = [...activeOrders, ...completedCheckoutOrders];
+  const cancelledCheckoutOrders = orders.filter((order) => order.status === "cancelled"
+    && order.sessionId
+    && requestedCheckoutSessions.has(order.sessionId));
+  const boardOrders = [...activeOrders, ...completedCheckoutOrders, ...cancelledCheckoutOrders];
   const menuById = new Map(menuItems.map((item) => [item.id, item]));
   const tableIds = new Set([
     ...boardOrders.map((order) => String(order.tableId)),
@@ -18,8 +21,9 @@ export function buildKitchenTableGroups({ orders, sessions, menuItems, drinkCate
       .filter((order) => String(order.tableId) === tableId)
       .map((order) => ({
         ...order,
-        hasUnservedItems: order.items.some((item) => !item.isServed),
-        isDrinkOrder: order.items.length > 0 && order.items.every((item) => drinkCategoryIds.has(menuById.get(item.menuItemId)?.categoryId)),
+        hasUnservedItems: order.items.some((item) => !item.isServed && !item.isCancelled),
+        isDrinkOrder: order.items.some((item) => !item.isCancelled)
+          && order.items.filter((item) => !item.isCancelled).every((item) => drinkCategoryIds.has(menuById.get(item.menuItemId)?.categoryId)),
       }))
       .sort((a, b) => Number(b.hasUnservedItems) - Number(a.hasUnservedItems)
         || Number(b.isDrinkOrder) - Number(a.isDrinkOrder)

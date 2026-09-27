@@ -1,13 +1,29 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { createAdminRideGuidanceContact, deleteAdminRideGuidanceContact, fetchAdminRideGuidance, saveAdminRideGuidanceOrdering, saveAdminRideGuidancePickup, updateAdminRideGuidanceContact, fetchAdminBusinessHours, saveAdminBusinessHours, saveAdminCategory, saveAdminMenuItem, saveAdminMenuOrdering } from '../src/admin-pairing.js';
+import { createAdminRideGuidanceContact, deleteAdminRideGuidanceContact, fetchAdminCheckoutRequests, fetchAdminRideGuidance, saveAdminRideGuidanceOrdering, saveAdminRideGuidancePickup, updateAdminRideGuidanceContact, fetchAdminBusinessHours, saveAdminBusinessHours, saveAdminCategory, saveAdminMenuItem, saveAdminMenuOrdering } from '../src/admin-pairing.js';
 
 const env = {
   WARUN_ADMIN_API_TOKEN: 'admin-token-for-test',
   WARUN_API_BASE: 'http://127.0.0.1:8787/v1',
   location: { origin: 'http://127.0.0.1:8787' },
 };
+
+test('fetchAdminCheckoutRequests reads active checkout state with the admin token', async () => {
+  let captured;
+  const checkouts = [{ checkoutRequestId: '00000000-0000-4000-8000-000000000001', tableSessionId: '00000000-0000-4000-8000-000000000002', status: 'ready' }];
+  const result = await fetchAdminCheckoutRequests({
+    env,
+    fetchImpl: async (url, options) => {
+      captured = { url, options };
+      return { ok: true, json: async () => ({ checkouts }) };
+    },
+  });
+  assert.equal(captured.url, `${env.WARUN_API_BASE}/admin/checkout-requests`);
+  assert.equal(captured.options.method, undefined);
+  assert.equal(captured.options.headers.Authorization, 'Bearer admin-token-for-test');
+  assert.deepEqual(result, checkouts);
+});
 
 test('saveAdminMenuItem sends the authenticated optimistic catalog write contract', async () => {
   let captured;

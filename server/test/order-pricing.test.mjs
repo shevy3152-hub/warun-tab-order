@@ -19,9 +19,27 @@ test('shared order pricing uses adjusted unit price times quantity and preserves
     adjustedUnitPriceYen: 300,
     currentUnitPriceYen: 300,
     quantity: 3,
+    quantityReduced: 0,
+    billableQuantity: 3,
     lineTotalYenSnapshot: 1140,
     lineTotalYen: 900,
   });
+});
+
+test('shared order pricing keeps the original quantity snapshot while billing reduced quantity', () => {
+  const amounts = orderItemAmounts({
+    unit_price_yen_snapshot: 380,
+    adjusted_unit_price_yen: 300,
+    quantity: 3,
+    quantity_reduced: 1,
+    line_total_yen: 1140,
+  });
+
+  assert.equal(amounts.quantity, 3);
+  assert.equal(amounts.quantityReduced, 1);
+  assert.equal(amounts.billableQuantity, 2);
+  assert.equal(amounts.lineTotalYenSnapshot, 1140);
+  assert.equal(amounts.lineTotalYen, 600);
 });
 
 test('shared order pricing falls back to the order-time snapshot and accepts a zero adjustment', () => {

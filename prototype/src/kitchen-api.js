@@ -1,3 +1,5 @@
+import { configuredAdminToken } from "./admin-pairing.js";
+
 function kitchenToken(env) {
   if (typeof env?.WARUN_KITCHEN_API_TOKEN === "string") return env.WARUN_KITCHEN_API_TOKEN.trim();
   if (typeof env?.WARUN_RUNTIME_CONFIG?.kitchenToken === "string") return env.WARUN_RUNTIME_CONFIG.kitchenToken.trim();
@@ -196,7 +198,10 @@ export async function fetchKitchenSnapshot({ env = globalThis, fetchImpl = env.f
       sessionId: order.sessionId,
       createdAt: new Date(order.acceptedAtMs).toISOString(),
       status: order.status,
+      version: order.version,
       totalAmount: order.totalAmountYen,
+      orderOrigin: order.orderOrigin ?? "customer",
+      createdByDeviceId: order.createdByDeviceId ?? null,
       items: order.items.map((item) => ({
         id: String(item.orderItemId),
         menuItemId: item.menuItemId,
@@ -212,10 +217,17 @@ export async function fetchKitchenSnapshot({ env = globalThis, fetchImpl = env.f
         adjustedUnitPriceYen: item.adjustedUnitPriceYen ?? null,
         currentUnitPriceYen: item.currentUnitPriceYen ?? item.unitPriceYenSnapshot,
         quantity: item.quantity,
+        quantityReduced: item.quantityReduced ?? 0,
+        billableQuantity: item.billableQuantity ?? item.quantity,
         lineTotalYen: item.lineTotalYen,
         lineTotalYenSnapshot: item.lineTotalYenSnapshot ?? item.lineTotalYen,
+        currentBillableAmountYen: item.currentBillableAmountYen ?? (item.isCancelled ? 0 : item.lineTotalYen),
         isServed: item.isServed,
         servedAt: item.servedAtMs ? new Date(item.servedAtMs).toISOString() : null,
+        servedByDeviceId: item.servedByDeviceId ?? null,
+        isCancelled: item.isCancelled === true,
+        cancellationHistory: Array.isArray(item.cancellationHistory) ? item.cancellationHistory : [],
+        quantityHistory: Array.isArray(item.quantityHistory) ? item.quantityHistory : [],
       })),
     })),
     sessions: (Array.isArray(body.openSessions) ? body.openSessions : []).map((session) => ({
@@ -254,6 +266,30 @@ export async function markKitchenItemServed({ env = globalThis, orderId, orderIt
   if (!response.ok) throw new Error("Serving update failed.");
 }
 
+async function changeKitchenOrderItemCancellation({ env = globalThis, orderId, orderItemId, reason = null, operation, fetchImpl = env.fetch } = {}) {
+  const base = apiBase(env);
+  const token = kitchenToken(env) || configuredAdminToken(env);
+  if (!base || !token || typeof fetchImpl !== "function") throw new KitchenApiError("Staff API is not configured.", { code: "API_UNAVAILABLE" });
+  const requestHeaders = { Accept: "application/json", Authorization: `Bearer ${token}` };
+  const response = await fetchImpl(`${base}/kitchen/order-items/${operation}`, {
+    method: "POST",
+    headers: { ...requestHeaders, "Content-Type": "application/json" },
+    body: JSON.stringify({ orderId, orderItemId: Number(orderItemId), reason }),
+  });
+  if (!response.ok) throw await responseError(response, operation === "cancel" ? "注文商品をキャンセルできませんでした。" : "キャンセルを取り消せませんでした。");
+  const body = await response.json();
+  if (!Array.isArray(body?.orders) || body.orders[0]?.orderId !== orderId) throw new KitchenApiError("注文変更レスポンスが不正です。", { code: "INVALID_RESPONSE" });
+  return body.orders[0];
+}
+
+export function cancelKitchenOrderItem({ orderId, orderItemId, reason = null, ...options } = {}) {
+  return changeKitchenOrderItemCancellation({ ...options, orderId, orderItemId, reason, operation: "cancel" });
+}
+
+export function restoreKitchenOrderItem({ orderId, orderItemId, reason = null, ...options } = {}) {
+  return changeKitchenOrderItemCancellation({ ...options, orderId, orderItemId, reason, operation: "restore" });
+}
+
 export async function adjustKitchenItemUnitPrice({ env = globalThis, orderId, orderItemId, unitPriceYen, fetchImpl = env.fetch } = {}) {
   const { base, requestHeaders } = checkoutBase(env, fetchImpl);
   const response = await fetchImpl(`${base}/kitchen/order-items/price`, {
@@ -264,6 +300,19 @@ export async function adjustKitchenItemUnitPrice({ env = globalThis, orderId, or
   if (!response.ok) throw await responseError(response, "単価を変更できませんでした。");
   const body = await response.json();
   if (!Array.isArray(body?.orders) || body.orders[0]?.orderId !== orderId) throw new KitchenApiError("単価変更レスポンスが不正です。", { code: "INVALID_RESPONSE" });
+  return body.orders[0];
+}
+
+export async function adjustKitchenOrderItemQuantity({ env = globalThis, orderId, orderItemId, direction, operationId, expectedBillableQuantity, confirmZero = false, reason = null, fetchImpl = env.fetch } = {}) {
+  const { base, requestHeaders } = checkoutBase(env, fetchImpl);
+  const response = await fetchImpl(`${base}/kitchen/order-items/quantity`, {
+    method: "POST",
+    headers: { ...requestHeaders, "Content-Type": "application/json" },
+    body: JSON.stringify({ orderId, orderItemId: Number(orderItemId), direction, operationId, expectedBillableQuantity, confirmZero, reason }),
+  });
+  if (!response.ok) throw await responseError(response, direction === "increase" ? "追加注文を作成できませんでした。" : "注文数量を変更できませんでした。");
+  const body = await response.json();
+  if (!Array.isArray(body?.orders) || body.orders[0]?.orderId !== orderId) throw new KitchenApiError("数量変更レスポンスが不正です。", { code: "INVALID_RESPONSE" });
   return body.orders[0];
 }
 

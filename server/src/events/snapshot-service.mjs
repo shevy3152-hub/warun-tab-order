@@ -56,6 +56,16 @@ function requireInteger(value, minimum = 0) {
   return value;
 }
 
+function requireSignedInteger(value) {
+  if (!Number.isSafeInteger(value)) throw new InvalidSnapshotCandidate();
+  return value;
+}
+
+function requireOneOf(value, allowed) {
+  if (!allowed.has(value)) throw new InvalidSnapshotCandidate();
+  return value;
+}
+
 function optionalString(target, key, value) {
   if (value !== undefined) target[key] = requireString(value);
 }
@@ -188,6 +198,48 @@ function projectMenu(role, source) {
 function projectOrderItem(source) {
   const value = requireObject(source);
   const amounts = orderItemAmounts(value);
+  const isCancelled = value.isCancelled === undefined ? false : requireBoolean(value.isCancelled);
+  const cancellationHistory = requireArray(value.cancellationHistory ?? []).map((sourceEvent) => {
+    const event = requireObject(sourceEvent);
+    if (event.reason !== null && typeof event.reason !== 'string') throw new InvalidSnapshotCandidate();
+    if (event.servedAtMsSnapshot !== null && event.servedAtMsSnapshot !== undefined) requireInteger(event.servedAtMsSnapshot);
+    if (event.servedByDeviceIdSnapshot !== null && event.servedByDeviceIdSnapshot !== undefined) requireString(event.servedByDeviceIdSnapshot);
+    return {
+      eventId: requireInteger(event.eventId, 1),
+      operationId: event.operationId == null ? null : requireString(event.operationId),
+      action: requireOneOf(event.action, new Set(['cancelled', 'restored'])),
+      actorDeviceId: requireString(event.actorDeviceId),
+      actorLabel: requireString(event.actorLabel),
+      occurredAtMs: requireInteger(event.occurredAtMs),
+      reason: event.reason,
+      isServedSnapshot: requireBoolean(event.isServedSnapshot),
+      servedAtMsSnapshot: event.servedAtMsSnapshot ?? null,
+      servedByDeviceIdSnapshot: event.servedByDeviceIdSnapshot ?? null,
+    };
+  });
+  const quantityHistory = requireArray(value.quantityHistory ?? []).map((sourceEvent) => {
+    const event = requireObject(sourceEvent);
+    if (event.servedAtMsSnapshot !== null && event.servedAtMsSnapshot !== undefined) requireInteger(event.servedAtMsSnapshot);
+    if (event.servedByDeviceIdSnapshot !== null && event.servedByDeviceIdSnapshot !== undefined) requireString(event.servedByDeviceIdSnapshot);
+    if (event.relatedOrderItemId !== null && event.relatedOrderItemId !== undefined) requireInteger(event.relatedOrderItemId, 1);
+    if (event.relatedOrderId !== null && event.relatedOrderId !== undefined) requireString(event.relatedOrderId);
+    return {
+      eventId: requireInteger(event.eventId, 1),
+      operationId: requireString(event.operationId),
+      action: requireOneOf(event.action, new Set(['added', 'decreased'])),
+      quantityDelta: requireSignedInteger(event.quantityDelta),
+      previousBillableQuantity: requireInteger(event.previousBillableQuantity, 1),
+      nextBillableQuantity: requireInteger(event.nextBillableQuantity, 1),
+      relatedOrderId: event.relatedOrderId ?? null,
+      relatedOrderItemId: event.relatedOrderItemId ?? null,
+      actorDeviceId: requireString(event.actorDeviceId),
+      actorLabel: requireString(event.actorLabel),
+      occurredAtMs: requireInteger(event.occurredAtMs),
+      isServedSnapshot: requireBoolean(event.isServedSnapshot),
+      servedAtMsSnapshot: event.servedAtMsSnapshot ?? null,
+      servedByDeviceIdSnapshot: event.servedByDeviceIdSnapshot ?? null,
+    };
+  });
   const item = {
     orderItemId: requireInteger(value.orderItemId, 1),
     formalNameSnapshot: requireString(value.formalNameSnapshot),
@@ -198,12 +250,19 @@ function projectOrderItem(source) {
       : requireInteger(amounts.adjustedUnitPriceYen),
     currentUnitPriceYen: requireInteger(amounts.currentUnitPriceYen),
     quantity: requireInteger(amounts.quantity, 1),
+    quantityReduced: requireInteger(amounts.quantityReduced),
+    billableQuantity: requireInteger(amounts.billableQuantity),
     lineTotalYenSnapshot: requireInteger(amounts.lineTotalYenSnapshot),
     lineTotalYen: requireInteger(amounts.lineTotalYen),
+    currentBillableAmountYen: requireInteger(value.currentBillableAmountYen ?? (isCancelled ? 0 : amounts.lineTotalYen)),
     isServed: requireBoolean(value.isServed),
+    isCancelled,
+    cancellationHistory,
+    quantityHistory,
   };
   optionalString(item, 'menuItemId', value.menuItemId);
   optionalInteger(item, 'servedAtMs', value.servedAtMs);
+  optionalString(item, 'servedByDeviceId', value.servedByDeviceId);
   optionalString(item, 'variantId', value.variantId);
   optionalString(item, 'variantNameSnapshot', value.variantNameSnapshot);
   optionalString(item, 'variantVolumeSnapshot', value.variantVolumeSnapshot);
@@ -230,6 +289,8 @@ function projectOrder(source) {
     items,
   };
   if (Object.hasOwn(value, 'sessionId')) order.sessionId = requireString(value.sessionId);
+  if (Object.hasOwn(value, 'orderOrigin')) order.orderOrigin = requireOneOf(value.orderOrigin, new Set(['customer', 'kitchen_addition']));
+  optionalString(order, 'createdByDeviceId', value.createdByDeviceId);
   optionalInteger(order, 'completedAtMs', value.completedAtMs);
   return order;
 }

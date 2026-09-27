@@ -126,8 +126,43 @@ function projectEvent(row, device) {
   });
 }
 
-function mapOrderItem(row) {
+function mapCancellationEvent(row) {
+  return {
+    eventId: Number(row.cancellation_event_id),
+    operationId: row.operation_id ?? null,
+    action: row.action,
+    actorDeviceId: row.actor_device_id,
+    actorLabel: row.actor_label_snapshot,
+    occurredAtMs: Number(row.occurred_at_ms),
+    reason: row.reason,
+    isServedSnapshot: row.is_served_snapshot === 1,
+    servedAtMsSnapshot: row.served_at_ms_snapshot === null ? null : Number(row.served_at_ms_snapshot),
+    servedByDeviceIdSnapshot: row.served_by_device_id_snapshot,
+  };
+}
+
+function mapQuantityEvent(row) {
+  return {
+    eventId: Number(row.quantity_event_id),
+    operationId: row.operation_id,
+    action: row.action,
+    quantityDelta: Number(row.quantity_delta),
+    previousBillableQuantity: Number(row.previous_billable_quantity),
+    nextBillableQuantity: Number(row.next_billable_quantity),
+    relatedOrderId: row.related_order_id,
+    relatedOrderItemId: row.related_order_item_id === null ? null : Number(row.related_order_item_id),
+    actorDeviceId: row.actor_device_id,
+    actorLabel: row.actor_label_snapshot,
+    occurredAtMs: Number(row.occurred_at_ms),
+    isServedSnapshot: row.is_served_snapshot === 1,
+    servedAtMsSnapshot: row.served_at_ms_snapshot === null ? null : Number(row.served_at_ms_snapshot),
+    servedByDeviceIdSnapshot: row.served_by_device_id_snapshot,
+  };
+}
+
+function mapOrderItem(row, cancellationHistory = [], quantityHistory = []) {
   const amounts = orderItemAmounts(row);
+  const isCancelled = row.is_cancelled === 1;
   const item = {
     orderItemId: row.order_item_id,
     formalNameSnapshot: row.formal_name_snapshot,
@@ -136,12 +171,19 @@ function mapOrderItem(row) {
     adjustedUnitPriceYen: amounts.adjustedUnitPriceYen,
     currentUnitPriceYen: amounts.currentUnitPriceYen,
     quantity: amounts.quantity,
+    quantityReduced: amounts.quantityReduced,
+    billableQuantity: amounts.billableQuantity,
     lineTotalYenSnapshot: amounts.lineTotalYenSnapshot,
     lineTotalYen: amounts.lineTotalYen,
+    currentBillableAmountYen: isCancelled ? 0 : amounts.lineTotalYen,
     isServed: row.is_served === 1,
+    isCancelled,
+    cancellationHistory,
+    quantityHistory,
   };
   if (row.menu_item_id !== null) item.menuItemId = row.menu_item_id;
   if (row.served_at_ms !== null) item.servedAtMs = row.served_at_ms;
+  if (row.served_by_device_id !== null) item.servedByDeviceId = row.served_by_device_id;
   if (row.variant_id !== null) item.variantId = row.variant_id;
   if (row.variant_name_snapshot !== null) item.variantNameSnapshot = row.variant_name_snapshot;
   if (row.variant_volume_snapshot !== null) item.variantVolumeSnapshot = row.variant_volume_snapshot;
@@ -151,19 +193,38 @@ function mapOrderItem(row) {
   return item;
 }
 
-function mapOrder(row, itemRows) {
-  const items = itemRows.map(mapOrderItem);
+function mapOrder(row, itemRows, cancellationRows = [], quantityRows = []) {
+  const cancellationsByItem = new Map();
+  for (const event of cancellationRows) {
+    const history = cancellationsByItem.get(Number(event.order_item_id)) || [];
+    history.push(mapCancellationEvent(event));
+    cancellationsByItem.set(Number(event.order_item_id), history);
+  }
+  const quantitiesByItem = new Map();
+  for (const event of quantityRows) {
+    const history = quantitiesByItem.get(Number(event.order_item_id)) || [];
+    history.push(mapQuantityEvent(event));
+    quantitiesByItem.set(Number(event.order_item_id), history);
+  }
+  const items = itemRows.map((item) => mapOrderItem(
+    item,
+    cancellationsByItem.get(Number(item.order_item_id)) || [],
+    quantitiesByItem.get(Number(item.order_item_id)) || [],
+  ));
+  const fullyCancelled = items.length > 0 && items.every((item) => item.isCancelled);
   const order = {
     orderId: row.order_id,
     clientOrderId: row.client_order_id,
     tableId: row.table_id,
     tableNumberSnapshot: row.table_number_snapshot,
-    status: row.status,
+    status: fullyCancelled ? 'cancelled' : row.status,
     totalAmountYen: sumCurrentOrderItemTotals(items),
     acceptedAtMs: row.accepted_at_ms,
     version: row.version,
     items,
   };
+  if (row.order_origin !== undefined) order.orderOrigin = row.order_origin;
+  if (row.created_by_device_id !== undefined && row.created_by_device_id !== null) order.createdByDeviceId = row.created_by_device_id;
   if (row.session_id !== null && row.session_id !== undefined) order.sessionId = row.session_id;
   if (row.completed_at_ms !== null) order.completedAtMs = row.completed_at_ms;
   return order;
@@ -274,9 +335,12 @@ export function createEventRepository({ database } = {}) {
           total_amount_yen,
           accepted_at_ms,
           completed_at_ms,
-          version
+          version,
+          order_origin,
+          created_by_device_id
         FROM orders
         WHERE status IN ('new', 'active')
+          AND EXISTS (SELECT 1 FROM order_items AS oi WHERE oi.order_id = orders.order_id AND oi.is_cancelled = 0 AND oi.quantity_reduced < oi.quantity)
         ORDER BY accepted_at_ms, order_id
       `),
       findOrderItems: database.prepare(`
@@ -288,9 +352,12 @@ export function createEventRepository({ database } = {}) {
           unit_price_yen_snapshot,
           adjusted_unit_price_yen,
           quantity,
+          quantity_reduced,
           line_total_yen,
           is_served,
           served_at_ms,
+          served_by_device_id,
+          is_cancelled,
           variant_id,
           variant_name_snapshot,
           variant_volume_snapshot,
@@ -299,7 +366,25 @@ export function createEventRepository({ database } = {}) {
           serving_option_name_snapshot
         FROM order_items
         WHERE order_id = ?
-        ORDER BY is_served, line_index, order_item_id
+        ORDER BY is_cancelled, is_served, line_index, order_item_id
+      `),
+      findOrderCancellationEvents: database.prepare(`
+        SELECT cancellation_event_id, order_item_id, operation_id, action, actor_device_id,
+               actor_label_snapshot, occurred_at_ms, reason, is_served_snapshot,
+               served_at_ms_snapshot, served_by_device_id_snapshot
+        FROM order_item_cancellation_events
+        WHERE order_id = ?
+        ORDER BY cancellation_event_id
+      `),
+      findOrderQuantityEvents: database.prepare(`
+        SELECT quantity_event_id, operation_id, order_id, order_item_id, action,
+               quantity_delta, previous_billable_quantity, next_billable_quantity,
+               related_order_id, related_order_item_id, actor_device_id,
+               actor_label_snapshot, occurred_at_ms, is_served_snapshot,
+               served_at_ms_snapshot, served_by_device_id_snapshot
+        FROM order_item_quantity_events
+        WHERE order_id = ?
+        ORDER BY quantity_event_id
       `),
       findOpenStaffCalls: database.prepare(`
         SELECT
@@ -550,7 +635,12 @@ export function createEventRepository({ database } = {}) {
       let openStaffCalls = [];
       if (device.role === 'kitchen' || device.role === 'admin') {
         activeOrders = statements.findActiveOrders.all().map((orderRow) => (
-          mapOrder(orderRow, statements.findOrderItems.all(orderRow.order_id))
+          mapOrder(
+            orderRow,
+            statements.findOrderItems.all(orderRow.order_id),
+            statements.findOrderCancellationEvents.all(orderRow.order_id),
+            statements.findOrderQuantityEvents.all(orderRow.order_id),
+          )
         ));
         openStaffCalls = statements.findOpenStaffCalls.all().map(mapStaffCall);
       }
