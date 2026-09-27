@@ -735,6 +735,16 @@
 
 次: この隔離worktreeの差分をレビューし、別途明示依頼があるまでmigration／commit／push／safe-copy反映を行わない。
 
+## 厨房スタッフ呼出のテーブル別通知 2026-09-27
+
+- `48a7227a7ab8d241feb5f3b3004ee771b7d72da7`から作成した隔離worktree `C:\Users\user\.codex\worktrees\kitchen-call-notifications\タブレットオーダーシステム` で実施。厨房左レールの呼出件数から全卓の呼出一覧を開け、折り畳み中も件数バッジと一覧アクセスを保持する。厨房カードのベルは該当卓だけの呼出一覧を開き、既存のcall ID単位の対応完了を再利用する。呼出のみの卓もカードグループへ含める。
+- 隔離ブラウザーlocalStorageにテーブル1・2・3の同時呼出を用意。テーブル1のベルから1件だけ対応完了し、テーブル2・3の呼出が残ること、注文内容／提供状態が不変であること、同卓に新規呼出を追加後ベルと通知数へ再表示されることを確認。客席ルートは隔離設定でペアリング画面となるため、再呼出データは隔離localStorage fixtureで追加し、厨房UI上の再表示を検証した。API／外部要求は遮断。
+- 1280×800／1637×602 CSS viewport、DPR 1で展開厨房画面と、折り畳み中に呼出一覧を開いた画面を直接PNG撮影。各画像はviewport全体で切り抜き・リサイズなし。4枚: `prototype/qa/staff-calls-expanded-1280x800.png`、`prototype/qa/staff-calls-collapsed-list-1280x800.png`、`prototype/qa/staff-calls-expanded-1637x602.png`、`prototype/qa/staff-calls-collapsed-list-1637x602.png`。展開レール250px、折り畳み78px、通知数3、一覧に3卓を確認。画像寸法は指定viewportと一致。
+- 検証: kitchen-order-boardとSites workerテスト合計15/15。生成済み`dist/client`だけを消去してVite build、Sites build preparation、`inline-client.mjs`を各1回実行し、Sites package build PASS。出力HTMLのmodule script／stylesheet埋め込み、pairing参照、フォント・画像、Worker／hosting成果物を確認。前回のinline失敗は古い生成HTMLが残っていたためで、生成物の作り直しで解消。`git diff --check` PASS、statusと最終差分を確認。preview port 5198停止済み。
+- 変更は厨房UI／卓グループ helper／回帰テストとQA画像・記録のみ。API、DB、schema、checkout、safe-copy、旧worktreeの未commit画像は変更していない。commit／pushなし。
+
+次: build後処理の形式差は未解消のまま保持し、必要なら別途修正指示を受けて対応する。
+
 ## 厨房レシート型テーブルスロット修正 2026-09-25
 
 - 前回の縦一列のテーブル表示を修正し、厨房の各テーブルを固定高さ・個別縦スクロールのレシート型スロットとして横一列に配置した。1280×800は2卓、1637×602相当は3卓を表示し、他卓は横スクロールで閲覧する。active checkoutがあるテーブルを先頭に並べ、複数卓の同時会計を別スロットで同時表示する。

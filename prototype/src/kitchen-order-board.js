@@ -1,4 +1,4 @@
-export function buildKitchenTableGroups({ orders, sessions, menuItems, drinkCategoryIds, checkouts = [] }) {
+export function buildKitchenTableGroups({ orders, sessions, menuItems, drinkCategoryIds, checkouts = [], staffCalls = [] }) {
   const activeOrders = orders.filter((order) => order.status === "new" || order.status === "active");
   const requestedCheckoutSessions = new Set(checkouts
     .filter((checkout) => checkout.status === "requested")
@@ -11,9 +11,17 @@ export function buildKitchenTableGroups({ orders, sessions, menuItems, drinkCate
     && requestedCheckoutSessions.has(order.sessionId));
   const boardOrders = [...activeOrders, ...completedCheckoutOrders, ...cancelledCheckoutOrders];
   const menuById = new Map(menuItems.map((item) => [item.id, item]));
+  const activeCallsByTable = new Map();
+  staffCalls.filter((call) => !call.resolvedAt).forEach((call) => {
+    const tableId = String(call.tableId);
+    const calls = activeCallsByTable.get(tableId) ?? [];
+    calls.push(call);
+    activeCallsByTable.set(tableId, calls);
+  });
   const tableIds = new Set([
     ...boardOrders.map((order) => String(order.tableId)),
     ...sessions.map((session) => String(session.tableId)),
+    ...activeCallsByTable.keys(),
   ]);
 
   const groups = [...tableIds].map((tableId) => {
@@ -30,17 +38,22 @@ export function buildKitchenTableGroups({ orders, sessions, menuItems, drinkCate
         || new Date(b.createdAt) - new Date(a.createdAt));
     const session = sessions.find((candidate) => String(candidate.tableId) === tableId)
       ?? tableOrders.find((order) => order.sessionId);
+    const tableCalls = activeCallsByTable.get(tableId) ?? [];
     const oldestOrder = [...tableOrders].sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt))[0];
     const hasRequestedCheckout = Boolean(session && requestedCheckoutSessions.has(session.sessionId));
+    const oldestCallAt = tableCalls.map((call) => call.createdAt).filter(Boolean).sort()[0];
+    const hasUnservedOrders = tableOrders.some((order) => order.hasUnservedItems);
 
     return {
       tableId,
       session,
       orders: tableOrders,
+      staffCalls: tableCalls,
+      hasActiveCalls: tableCalls.length > 0,
       hasRequestedCheckout,
-      hasUnservedOrders: tableOrders.some((order) => order.hasUnservedItems),
-      isCompletedSide: !tableOrders.some((order) => order.hasUnservedItems),
-      oldestActivityAt: oldestOrder?.createdAt ?? session?.openedAt ?? "",
+      hasUnservedOrders,
+      isCompletedSide: !hasUnservedOrders && !tableCalls.length,
+      oldestActivityAt: oldestOrder?.createdAt ?? session?.openedAt ?? oldestCallAt ?? "",
     };
   });
 

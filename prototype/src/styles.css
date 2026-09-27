@@ -677,6 +677,11 @@ h1, h2, h3, p { margin: 0; }
 .staff-app--kitchen .table-panel > header { min-height: 58px; padding: 8px 14px; }
 .staff-app--kitchen .table-panel > header h2 { font-size: 21px; }
 .staff-app--kitchen .table-panel > header h2 b { font-size: 30px; }
+.staff-app--kitchen .table-panel__call { min-width: 34px; height: 30px; margin-left: 8px; padding: 0 5px; border: 1px solid var(--red); background: #fff1ed; color: var(--red); display: inline-flex; align-items: center; justify-content: center; gap: 3px; vertical-align: middle; touch-action: manipulation; }
+.staff-app--kitchen .table-panel__call span { font: 900 12px/1 var(--font-display); }
+.staff-app--kitchen .table-panel__call:hover { background: #ffe0d8; }
+.staff-app--kitchen .table-panel__call:focus-visible { outline: 3px solid #1769aa; outline-offset: 2px; }
+.staff-app--kitchen .table-panel__call-empty { padding: 16px 12px; border-bottom: 1px dashed var(--line); color: var(--red); font-size: 14px; font-weight: 900; }
 .staff-app--kitchen .table-panel__orders { overflow-y: auto; }
 .staff-app--kitchen .order-item { min-height: 48px; padding-block: 5px; }
 .staff-app--kitchen .order-item b { font-size: 18px; line-height: 1.2; }

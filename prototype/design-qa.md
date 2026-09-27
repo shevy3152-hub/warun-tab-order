@@ -122,3 +122,13 @@ visual result: partial — expand/collapse interaction and retained navigation/s
 - localhostの隔離previewは終了し、port 5197が閉じていることを確認。API、DB、schema、checkout、safe-copy、実環境、commit、pushは変更・実施していない。
 
 visual result: passed — exact 1280×800 and 1637×602 CSS viewports, DPR 1; sidebar measured 250px expanded and 78px collapsed, with main content gaining 172px.
+
+## 厨房スタッフ呼出のテーブル別通知 2026-09-27
+
+- 隔離worktreeで厨房左レールのスタッフ呼出一覧とテーブル別ベルを確認。テーブル1・2・3の複数呼出を表示し、テーブル1カードのベルから1件だけ「対応完了」。他2卓の呼出は残り、注文／提供状態は変化しない。同じ卓の新規呼出を隔離fixtureへ追加すると、ベルと通知数へ再表示される。
+- 折り畳み状態（実幅78px）でも通知数バッジが見え、スタッフ呼出を開くとテーブル1・2・3全件へ到達できる。展開幅は250px。両viewportでdocument横overflowなし。厨房カード列自体は既存の横スクロール仕様。
+- CSS viewport 1280×800／1637×602、DPR 1、viewport直接撮影。PNGは切り抜き・リサイズなし、ファイル寸法一致。`prototype/qa/staff-calls-expanded-1280x800.png`、`staff-calls-collapsed-list-1280x800.png`、`staff-calls-expanded-1637x602.png`、`staff-calls-collapsed-list-1637x602.png`。
+- 複数同時呼出・個別完了・再呼出後の表示はPASS。客席画面自体は隔離時にpairing画面となるため再呼出はstorage fixtureで作り、API接続を避けて厨房の反映を確認。API／外部通信遮断、page errorなし。`node --test tests/kitchen-order-board.test.mjs tests/sites-worker.test.mjs` 15/15。Sites package build PASS: 生成済み`dist/client`だけを再作成し、Vite build、Sites準備、inline-clientを各1回実行。index.htmlへのJS/CSS埋め込み、pairing bundle、font／画像、Worker／hosting出力を確認。前回inline後処理の失敗は古い生成HTMLを除去して解消した。隔離preview終了、5198閉鎖。
+- DB・API・schema・safe-copy・既存の別worktree／PNGは変更なし。注文・会計操作、commit、pushなし。
+
+visual result: passed — simultaneous per-table call indicators, single-call resolution, re-call visibility, and collapsed-rail list access at exact 1280×800 and 1637×602 CSS viewports; unmodified DPR 1 captures.

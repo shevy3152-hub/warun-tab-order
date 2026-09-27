@@ -123,6 +123,36 @@ test("more tables remain in the horizontally scrollable board without dropping s
   assert.deepEqual(groups.map((group) => group.session.sessionId), sessions.map((session) => session.sessionId));
 });
 
+test("active staff calls create table cards and resolved calls disappear from the board", () => {
+  const groups = buildKitchenTableGroups({
+    orders: [],
+    sessions: [],
+    menuItems,
+    drinkCategoryIds,
+    staffCalls: [
+      { id: "call-2", tableId: "2", createdAt: "2026-09-23T09:02:00Z", resolvedAt: null },
+      { id: "call-1", tableId: "1", createdAt: "2026-09-23T09:01:00Z", resolvedAt: null },
+      { id: "call-done", tableId: "3", createdAt: "2026-09-23T09:00:00Z", resolvedAt: "2026-09-23T09:03:00Z" },
+    ],
+  });
+
+  assert.deepEqual(groups.map((group) => group.tableId), ["1", "2"]);
+  assert.deepEqual(groups.map((group) => group.staffCalls.map((call) => call.id)), [["call-1"], ["call-2"]]);
+  assert.ok(groups.every((group) => group.hasActiveCalls && !group.isCompletedSide));
+  assert.ok(groups.every((group) => group.orders.length === 0));
+});
+
+test("kitchen table call bells filter the call list and complete only the selected call id", async () => {
+  const app = await readFile(new URL("../src/App.jsx", import.meta.url), "utf8");
+  const screen = app.slice(app.indexOf("function KitchenScreen"), app.indexOf("function HistoryScreen"));
+
+  assert.match(screen, /const displayedCalls = callPanelTableId === null \? activeCalls : activeCalls\.filter\(\(call\) => String\(call\.tableId\) === callPanelTableId\)/);
+  assert.match(screen, /className="table-panel__call" aria-label=\{`テーブル \$\{tableId\} のスタッフ呼び出し \$\{tableCalls\.length\}件を確認`\}/);
+  assert.match(screen, /onClick=\{\(\) => openCallPanel\(tableId\)\}/);
+  assert.match(screen, /displayedCalls\.map\(\(call\) =>[\s\S]*?resolveCall\(call\.id\)\}>対応完了/);
+  assert.match(screen, /call\.id === callId \? \{ \.\.\.call, resolvedAt:/);
+});
+
 test("kitchen markup prioritizes live horizontal table slots and keeps histories on their own screen", async () => {
   const app = await readFile(new URL("../src/App.jsx", import.meta.url), "utf8");
   const styles = await readFile(new URL("../src/styles.css", import.meta.url), "utf8");

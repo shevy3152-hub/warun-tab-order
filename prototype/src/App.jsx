@@ -1548,6 +1548,7 @@ function KitchenCheckoutPanel({ checkouts, sessions, loading, error, onRefresh, 
 function KitchenScreen({ state, updateState, apiState, checkoutState, onServe, onSaveItemPrice, onAdjustItemQuantity, onChangeItemCancellation, onRefreshCheckouts, onSaveCheckout, onReadyCheckout, onCancelCheckout, onPayCheckout }) {
   const demoMode = window.WARUN_ORDER_MODE === "demo" || new URLSearchParams(window.location.search).get("demo") === "1";
   const [callPanel, setCallPanel] = useState(false);
+  const [callPanelTableId, setCallPanelTableId] = useState(null);
   const [priceTarget, setPriceTarget] = useState(null);
   const [priceDraft, setPriceDraft] = useState("");
   const [priceBusy, setPriceBusy] = useState(false);
@@ -1612,7 +1613,7 @@ function KitchenScreen({ state, updateState, apiState, checkoutState, onServe, o
   const liveOrders = apiMode ? apiState.orders : state.orders.filter((order) => order.status === "new" || order.status === "active");
   const boardOrders = [...liveOrders, ...historyOrders].map((order) => demoMode && order.tableId === "1" ? { ...order, sessionId: "demo-session-1" } : demoMode && order.tableId === "2" ? { ...order, sessionId: "demo-session-2" } : order);
   const activeOrders = liveOrders.filter((order) => order.status === "new" || order.status === "active");
-  const tables = buildKitchenTableGroups({ orders: boardOrders, sessions, menuItems: state.menuItems, drinkCategoryIds: CUSTOMER_DRINK_CATEGORY_IDS, checkouts: activeCheckouts });
+  const tables = buildKitchenTableGroups({ orders: boardOrders, sessions, menuItems: state.menuItems, drinkCategoryIds: CUSTOMER_DRINK_CATEGORY_IDS, checkouts: activeCheckouts, staffCalls: state.staffCalls });
 
   const toggleServed = async (orderId, itemId) => {
     if (apiMode) {
@@ -1840,24 +1841,28 @@ function KitchenScreen({ state, updateState, apiState, checkoutState, onServe, o
   };
 
   const resolveCall = (callId) => updateState((current) => ({ ...current, staffCalls: current.staffCalls.map((call) => call.id === callId ? { ...call, resolvedAt: new Date().toISOString() } : call) }));
-  return <StaffShell route="/kitchen" title="新着注文" subtitle="未提供の注文をテーブルごとに表示します。提供完了後も来店・注文履歴は保持されます。" state={state} newOrderCount={activeOrders.length} status={<div className="staff-topbar__right"><button type="button" className="staff-call-button" aria-label="スタッフ呼出" title="スタッフ呼出" onClick={() => setCallPanel(true)}><Bell size={26} weight="fill" /><span className="kitchen-sidebar__call-label">スタッフ呼出</span> {activeCalls.length ? <b>{activeCalls.length}</b> : null}</button><ConnectionBadge online announceStatus /><time className="kitchen-clock" aria-label={`現在時刻 ${formatTime(new Date())}`}>{formatTime(new Date())}</time></div>}>
+  const openCallPanel = (tableId = null) => { setCallPanelTableId(tableId); setCallPanel(true); };
+  const closeCallPanel = () => { setCallPanel(false); setCallPanelTableId(null); };
+  const displayedCalls = callPanelTableId === null ? activeCalls : activeCalls.filter((call) => String(call.tableId) === callPanelTableId);
+  return <StaffShell route="/kitchen" title="新着注文" subtitle="未提供の注文をテーブルごとに表示します。提供完了後も来店・注文履歴は保持されます。" state={state} newOrderCount={activeOrders.length} status={<div className="staff-topbar__right"><button type="button" className="staff-call-button" aria-label="スタッフ呼出" title="スタッフ呼出" onClick={() => openCallPanel()}><Bell size={26} weight="fill" /><span className="kitchen-sidebar__call-label">スタッフ呼出</span> {activeCalls.length ? <b>{activeCalls.length}</b> : null}</button><ConnectionBadge online announceStatus /><time className="kitchen-clock" aria-label={`現在時刻 ${formatTime(new Date())}`}>{formatTime(new Date())}</time></div>}>
     <section className="kitchen-content">
       {apiMode && apiState.loading ? <div className="kitchen-empty"><p>注文を読み込み中です。</p></div> : null}
       {apiMode && apiState.error ? <div className="kitchen-empty" role="alert"><p>注文情報を取得できません。</p></div> : null}
       {!apiMode && !tables.length ? <div className="kitchen-empty"><CheckCircle size={54} weight="thin" /><h2>すべて提供済みです</h2><p>新しい注文が届くと、テーブルごとに表示されます。</p></div> : null}
       {tables.length ? <div className="table-scroll">
         {tables.map((table) => {
-              const { tableId, orders, session, isCompletedSide } = table;
+              const { tableId, orders, session, isCompletedSide, staffCalls: tableCalls } = table;
           const sessionId = session?.sessionId;
           const tableCheckouts = activeCheckouts.filter((checkout) => sessions.some((entry) => entry.sessionId === checkout.tableSessionId && String(entry.tableId) === tableId));
           const checkoutPending = tableCheckouts.some((checkout) => checkout.status === "requested");
           const cancellationLocked = Boolean(!checkoutState || checkoutState.loading || checkoutState.error || session?.closedAtMs || orders.some((order) => order.sessionClosedAtMs) || tableCheckouts.some((checkout) => checkout.status === "ready"));
           const total = orders.reduce((sum, order) => sum + Number(order.totalAmount ?? order.totalAmountYen ?? 0), 0);
           return <article className={`table-panel ${isCompletedSide ? "is-completed-side" : ""}`} key={tableId}>
-            <header><h2>テーブル <b>{tableId}</b></h2><span className="table-panel__state">{checkoutPending ? "会計依頼中" : isCompletedSide ? "提供完了" : `${orders.length}件の注文`}</span></header>
+            <header><h2>テーブル <b>{tableId}</b>{tableCalls.length ? <button type="button" className="table-panel__call" aria-label={`テーブル ${tableId} のスタッフ呼び出し ${tableCalls.length}件を確認`} title={`スタッフ呼び出し ${tableCalls.length}件`} onClick={() => openCallPanel(tableId)}><Bell size={20} weight="fill" /><span>{tableCalls.length}</span></button> : null}</h2><span className="table-panel__state">{!orders.length && tableCalls.length ? "スタッフ呼出中" : checkoutPending ? "会計依頼中" : isCompletedSide ? "提供完了" : `${orders.length}件の注文`}</span></header>
             <div className="table-panel__receipt">
             {(apiMode || demoMode) && (tableCheckouts.length || checkoutState?.loading || checkoutState?.error) ? <KitchenCheckoutPanel checkouts={tableCheckouts} sessions={sessions} loading={checkoutState?.loading} error={checkoutState?.error} onRefresh={demoMode ? async () => {} : onRefreshCheckouts} onSave={demoMode ? async () => ({}) : onSaveCheckout} onReady={demoMode ? async () => ({}) : onReadyCheckout} onCancel={demoMode ? async () => ({}) : onCancelCheckout} onPay={demoMode ? async () => ({}) : onPayCheckout} tableId={tableId} /> : null}
             <div className="table-panel__orders">
+              {!orders.length && tableCalls.length ? <p className="table-panel__call-empty">スタッフの呼び出しがあります。</p> : null}
               {orders.map((order) => {
               const orderId = String(order.id ?? order.orderId);
                 const unserved = order.items.filter((item) => !item.isServed && !item.isCancelled && Number(item.billableQuantity ?? item.quantity ?? 0) > 0);
@@ -1918,7 +1923,7 @@ function KitchenScreen({ state, updateState, apiState, checkoutState, onServe, o
       <div className="modal-actions"><button type="button" className="button button--quiet" onClick={() => { setPriceTarget(null); setQuantityZeroConfirm(false); }} disabled={priceBusy || quantityBusy}>閉じる</button><button type="button" className="button button--primary button--large" onClick={() => void saveItemPrice()} disabled={priceBusy || quantityBusy || priceTarget.locked}>{priceBusy ? "保存中…" : "単価を保存"}</button></div>
     </Modal> : null}
     {cancellationTarget ? <OrderItemCancellationModal key={`${cancellationTarget.action}-${cancellationTarget.orderId}-${cancellationTarget.item.id}`} target={cancellationTarget} onClose={() => setCancellationTarget(null)} onSave={saveCancellation} /> : null}
-    {callPanel ? <Modal title="スタッフ呼び出し" onClose={() => setCallPanel(false)} wide><div className="call-list">{activeCalls.length ? activeCalls.map((call) => <article key={call.id}><Bell size={28} weight="fill" /><div><b>テーブル {call.tableId}</b><span>{formatTime(call.createdAt)} に呼び出し</span></div><button className="button button--primary" onClick={() => resolveCall(call.id)}>対応済みにする</button></article>) : <div className="empty-state"><Bell size={42} /><p>未対応の呼び出しはありません。</p></div>}</div></Modal> : null}
+    {callPanel ? <Modal title={callPanelTableId === null ? "スタッフ呼び出し" : `テーブル ${callPanelTableId} のスタッフ呼び出し`} onClose={closeCallPanel} wide><div className="call-list">{displayedCalls.length ? displayedCalls.map((call) => <article key={call.id}><Bell size={28} weight="fill" /><div><b>テーブル {call.tableId}</b><span>{formatTime(call.createdAt)} に呼び出し</span></div><button type="button" className="button button--primary" onClick={() => resolveCall(call.id)}>対応完了</button></article>) : <div className="empty-state"><Bell size={42} /><p>未対応の呼び出しはありません。</p></div>}</div></Modal> : null}
   </StaffShell>;
 }
 
