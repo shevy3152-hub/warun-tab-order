@@ -15,10 +15,10 @@ test('safe-copy launcher refuses production and derives LAN URL at runtime', () 
   assert.match(script, /X-Warun-Database-Target/);
   assert.match(script, /healthBody\.schemaVersion -ne \$TargetSchemaVersion/);
   assert.match(script, /Test-SupportedSafeCopySchema/);
-  assert.match(script, /TargetSchemaVersion = 14/);
-  assert.match(script, /SchemaVersion -eq \$TargetSchemaVersion -or \$SchemaVersion -eq \(\$TargetSchemaVersion - 1\)/);
-  assert.match(script, /migrationRequired = \(\$schemaVersion -eq \(\$TargetSchemaVersion - 1\)\)/);
-  assert.match(script, /migration required \(schema v\$\(\$TargetSchemaVersion - 1\) -> v\$TargetSchemaVersion\)/);
+  assert.match(script, /TargetSchemaVersion = 16/);
+  assert.match(script, /SchemaVersion -ge \(\$TargetSchemaVersion - 2\) -and \$SchemaVersion -le \$TargetSchemaVersion/);
+  assert.match(script, /migrationRequired = \(\$schemaVersion -lt \$TargetSchemaVersion\)/);
+  assert.match(script, /migration required \(schema v\$\(\$result\.schemaVersion\) -> v\$TargetSchemaVersion\)/);
   assert.match(script, /AdminTokenPath/);
   assert.match(script, /Read-SafeCopyAdminToken/);
   assert.match(script, /KitchenTokenPath/);
@@ -63,9 +63,24 @@ test('safe-copy launcher refuses production and derives LAN URL at runtime', () 
   assert.match(script, /finally/);
   assert.doesNotMatch(script, /192\\.168\\.1\\./);
 
+  const startup = script.slice(script.indexOf("if ($Action -eq 'status') { Invoke-RuntimeStatus; return }"));
+  const existingRuntime = startup.indexOf('if ($null -ne $state) {');
+  const oldSchemaGuard = startup.indexOf('if ($existingCheck.schemaVersion -lt $TargetSchemaVersion) {');
+  assert.ok(existingRuntime >= 0 && oldSchemaGuard > existingRuntime, 'old-schema guard must run inside existing-runtime validation');
+  assert.match(startup, /Existing safe-copy runtime uses schema v\$\(\$existingCheck\.schemaVersion\); migration to schema v\$TargetSchemaVersion is required/);
+  for (const protectedOperation of [
+    '$existingPids = @($existingCheck.processId)',
+    'Stop-Process -Id $existingCheck.processId',
+    "Invoke-SafeCopyKitchenTokenOperation -Mode 'ensure'",
+    "$startInfo.Arguments = 'src/run-server.mjs'",
+  ]) {
+    const operationIndex = startup.indexOf(protectedOperation);
+    assert.ok(operationIndex > oldSchemaGuard, `old-schema guard must precede ${protectedOperation}`);
+  }
+
   assert.match(adminLauncher, /\[string\]\$ProjectRoot/);
   assert.match(adminLauncher, /Start-Process -FilePath 'powershell\.exe'/);
-  assert.match(adminLauncher, /TargetSchemaVersion = 14/);
+  assert.match(adminLauncher, /TargetSchemaVersion = 16/);
   assert.match(adminLauncher, /schemaVersion -eq \$TargetSchemaVersion/);
   assert.match(adminLauncher, /ReleaseMutex/);
   assert.match(shortcutInstaller, /open-admin\.ps1/);

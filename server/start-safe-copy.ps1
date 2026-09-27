@@ -18,7 +18,7 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
-$TargetSchemaVersion = 14
+$TargetSchemaVersion = 16
 
 $ServerRoot = $PSScriptRoot
 $ProjectRoot = Split-Path -Parent $ServerRoot
@@ -154,7 +154,7 @@ function Get-DatabaseIdentity {
 
 function Test-SupportedSafeCopySchema {
   param([Parameter(Mandatory)][int]$SchemaVersion)
-  return $SchemaVersion -eq $TargetSchemaVersion -or $SchemaVersion -eq ($TargetSchemaVersion - 1)
+  return $SchemaVersion -ge ($TargetSchemaVersion - 2) -and $SchemaVersion -le $TargetSchemaVersion
 }
 
 function Get-ChildProcessEnvironment {
@@ -347,7 +347,7 @@ function Test-ExistingRuntime {
   $identity = Get-DatabaseIdentity -Path $stateDatabasePath
   $schemaVersion = [int]$healthBody.schemaVersion
   if ($health.StatusCode -ne 200 -or $healthBody.status -ne 'ready' -or $healthBody.db -ne 'ready' -or -not (Test-SupportedSafeCopySchema -SchemaVersion $schemaVersion) -or $health.Headers['X-Warun-Environment'] -ne 'safe-copy' -or $health.Headers['X-Warun-Database-Target'] -ne 'safe-copy' -or $health.Headers['X-Warun-Database-Identity'] -ne $identity -or (Get-HealthProcessId -HealthResponse $health) -ne $stateProcessId) { return [pscustomobject]@{ valid = $false; reason = 'health identity mismatch'; processId = $stateProcessId; webPort = $stateWebPort; apiPort = $stateApiPort; schemaVersion = $schemaVersion } }
-  [pscustomobject]@{ valid = $true; reason = 'matched'; migrationRequired = ($schemaVersion -eq ($TargetSchemaVersion - 1)); schemaVersion = $schemaVersion; processId = $stateProcessId; webPort = $stateWebPort; apiPort = $stateApiPort; webPids = $webPids; apiPids = $apiPids; health = $health; healthBody = $healthBody; process = $process }
+  [pscustomobject]@{ valid = $true; reason = 'matched'; migrationRequired = ($schemaVersion -lt $TargetSchemaVersion); schemaVersion = $schemaVersion; processId = $stateProcessId; webPort = $stateWebPort; apiPort = $stateApiPort; webPids = $webPids; apiPids = $apiPids; health = $health; healthBody = $healthBody; process = $process }
 }
 
 function Invoke-RuntimeStatus {
@@ -358,7 +358,7 @@ function Invoke-RuntimeStatus {
     $result = Test-ExistingRuntime -State $state
     Write-Output "Runtime identity: $($result.reason)"
     if ($result.valid) {
-      $migrationState = if ($result.migrationRequired) { "migration required (schema v$($TargetSchemaVersion - 1) -> v$TargetSchemaVersion)" } else { "schema v$TargetSchemaVersion" }
+      $migrationState = if ($result.migrationRequired) { "migration required (schema v$($result.schemaVersion) -> v$TargetSchemaVersion)" } else { "schema v$TargetSchemaVersion" }
       Write-Output "Runtime process: PID $($result.processId), Web/API listeners verified, $migrationState"
     }
   } catch {
@@ -415,6 +415,9 @@ try {
   if ($null -ne $state) {
     $existingCheck = Test-ExistingRuntime -State $state
     if ($existingCheck.valid) {
+      if ($existingCheck.schemaVersion -lt $TargetSchemaVersion) {
+        throw "Existing safe-copy runtime uses schema v$($existingCheck.schemaVersion); migration to schema v$TargetSchemaVersion is required. Refusing start without stopping, restarting, migrating, or writing the DB."
+      }
       $existingPids = @($existingCheck.processId)
       $health = $existingCheck.health
       $healthBody = $existingCheck.healthBody
