@@ -62,6 +62,34 @@ function normalizeCancellationReason(value) {
   return reason;
 }
 
+function normalizeKitchenAdditionItems(items) {
+  if (!Array.isArray(items) || items.length < 1 || items.length > MAX_ITEMS) {
+    throw repositoryError(ORDER_ERROR_CODES.INVALID_ORDER_REQUEST, `items must contain between 1 and ${MAX_ITEMS} lines.`);
+  }
+  return items.map((item, index) => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) {
+      throw repositoryError(ORDER_ERROR_CODES.INVALID_ORDER_REQUEST, `items[${index}] must be an object.`);
+    }
+    const menuItemId = item.menuItemId == null ? null : String(item.menuItemId).trim();
+    const name = item.name == null ? null : String(item.name).trim();
+    const priceYen = item.priceYen == null ? null : item.priceYen;
+    const quantity = item.quantity;
+    if ((menuItemId === null) === (name === null)) {
+      throw repositoryError(ORDER_ERROR_CODES.INVALID_ORDER_REQUEST, `items[${index}] must be a menu item or a custom item.`);
+    }
+    if (!Number.isInteger(quantity) || quantity < 1 || quantity > MAX_QUANTITY) {
+      throw repositoryError(ORDER_ERROR_CODES.INVALID_ORDER_REQUEST, `items[${index}].quantity must be between 1 and ${MAX_QUANTITY}.`);
+    }
+    if (name !== null && ([...name].length < 1 || [...name].length > 120 || /<\/?[A-Za-z][^>]*>/.test(name))) {
+      throw repositoryError(ORDER_ERROR_CODES.INVALID_ORDER_REQUEST, `items[${index}].name must be plain text of at most 120 characters.`);
+    }
+    if (name !== null && (!Number.isSafeInteger(priceYen) || priceYen < 0 || priceYen > 10_000_000)) {
+      throw repositoryError(ORDER_ERROR_CODES.INVALID_ORDER_REQUEST, `items[${index}].priceYen must be a non-negative integer.`);
+    }
+    return { menuItemId, name, priceYen, quantity };
+  });
+}
+
 function normalizeItems(items) {
   if (!Array.isArray(items) || items.length === 0 || items.length > MAX_ITEMS) {
     throw repositoryError(
@@ -654,6 +682,11 @@ export function createOrderRepository({ database, now = Date.now, idFactory = ra
         FROM tables
         WHERE assigned_customer_device_id = ?
       `),
+      findTableCustomerDevice: database.prepare(`
+        SELECT assigned_customer_device_id
+        FROM tables
+        WHERE table_id = ?
+      `),
       findOpenSession: database.prepare(`
         SELECT session_id, table_id, opened_at_ms, closed_at_ms, version
         FROM table_sessions
@@ -1151,6 +1184,77 @@ export function createOrderRepository({ database, now = Date.now, idFactory = ra
         'The order transaction failed.',
         { cause: error },
       );
+    }
+  }
+
+  function createKitchenAddition({ principal, tableId, sessionId, clientOrderId, items } = {}) {
+    if (closed) throw repositoryError(ORDER_ERROR_CODES.DATABASE_FAILURE, 'The order repository is closed.');
+    authorizeDeviceRole(principal, ['kitchen', 'admin']);
+    const normalizedTableId = normalizeTableId(tableId);
+    const normalizedSessionId = normalizeUuid(sessionId, 'sessionId');
+    const normalizedClientOrderId = normalizeUuid(clientOrderId, 'clientOrderId');
+    const normalizedItems = normalizeKitchenAdditionItems(items);
+    let transactionOpen = false;
+    try {
+      database.exec('BEGIN IMMEDIATE;');
+      transactionOpen = true;
+      const existing = statements.findOrder.get(normalizedClientOrderId);
+      if (existing) {
+        if (existing.order_origin !== 'kitchen_addition' || existing.created_by_device_id !== principal.deviceId) {
+          throw repositoryError(ORDER_ERROR_CODES.ORDER_CONFLICT, 'The client order ID is already in use.');
+        }
+        const replayed = loadOrder(existing);
+        database.exec('COMMIT;');
+        transactionOpen = false;
+        return { idempotencyResult: 'replayed', order: replayed, event: null };
+      }
+      const session = statements.findSession.get(normalizedSessionId);
+      if (!session || session.table_id !== normalizedTableId || session.closed_at_ms !== null) {
+        throw repositoryError(ORDER_ERROR_CODES.SESSION_NOT_FOUND, 'The open table session was not found.');
+      }
+      const checkout = statements.findSessionCheckout.get(normalizedSessionId);
+      if (checkout?.status === 'ready' || checkout?.status === 'paid' || checkout?.status === 'cancelled') {
+        throw repositoryError(ORDER_ERROR_CODES.ORDER_CONFLICT, 'This table session can no longer receive additions.');
+      }
+      const customerDevice = statements.findTableCustomerDevice.get(normalizedTableId);
+      if (!customerDevice?.assigned_customer_device_id) {
+        throw repositoryError(ORDER_ERROR_CODES.DEVICE_NOT_ASSIGNED, 'The table has no assigned customer device.');
+      }
+      const acceptedAtMs = now();
+      const orderId = String(idFactory()).toLowerCase();
+      validateGeneratedValues(orderId, acceptedAtMs);
+      const snapshots = normalizedItems.map((item, lineIndex) => {
+        if (item.menuItemId !== null) {
+          const menuItem = statements.findMenuItem.get(item.menuItemId);
+          if (!menuItem || menuItem.is_active !== 1) throw repositoryError(ORDER_ERROR_CODES.MENU_ITEM_NOT_FOUND, `Menu item is not available: ${item.menuItemId}`);
+          if (menuItem.is_sold_out === 1) throw repositoryError(ORDER_ERROR_CODES.MENU_ITEM_SOLD_OUT, `Menu item is sold out: ${item.menuItemId}`);
+          const unitPriceYen = Number(menuItem.price_yen);
+          return { lineIndex, menuItemId: menuItem.menu_item_id, formalNameSnapshot: menuItem.formal_name, kitchenAliasSnapshot: menuItem.kitchen_alias, unitPriceYenSnapshot: unitPriceYen, quantity: item.quantity, lineTotalYen: unitPriceYen * item.quantity };
+        }
+        return { lineIndex, menuItemId: null, formalNameSnapshot: item.name, kitchenAliasSnapshot: item.name.slice(0, 40), unitPriceYenSnapshot: item.priceYen, quantity: item.quantity, lineTotalYen: item.priceYen * item.quantity };
+      });
+      const totalAmountYen = snapshots.reduce((sum, item) => sum + item.lineTotalYen, 0);
+      if (!Number.isSafeInteger(totalAmountYen) || totalAmountYen > MAX_ORDER_TOTAL_YEN) throw repositoryError(ORDER_ERROR_CODES.INVALID_ORDER_REQUEST, 'Order total exceeds the supported limit.');
+      const canonicalRequestJson = JSON.stringify({ operation: 'kitchen_addition', tableId: normalizedTableId, sessionId: normalizedSessionId, items: snapshots.map(({ menuItemId, formalNameSnapshot, unitPriceYenSnapshot, quantity }) => ({ menuItemId, name: formalNameSnapshot, priceYen: unitPriceYenSnapshot, quantity })) });
+      const requestFingerprint = fingerprintCanonicalIntent(canonicalRequestJson);
+      statements.insertKitchenAdditionOrder.run(orderId, normalizedClientOrderId, requestFingerprint, canonicalRequestJson, customerDevice.assigned_customer_device_id, normalizedTableId, normalizedSessionId, normalizedTableId, totalAmountYen, acceptedAtMs, principal.deviceId);
+      const resultItems = snapshots.map((snapshot) => {
+        const insertion = statements.insertOrderItem.run(orderId, snapshot.lineIndex, snapshot.menuItemId, snapshot.formalNameSnapshot, snapshot.kitchenAliasSnapshot, snapshot.unitPriceYenSnapshot, snapshot.quantity, snapshot.lineTotalYen, null, null, null, null, null, null, acceptedAtMs, acceptedAtMs);
+        return { orderItemId: Number(insertion.lastInsertRowid), ...snapshot, adjustedUnitPriceYen: null, currentUnitPriceYen: snapshot.unitPriceYenSnapshot, lineTotalYenSnapshot: snapshot.lineTotalYen, isServed: false, servedAtMs: null };
+      });
+      if (checkout?.status === 'requested') statements.updateRequestedCheckoutTotal.run(orderPricing.getSessionTotalYen(normalizedSessionId), acceptedAtMs, checkout.checkout_request_id);
+      const systemState = statements.findSystemState.get();
+      if (!systemState?.event_epoch) throw repositoryError(ORDER_ERROR_CODES.DATABASE_FAILURE, 'Current event epoch is unavailable.');
+      const eventPayloadJson = JSON.stringify({ orderId, tableId: normalizedTableId, tableNumberSnapshot: normalizedTableId, orderOrigin: 'kitchen_addition', createdAtMs: acceptedAtMs });
+      const eventInsertion = statements.insertOrderUpdateEvent.run(systemState.event_epoch, 'order.created', orderId, principal.deviceId, eventPayloadJson, acceptedAtMs);
+      const result = { idempotencyResult: 'created', order: { orderId, clientOrderId: normalizedClientOrderId, requestFingerprint, canonicalRequestJson, authenticatedDeviceId: customerDevice.assigned_customer_device_id, tableId: normalizedTableId, sessionId: normalizedSessionId, tableNumberSnapshot: normalizedTableId, status: 'new', totalAmountYen, acceptedAtMs, completedAtMs: null, version: 1, orderOrigin: 'kitchen_addition', createdByDeviceId: principal.deviceId, items: resultItems }, event: { eventId: Number(eventInsertion.lastInsertRowid), eventEpoch: systemState.event_epoch, eventType: 'order.created', payloadJson: eventPayloadJson, createdAtMs: acceptedAtMs } };
+      database.exec('COMMIT;');
+      transactionOpen = false;
+      return result;
+    } catch (error) {
+      if (transactionOpen) { try { database.exec('ROLLBACK;'); } catch {} }
+      if (error instanceof OrderRepositoryError) throw error;
+      throw repositoryError(ORDER_ERROR_CODES.DATABASE_FAILURE, 'The kitchen addition transaction failed.', { cause: error });
     }
   }
 
@@ -1724,6 +1828,7 @@ export function createOrderRepository({ database, now = Date.now, idFactory = ra
 
   return Object.freeze({
     createOrder,
+    createKitchenAddition,
     getCustomerHistory,
     getHistory,
     closeTableSession,

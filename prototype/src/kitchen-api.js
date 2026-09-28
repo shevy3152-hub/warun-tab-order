@@ -31,6 +31,13 @@ export class KitchenApiError extends Error {
   }
 }
 
+export function kitchenAdditionRequestItem(item = {}) {
+  if (typeof item.menuItemId === "string" && item.menuItemId.trim()) {
+    return { menuItemId: item.menuItemId.trim(), quantity: Number(item.quantity) };
+  }
+  return { name: item.name, priceYen: Number(item.priceYen), quantity: Number(item.quantity) };
+}
+
 async function responseError(response, fallback) {
   let body = null;
   try { body = await response.json(); } catch { /* non-JSON errors retain the HTTP status */ }
@@ -241,6 +248,19 @@ export async function fetchKitchenSnapshot({ env = globalThis, fetchImpl = env.f
 
 export async function fetchKitchenOrders(options = {}) {
   return (await fetchKitchenSnapshot(options)).orders;
+}
+
+export async function createKitchenOrder({ env = globalThis, tableId, sessionId, clientOrderId, items, fetchImpl = env.fetch } = {}) {
+  const { base, requestHeaders } = checkoutBase(env, fetchImpl);
+  const response = await fetchImpl(`${base}/kitchen/orders`, {
+    method: "POST",
+    headers: { ...requestHeaders, "Content-Type": "application/json" },
+    body: JSON.stringify({ tableId: Number(tableId), sessionId, clientOrderId, items }),
+  });
+  if (!response.ok) throw await responseError(response, "追加注文を保存できませんでした。");
+  const body = await response.json();
+  if (!Array.isArray(body?.orders) || body.orders.length !== 1) throw new KitchenApiError("追加注文レスポンスが不正です。", { code: "INVALID_RESPONSE" });
+  return body.orders[0];
 }
 
 export async function fetchKitchenOrderHistory({ env = globalThis, fetchImpl = env.fetch } = {}) {

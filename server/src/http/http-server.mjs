@@ -85,6 +85,7 @@ const ROUTE_METHODS = new Map([
   ['/v1/device/config', 'GET'],
   ['/v1/menu', 'GET'],
   ['/v1/orders', 'POST'],
+  ['/v1/kitchen/orders', 'POST'],
   ['/v1/customer/order-history', 'GET'],
   ['/v1/customer/checkout-requests', 'POST'],
   ['/v1/customer/checkout-requests/current', 'GET'],
@@ -1168,6 +1169,41 @@ function createConfiguredHttpServer({
         writeJsonResponse(response, {
           statusCode: result.idempotencyResult === 'created' ? 201 : 200,
           body: receipt,
+          requestId,
+          headers: { 'Idempotency-Result': result.idempotencyResult },
+        });
+        return;
+      }
+
+      if (target.path === '/v1/kitchen/orders') {
+        authorizeDeviceRole(principal, ['kitchen', 'admin']);
+        const body = await readJsonBody(request);
+        if (!body || typeof body !== 'object' || Array.isArray(body)
+          || !Number.isSafeInteger(body.tableId) || !REQUEST_ID_PATTERN.test(body.sessionId ?? '')
+          || !REQUEST_ID_PATTERN.test(body.clientOrderId ?? '') || !Array.isArray(body.items) || body.items.length < 1
+          || Object.keys(body).some((key) => !['tableId', 'sessionId', 'clientOrderId', 'items'].includes(key))) {
+          throw createHttpError(HTTP_ERROR_CODES.INVALID_ORDER_REQUEST);
+        }
+        const items = body.items.map((item) => {
+          if (!item || typeof item !== 'object' || Array.isArray(item)
+            || !Number.isSafeInteger(item.quantity) || item.quantity < 1 || item.quantity > 99
+            || Object.keys(item).some((key) => !['menuItemId', 'name', 'priceYen', 'quantity'].includes(key))) {
+            throw createHttpError(HTTP_ERROR_CODES.INVALID_ORDER_REQUEST);
+          }
+          const isMenu = typeof item.menuItemId === 'string' && item.menuItemId.trim() !== '';
+          const isCustom = typeof item.name === 'string' && item.name.trim() !== '' && Number.isSafeInteger(item.priceYen);
+          if (isMenu === isCustom) throw createHttpError(HTTP_ERROR_CODES.INVALID_ORDER_REQUEST);
+          return isMenu
+            ? { menuItemId: item.menuItemId.trim(), quantity: item.quantity }
+            : { name: item.name.trim(), priceYen: item.priceYen, quantity: item.quantity };
+        });
+        const result = requireService(orderRepository, 'createKitchenAddition').createKitchenAddition({
+          principal, tableId: body.tableId, sessionId: body.sessionId, clientOrderId: body.clientOrderId, items,
+        });
+        await notifyCommittedSafely(sseHub, result);
+        writeJsonResponse(response, {
+          statusCode: result.idempotencyResult === 'created' ? 201 : 200,
+          body: mapOrderHistoryResponse([result.order]),
           requestId,
           headers: { 'Idempotency-Result': result.idempotencyResult },
         });

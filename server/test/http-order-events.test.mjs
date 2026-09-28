@@ -241,6 +241,16 @@ function postOrder(port, token, body, headers = {}) {
   });
 }
 
+function postKitchenOrder(port, token, body) {
+  return request({
+    port,
+    path: '/v1/kitchen/orders',
+    method: 'POST',
+    headers: { ...bearer(token), ...JSON_HEADERS },
+    body: JSON.stringify(body),
+  });
+}
+
 function closeSession(port, token, body) {
   return request({
     port,
@@ -686,6 +696,42 @@ test('kitchen quantity endpoint creates audited additional rows and rejects unco
     assertError(conflictingZero, 409, 'ORDER_CONFLICT');
     assert.equal(database.prepare('SELECT COUNT(*) AS count FROM order_item_cancellation_events WHERE operation_id = ?').get(uuid(1_132)).count, 1);
     assert.equal(database.prepare('SELECT COUNT(*) AS count FROM order_items').get().count, 2);
+  });
+});
+
+test('kitchen menu and custom additions reuse the open session and preserve snapshots', async () => {
+  await withFixture(async ({ port, database }) => {
+    const original = await postOrder(port, CUSTOMER_A_TOKEN, orderBody(uuid(1_180), [{ menuItemId: 'edamame', quantity: 1 }]));
+    assert.equal(original.statusCode, 201);
+    const sessionId = database.prepare('SELECT session_id FROM orders LIMIT 1').get().session_id;
+    const menuAddition = await postKitchenOrder(port, KITCHEN_TOKEN, {
+      tableId: 1, sessionId, clientOrderId: uuid(1_181), items: [{ menuItemId: 'beer', quantity: 2 }],
+    });
+    assert.equal(menuAddition.statusCode, 201, menuAddition.rawBody);
+    assert.equal(menuAddition.json.orders[0].orderOrigin, 'kitchen_addition');
+    assert.equal(menuAddition.json.orders[0].sessionId, sessionId);
+    assert.equal(menuAddition.json.orders[0].items[0].unitPriceYenSnapshot, 680);
+    const customAddition = await postKitchenOrder(port, KITCHEN_TOKEN, {
+      tableId: 1, sessionId, clientOrderId: uuid(1_182), items: [{ name: '口頭・季節の小鉢', priceYen: 900, quantity: 1 }],
+    });
+    assert.equal(customAddition.statusCode, 201, customAddition.rawBody);
+    const customItem = database.prepare('SELECT menu_item_id, formal_name_snapshot, unit_price_yen_snapshot, is_served FROM order_items WHERE order_id = ?').get(customAddition.json.orders[0].orderId);
+    assert.deepEqual({ ...customItem }, { menu_item_id: null, formal_name_snapshot: '口頭・季節の小鉢', unit_price_yen_snapshot: 900, is_served: 0 });
+    assert.equal(database.prepare('SELECT total_amount_yen FROM orders WHERE order_id = ?').get(customAddition.json.orders[0].orderId).total_amount_yen, 900);
+    const cancelled = await changeOrderItemCancellation(port, KITCHEN_TOKEN, 'cancel', {
+      orderId: customAddition.json.orders[0].orderId, orderItemId: customAddition.json.orders[0].items[0].orderItemId,
+    });
+    assert.equal(cancelled.statusCode, 200);
+    assert.equal(cancelled.json.orders[0].items[0].isCancelled, true);
+    const history = await request({ port, path: '/v1/kitchen/order-history', headers: bearer(KITCHEN_TOKEN) });
+    assert.equal(history.statusCode, 200);
+    assert.equal(history.json.orders.some((order) => order.orderId === customAddition.json.orders[0].orderId), true);
+    const replay = await postKitchenOrder(port, KITCHEN_TOKEN, {
+      tableId: 1, sessionId, clientOrderId: uuid(1_182), items: [{ name: '口頭・季節の小鉢', priceYen: 900, quantity: 1 }],
+    });
+    assert.equal(replay.statusCode, 200);
+    assert.equal(replay.headers['idempotency-result'], 'replayed');
+    assert.equal(database.prepare("SELECT COUNT(*) AS count FROM orders WHERE order_origin = 'kitchen_addition'").get().count, 2);
   });
 });
 

@@ -340,7 +340,7 @@ function mapStaffOrderItem(item) {
       return event;
     }),
   };
-  if (Object.hasOwn(item, 'menuItemId')) {
+  if (Object.hasOwn(item, 'menuItemId') && item.menuItemId !== null) {
     response.menuItemId = requireOpaqueId(item.menuItemId);
   }
   if (Object.hasOwn(item, 'servedAtMs') && item.servedAtMs !== null) {

@@ -24,7 +24,7 @@ import { createClientOrderId, createCustomerOrderClient, CustomerCheckoutError, 
 import { claimCustomerDevice, createIndexedDbCredentialStore, loadOrCreateCustomerDevice, pairingClaimErrorMessage, runtimeForCustomerCredentials } from "./device-credentials.js";
 import { customerOrderErrorCategory, customerOrderNoticeFromOutboxEvent } from "./customer-order-notice.js";
 import { AdminPairingError, configuredAdminToken, createAdminRideGuidanceContact, deleteAdminRideGuidanceContact, fetchAdminBusinessHours, fetchAdminCheckoutRequests, fetchAdminDiagnostics, fetchAdminMenu, fetchAdminOrderHistory, fetchAdminPaymentHistory, fetchAdminPairingPreflight, fetchAdminRideGuidance, issueCustomerPairingCode, revokeAdminDevice, saveAdminBusinessHours, saveAdminImageLayouts, saveAdminCategory, saveAdminMenuItem, saveAdminMenuOrdering, saveAdminRideGuidanceOrdering, saveAdminRideGuidancePickup, updateAdminRideGuidanceContact, voidAdminPayment } from "./admin-pairing.js";
-import { adjustKitchenItemUnitPrice, adjustKitchenOrderItemQuantity as adjustKitchenItemQuantityRequest, cancelKitchenCheckout, cancelKitchenOrderItem, closeKitchenTableSession, fetchKitchenCheckoutRequests, fetchKitchenOrderHistory, fetchKitchenPaymentHistory, fetchKitchenSnapshot, kitchenApiConfigured, KitchenApiError, markKitchenItemServed, payKitchenCheckout, readyKitchenCheckout, restoreKitchenOrderItem, saveKitchenCheckoutAdjustments, subscribeKitchenInvalidations, voidKitchenPayment } from "./kitchen-api.js";
+import { adjustKitchenItemUnitPrice, adjustKitchenOrderItemQuantity as adjustKitchenItemQuantityRequest, cancelKitchenCheckout, cancelKitchenOrderItem, closeKitchenTableSession, createKitchenOrder, fetchKitchenCheckoutRequests, fetchKitchenOrderHistory, fetchKitchenPaymentHistory, fetchKitchenSnapshot, kitchenAdditionRequestItem, kitchenApiConfigured, KitchenApiError, markKitchenItemServed, payKitchenCheckout, readyKitchenCheckout, restoreKitchenOrderItem, saveKitchenCheckoutAdjustments, subscribeKitchenInvalidations, voidKitchenPayment } from "./kitchen-api.js";
 import { buildKitchenTableGroups } from "./kitchen-order-board.js";
 import { bootstrapCustomerOrderClient } from "./customer-bootstrap.js";
 import { taxExcludedYen } from "./pricing.js";
@@ -239,6 +239,7 @@ const FOOD_VARIANT_DEFINITIONS = {
 };
 
 const CUSTOMER_DRINK_CATEGORY_IDS = new Set(CUSTOMER_DRINK_SUBCATEGORIES.flatMap((subcategory) => subcategory.categoryIds));
+const KITCHEN_DRINK_CATEGORY_IDS = new Set([...CUSTOMER_DRINK_CATEGORY_IDS, "drink", "soft"]);
 const CUSTOMER_FEATURED_MENU_IDS = ["edamame", "dashimaki", "beer", "lemon", "karaage"];
 
 function buildCustomerMajorCategories(categories) {
@@ -1560,6 +1561,7 @@ function KitchenScreen({ state, updateState, apiState, checkoutState, onServe, o
   const [cancellationTarget, setCancellationTarget] = useState(null);
   const [collapsedOrders, setCollapsedOrders] = useState({});
   const [historyState, setHistoryState] = useState({ loading: false, error: false, orders: [] });
+  const [additionTarget, setAdditionTarget] = useState(null);
   const apiMode = Boolean(apiState);
   const sessions = apiMode ? apiState.sessions : demoMode ? [
     { sessionId: "demo-session-1", tableId: "1", openedAt: "2026-09-25T08:50:00.000Z" },
@@ -1614,6 +1616,19 @@ function KitchenScreen({ state, updateState, apiState, checkoutState, onServe, o
   const boardOrders = [...liveOrders, ...historyOrders].map((order) => demoMode && order.tableId === "1" ? { ...order, sessionId: "demo-session-1" } : demoMode && order.tableId === "2" ? { ...order, sessionId: "demo-session-2" } : order);
   const activeOrders = liveOrders.filter((order) => order.status === "new" || order.status === "active");
   const tables = buildKitchenTableGroups({ orders: boardOrders, sessions, menuItems: state.menuItems, drinkCategoryIds: CUSTOMER_DRINK_CATEGORY_IDS, checkouts: activeCheckouts, staffCalls: state.staffCalls });
+
+  const submitKitchenAddition = async ({ tableId, sessionId, item }) => {
+    const clientOrderId = createKitchenOperationId();
+    if (apiMode) {
+      await createKitchenOrder({ env: window, tableId, sessionId, clientOrderId, items: [kitchenAdditionRequestItem(item)] });
+      const snapshot = await fetchKitchenSnapshot({ env: window });
+      window.dispatchEvent(new CustomEvent("warun-kitchen-refresh"));
+      return snapshot;
+    }
+    const now = new Date().toISOString();
+    const localItem = { id: `${clientOrderId}-item`, menuItemId: item.menuItemId ?? null, nameSnapshot: item.name, kitchenAlias: item.name.slice(0, 40), unitPriceSnapshot: item.priceYen, unitPriceYenSnapshot: item.priceYen, currentUnitPriceYen: item.priceYen, quantity: item.quantity, billableQuantity: item.quantity, lineTotalYen: item.priceYen * item.quantity, isServed: false, isCancelled: false, servedAt: null };
+    updateState((current) => ({ ...current, orders: [...current.orders, { id: clientOrderId, clientOrderId, tableId: String(tableId), sessionId, createdAt: now, status: "new", orderOrigin: "kitchen_addition", totalAmount: localItem.lineTotalYen, items: [localItem] }] }));
+  };
 
   const toggleServed = async (orderId, itemId) => {
     if (apiMode) {
@@ -1857,8 +1872,9 @@ function KitchenScreen({ state, updateState, apiState, checkoutState, onServe, o
           const checkoutPending = tableCheckouts.some((checkout) => checkout.status === "requested");
           const cancellationLocked = Boolean(!checkoutState || checkoutState.loading || checkoutState.error || session?.closedAtMs || orders.some((order) => order.sessionClosedAtMs) || tableCheckouts.some((checkout) => checkout.status === "ready"));
           const total = orders.reduce((sum, order) => sum + Number(order.totalAmount ?? order.totalAmountYen ?? 0), 0);
+          const sessionForTable = sessions.find((session) => String(session.tableId) === String(tableId));
           return <article className={`table-panel ${isCompletedSide ? "is-completed-side" : ""}`} key={tableId}>
-            <header><h2>テーブル <b>{tableId}</b>{tableCalls.length ? <button type="button" className="table-panel__call" aria-label={`テーブル ${tableId} のスタッフ呼び出し ${tableCalls.length}件を確認`} title={`スタッフ呼び出し ${tableCalls.length}件`} onClick={() => openCallPanel(tableId)}><Bell size={20} weight="fill" /><span>{tableCalls.length}</span></button> : null}</h2><span className="table-panel__state">{!orders.length && tableCalls.length ? "スタッフ呼出中" : checkoutPending ? "会計依頼中" : isCompletedSide ? "提供完了" : `${orders.length}件の注文`}</span></header>
+            <header><h2>テーブル <b>{tableId}</b>{tableCalls.length ? <button type="button" className="table-panel__call" aria-label={`テーブル ${tableId} のスタッフ呼び出し ${tableCalls.length}件を確認`} title={`スタッフ呼び出し ${tableCalls.length}件`} onClick={() => openCallPanel(tableId)}><Bell size={20} weight="fill" /><span>{tableCalls.length}</span></button> : null}</h2><div className="table-panel__header-actions"><span className="table-panel__state">{!orders.length && tableCalls.length ? "スタッフ呼出中" : checkoutPending ? "会計依頼中" : isCompletedSide ? "提供完了" : `${orders.length}件の注文`}</span>{sessionForTable ? <button type="button" className="button button--small kitchen-add-order-button" onClick={() => setAdditionTarget({ tableId: String(tableId), sessionId: sessionForTable.sessionId })}>メニュー追加</button> : null}</div></header>
             <div className="table-panel__receipt">
             {(apiMode || demoMode) && (tableCheckouts.length || checkoutState?.loading || checkoutState?.error) ? <KitchenCheckoutPanel checkouts={tableCheckouts} sessions={sessions} loading={checkoutState?.loading} error={checkoutState?.error} onRefresh={demoMode ? async () => {} : onRefreshCheckouts} onSave={demoMode ? async () => ({}) : onSaveCheckout} onReady={demoMode ? async () => ({}) : onReadyCheckout} onCancel={demoMode ? async () => ({}) : onCancelCheckout} onPay={demoMode ? async () => ({}) : onPayCheckout} tableId={tableId} /> : null}
             <div className="table-panel__orders">
@@ -1923,8 +1939,58 @@ function KitchenScreen({ state, updateState, apiState, checkoutState, onServe, o
       <div className="modal-actions"><button type="button" className="button button--quiet" onClick={() => { setPriceTarget(null); setQuantityZeroConfirm(false); }} disabled={priceBusy || quantityBusy}>閉じる</button><button type="button" className="button button--primary button--large" onClick={() => void saveItemPrice()} disabled={priceBusy || quantityBusy || priceTarget.locked}>{priceBusy ? "保存中…" : "単価を保存"}</button></div>
     </Modal> : null}
     {cancellationTarget ? <OrderItemCancellationModal key={`${cancellationTarget.action}-${cancellationTarget.orderId}-${cancellationTarget.item.id}`} target={cancellationTarget} onClose={() => setCancellationTarget(null)} onSave={saveCancellation} /> : null}
+    {additionTarget ? <KitchenAdditionModal target={additionTarget} menuItems={state.menuItems} busy={false} onClose={() => setAdditionTarget(null)} onSubmit={(item) => submitKitchenAddition({ ...additionTarget, item }).then(() => setAdditionTarget(null))} /> : null}
     {callPanel ? <Modal title={callPanelTableId === null ? "スタッフ呼び出し" : `テーブル ${callPanelTableId} のスタッフ呼び出し`} onClose={closeCallPanel} wide><div className="call-list">{displayedCalls.length ? displayedCalls.map((call) => <article key={call.id}><Bell size={28} weight="fill" /><div><b>テーブル {call.tableId}</b><span>{formatTime(call.createdAt)} に呼び出し</span></div><button type="button" className="button button--primary" onClick={() => resolveCall(call.id)}>対応完了</button></article>) : <div className="empty-state"><Bell size={42} /><p>未対応の呼び出しはありません。</p></div>}</div></Modal> : null}
   </StaffShell>;
+}
+
+function KitchenAdditionModal({ target, menuItems, busy, onClose, onSubmit }) {
+  const [kind, setKind] = useState("menu");
+  const [menuSection, setMenuSection] = useState("food");
+  const availableMenuItems = menuItems.filter((item) => !item.isSoldOut && item.isActive !== false);
+  const menuItemsForSection = availableMenuItems.filter((item) => menuSection === "drink" ? KITCHEN_DRINK_CATEGORY_IDS.has(item.categoryId) : !KITCHEN_DRINK_CATEGORY_IDS.has(item.categoryId));
+  const [menuItemId, setMenuItemId] = useState(menuItemsForSection[0]?.id ?? availableMenuItems[0]?.id ?? "");
+  const [name, setName] = useState("");
+  const [price, setPrice] = useState("");
+  const [quantity, setQuantity] = useState("1");
+  const [error, setError] = useState("");
+  const selectedMenuItem = availableMenuItems.find((item) => item.id === menuItemId) ?? null;
+  const selectMenuSection = (section) => {
+    setMenuSection(section);
+    const firstItem = availableMenuItems.find((item) => section === "drink" ? KITCHEN_DRINK_CATEGORY_IDS.has(item.categoryId) : !KITCHEN_DRINK_CATEGORY_IDS.has(item.categoryId));
+    setMenuItemId(firstItem?.id ?? "");
+  };
+  const submit = async (event) => {
+    event.preventDefault();
+    const count = Number(quantity);
+    if (!Number.isInteger(count) || count < 1 || count > 99) { setError("数量は1〜99点で入力してください。"); return; }
+    const selected = kind === "menu" ? menuItems.find((item) => item.id === menuItemId) : null;
+    if (kind === "menu" && (!selected || selected.isSoldOut || selected.isActive === false)) { setError("販売中の商品を選択してください。"); return; }
+    if (kind !== "menu" && (!name.trim() || !Number.isSafeInteger(Number(price)) || Number(price) < 0)) { setError("商品名と0円以上の金額を入力してください。"); return; }
+    setError("");
+    await onSubmit(kind === "menu"
+      ? { menuItemId: selected.id, name: selected.name, priceYen: Number(selected.price), quantity: count }
+      : { name: name.trim(), priceYen: Number(price), quantity: count });
+  };
+  return <Modal title={`テーブル ${target.tableId} にメニュー追加`} onClose={onClose} className="kitchen-add-order-modal">
+    <form className="kitchen-add-order-form" onSubmit={submit}>
+      <div className="kitchen-add-order-tabs"><button type="button" className={kind === "menu" ? "is-active" : ""} onClick={() => setKind("menu")}>既存メニュー</button><button type="button" className={kind === "food" ? "is-active" : ""} onClick={() => setKind("food")}>その他フード</button><button type="button" className={kind === "drink" ? "is-active" : ""} onClick={() => setKind("drink")}>その他ドリンク</button></div>
+      {kind === "menu" ? <>
+        <div className="kitchen-add-order-menu-sections" role="tablist" aria-label="メニュー区分">
+          <button type="button" role="tab" aria-selected={menuSection === "food"} className={menuSection === "food" ? "is-active" : ""} onClick={() => selectMenuSection("food")}>フード</button>
+          <button type="button" role="tab" aria-selected={menuSection === "drink"} className={menuSection === "drink" ? "is-active" : ""} onClick={() => selectMenuSection("drink")}>ドリンク</button>
+        </div>
+        <div className="kitchen-add-order-menu-grid" role="tabpanel" aria-label={`${menuSection === "food" ? "フード" : "ドリンク"}の商品一覧`}>
+          {menuItemsForSection.length ? menuItemsForSection.map((item) => <button key={item.id} type="button" className={item.id === menuItemId ? "is-selected" : ""} aria-pressed={item.id === menuItemId} onClick={() => { setMenuItemId(item.id); setError(""); }}>{item.name}</button>) : <p className="kitchen-add-order-empty">販売中の商品がありません。</p>}
+        </div>
+        {selectedMenuItem ? <div className="kitchen-add-order-selection"><span>選択中</span><b>{selectedMenuItem.name}</b><small>単価 {yen(selectedMenuItem.price)}</small></div> : null}
+      </> : <><label>商品名<input value={name} onChange={(event) => setName(event.target.value)} maxLength={120} autoFocus /></label><label>金額<input type="number" min="0" max="10000000" step="1" value={price} onChange={(event) => setPrice(event.target.value)} />円</label></>}
+      <label>数量<input type="number" min="1" max="99" step="1" value={quantity} onChange={(event) => setQuantity(event.target.value)} /></label>
+      {error ? <p className="checkout-feedback checkout-feedback--error" role="alert">{error}</p> : null}
+      <p className="modal-lead">この追加注文は現在のsessionに未提供品として登録されます。</p>
+      <div className="modal-actions"><button type="button" className="button button--quiet" onClick={onClose} disabled={busy}>キャンセル</button><button type="submit" className="button button--primary button--large" disabled={busy}>追加注文を保存</button></div>
+    </form>
+  </Modal>;
 }
 
 function cancelledQuantityForDisplay(item) {

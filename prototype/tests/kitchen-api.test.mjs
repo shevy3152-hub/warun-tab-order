@@ -1,8 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { adjustKitchenItemUnitPrice, adjustKitchenOrderItemQuantity, cancelKitchenCheckout, cancelKitchenOrderItem, closeKitchenTableSession, fetchKitchenCheckoutRequests, fetchKitchenOrderHistory, fetchKitchenOrders, fetchKitchenPaymentHistory, fetchKitchenSnapshot, kitchenApiConfigured, markKitchenItemServed, payKitchenCheckout, readyKitchenCheckout, restoreKitchenOrderItem, saveKitchenCheckoutAdjustments, voidKitchenPayment } from "../src/kitchen-api.js";
+import { adjustKitchenItemUnitPrice, adjustKitchenOrderItemQuantity, cancelKitchenCheckout, cancelKitchenOrderItem, closeKitchenTableSession, fetchKitchenCheckoutRequests, fetchKitchenOrderHistory, fetchKitchenOrders, fetchKitchenPaymentHistory, fetchKitchenSnapshot, kitchenAdditionRequestItem, kitchenApiConfigured, markKitchenItemServed, payKitchenCheckout, readyKitchenCheckout, restoreKitchenOrderItem, saveKitchenCheckoutAdjustments, voidKitchenPayment } from "../src/kitchen-api.js";
 
 const TOKEN = "fixture-kitchen-runtime-token";
+
+test("kitchen addition request strips menu snapshot fields for registered menu items", () => {
+  assert.deepEqual(kitchenAdditionRequestItem({ menuItemId: " edamame ", name: "枝豆", priceYen: 380, quantity: "2" }), { menuItemId: "edamame", quantity: 2 });
+  assert.deepEqual(kitchenAdditionRequestItem({ name: "口頭フード", priceYen: "750", quantity: "2" }), { name: "口頭フード", priceYen: 750, quantity: 2 });
+});
 
 function environment(fetch) {
   return {
