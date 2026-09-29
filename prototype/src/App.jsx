@@ -1955,6 +1955,8 @@ function KitchenAdditionModal({ target, menuItems, busy, onClose, onSubmit }) {
   const [quantity, setQuantity] = useState("1");
   const [error, setError] = useState("");
   const selectedMenuItem = availableMenuItems.find((item) => item.id === menuItemId) ?? null;
+  const quantityValue = Number(quantity) || 1;
+  const adjustQuantity = (delta) => setQuantity(String(Math.min(99, Math.max(1, quantityValue + delta))));
   const selectMenuSection = (section) => {
     setMenuSection(section);
     const firstItem = availableMenuItems.find((item) => section === "drink" ? KITCHEN_DRINK_CATEGORY_IDS.has(item.categoryId) : !KITCHEN_DRINK_CATEGORY_IDS.has(item.categoryId));
@@ -1972,23 +1974,24 @@ function KitchenAdditionModal({ target, menuItems, busy, onClose, onSubmit }) {
       ? { menuItemId: selected.id, name: selected.name, priceYen: Number(selected.price), quantity: count }
       : { name: name.trim(), priceYen: Number(price), quantity: count });
   };
-  return <Modal title={`テーブル ${target.tableId} にメニュー追加`} onClose={onClose} className="kitchen-add-order-modal">
-    <form className="kitchen-add-order-form" onSubmit={submit}>
-      <div className="kitchen-add-order-tabs"><button type="button" className={kind === "menu" ? "is-active" : ""} onClick={() => setKind("menu")}>既存メニュー</button><button type="button" className={kind === "food" ? "is-active" : ""} onClick={() => setKind("food")}>その他フード</button><button type="button" className={kind === "drink" ? "is-active" : ""} onClick={() => setKind("drink")}>その他ドリンク</button></div>
-      {kind === "menu" ? <>
-        <div className="kitchen-add-order-menu-sections" role="tablist" aria-label="メニュー区分">
-          <button type="button" role="tab" aria-selected={menuSection === "food"} className={menuSection === "food" ? "is-active" : ""} onClick={() => selectMenuSection("food")}>フード</button>
-          <button type="button" role="tab" aria-selected={menuSection === "drink"} className={menuSection === "drink" ? "is-active" : ""} onClick={() => selectMenuSection("drink")}>ドリンク</button>
-        </div>
-        <div className="kitchen-add-order-menu-grid" role="tabpanel" aria-label={`${menuSection === "food" ? "フード" : "ドリンク"}の商品一覧`}>
-          {menuItemsForSection.length ? menuItemsForSection.map((item) => <button key={item.id} type="button" className={item.id === menuItemId ? "is-selected" : ""} aria-pressed={item.id === menuItemId} onClick={() => { setMenuItemId(item.id); setError(""); }}>{item.name}</button>) : <p className="kitchen-add-order-empty">販売中の商品がありません。</p>}
-        </div>
-        {selectedMenuItem ? <div className="kitchen-add-order-selection"><span>選択中</span><b>{selectedMenuItem.name}</b><small>単価 {yen(selectedMenuItem.price)}</small></div> : null}
-      </> : <><label>商品名<input value={name} onChange={(event) => setName(event.target.value)} maxLength={120} autoFocus /></label><label>金額<input type="number" min="0" max="10000000" step="1" value={price} onChange={(event) => setPrice(event.target.value)} />円</label></>}
-      <label>数量<input type="number" min="1" max="99" step="1" value={quantity} onChange={(event) => setQuantity(event.target.value)} /></label>
-      {error ? <p className="checkout-feedback checkout-feedback--error" role="alert">{error}</p> : null}
-      <p className="modal-lead">この追加注文は現在のsessionに未提供品として登録されます。</p>
-      <div className="modal-actions"><button type="button" className="button button--quiet" onClick={onClose} disabled={busy}>キャンセル</button><button type="submit" className="button button--primary button--large" disabled={busy}>追加注文を保存</button></div>
+  return <Modal title={`テーブル ${target.tableId} にメニュー追加`} onClose={onClose} className="kitchen-add-order-modal" footer={<div className="kitchen-add-order-actions"><button type="button" className="button button--quiet" onClick={onClose} disabled={busy}>閉じる</button><button type="submit" form="kitchen-add-order-form" className="button button--primary button--large" disabled={busy}>追加注文を保存</button></div>}>
+    <form id="kitchen-add-order-form" className="kitchen-add-order-form" onSubmit={submit}>
+      <div className="kitchen-add-order-scroll">
+        <div className="kitchen-add-order-tabs"><button type="button" className={kind === "menu" ? "is-active" : ""} onClick={() => setKind("menu")}>既存メニュー</button><button type="button" className={kind === "food" ? "is-active" : ""} onClick={() => setKind("food")}>その他フード</button><button type="button" className={kind === "drink" ? "is-active" : ""} onClick={() => setKind("drink")}>その他ドリンク</button></div>
+        {kind === "menu" ? <>
+          <div className="kitchen-add-order-menu-sections" role="tablist" aria-label="メニュー区分">
+            <button type="button" role="tab" aria-selected={menuSection === "food"} className={menuSection === "food" ? "is-active" : ""} onClick={() => selectMenuSection("food")}>フード</button>
+            <button type="button" role="tab" aria-selected={menuSection === "drink"} className={menuSection === "drink" ? "is-active" : ""} onClick={() => selectMenuSection("drink")}>ドリンク</button>
+          </div>
+          <div className="kitchen-add-order-menu-grid" role="tabpanel" aria-label={`${menuSection === "food" ? "フード" : "ドリンク"}の商品一覧`}>
+            {menuItemsForSection.length ? menuItemsForSection.map((item) => <button key={item.id} type="button" className={item.id === menuItemId ? "is-selected" : ""} aria-pressed={item.id === menuItemId} onClick={() => { setMenuItemId(item.id); setError(""); }}><span>{item.name}</span></button>) : <p className="kitchen-add-order-empty">販売中の商品がありません。</p>}
+          </div>
+          {selectedMenuItem ? <div className="kitchen-add-order-selection"><span>選択中</span><b>{selectedMenuItem.name}</b><small>単価 {yen(selectedMenuItem.price)}</small></div> : null}
+        </> : <div className="kitchen-add-order-custom-fields"><label>商品名<input value={name} onChange={(event) => setName(event.target.value)} maxLength={120} autoFocus /></label><label>金額<input type="number" min="0" max="10000000" step="1" value={price} onChange={(event) => setPrice(event.target.value)} />円</label></div>}
+        <div className="kitchen-add-order-quantity"><span>数量</span><div className="kitchen-add-order-quantity-control"><button type="button" aria-label="数量を1減らす" onClick={() => adjustQuantity(-1)} disabled={busy || quantityValue <= 1}>−</button><output aria-label="数量">{quantityValue}点</output><button type="button" aria-label="数量を1増やす" onClick={() => adjustQuantity(1)} disabled={busy || quantityValue >= 99}>＋</button></div></div>
+        {error ? <p className="checkout-feedback checkout-feedback--error" role="alert">{error}</p> : null}
+        <p className="modal-lead">この追加注文は現在のsessionに未提供品として登録されます。</p>
+      </div>
     </form>
   </Modal>;
 }
