@@ -1420,14 +1420,17 @@ function StaffShell({ route, title, subtitle, state, children, right, status = n
   const isKitchen = route === "/kitchen";
   const isAdmin = route.startsWith("/admin");
   const [kitchenRailCollapsed, setKitchenRailCollapsed] = useState(false);
-  const businessHours = usePublicBusinessHours(!isKitchen);
-  const navItems = isAdmin ? adminNavItems : staffNavItems;
+  const businessHours = usePublicBusinessHours(true);
+  const navItems = staffNavItems;
+  const railClock = clock ?? <time className="kitchen-clock" aria-label={`現在時刻 ${formatTime(new Date())}`}>{formatTime(new Date())}</time>;
+  const railStatus = status ?? <div className="staff-topbar__right"><ConnectionBadge online announceStatus /></div>;
   return (
-    <div className={`staff-app ${isKitchen ? "staff-app--kitchen" : ""} ${isAdmin ? "staff-app--admin" : ""} ${isKitchen && kitchenRailCollapsed ? "staff-app--kitchen-rail-collapsed" : ""}`}>
-      <aside className="staff-sidebar" aria-label={isKitchen ? "厨房レール" : undefined}>
-        {isKitchen ? null : <Brand />}
-        {isKitchen ? <div className="kitchen-sidebar__clock">{clock}</div> : null}
-        {isKitchen ? <button
+    <div className={`staff-app ${isKitchen ? "staff-app--kitchen" : ""} ${isAdmin ? "staff-app--admin" : ""} ${kitchenRailCollapsed ? "staff-app--rail-collapsed" : ""} ${isKitchen && kitchenRailCollapsed ? "staff-app--kitchen-rail-collapsed" : ""}`}>
+      <aside className="staff-sidebar" aria-label={isKitchen ? "厨房レール" : "スタッフレール"}>
+        <Brand />
+        <div className="staff-sidebar__store-name">大衆酒場 一番星</div>
+        <div className="kitchen-sidebar__clock">{railClock}</div>
+        <button
           type="button"
           className="kitchen-rail-toggle"
           aria-label={kitchenRailCollapsed ? "厨房レールを展開" : "厨房レールを折りたたむ"}
@@ -1438,9 +1441,10 @@ function StaffShell({ route, title, subtitle, state, children, right, status = n
         >
           {kitchenRailCollapsed ? <ArrowRight size={22} weight="bold" /> : <ArrowLeft size={22} weight="bold" />}
           <span>{kitchenRailCollapsed ? "展開" : "レールを閉じる"}</span>
-        </button> : null}
-        <nav id={isKitchen ? "kitchen-staff-navigation" : undefined} aria-label={isKitchen ? "厨房ナビゲーション" : undefined}>{navItems.map((item) => <button key={item.route} className={route.startsWith(item.route) ? "is-active" : ""} aria-label={isKitchen ? item.label : undefined} aria-current={isKitchen && route.startsWith(item.route) ? "page" : undefined} title={isKitchen ? item.label : undefined} onClick={() => navigate(item.route)}><item.icon size={30} weight="bold" /><span className={isKitchen ? "staff-sidebar__nav-label" : undefined}>{item.label}</span>{item.route === "/kitchen" && newOrderCount ? <b className="badge">{newOrderCount}</b> : null}</button>)}</nav>
-        {isKitchen ? <div className="staff-sidebar__status">{status}</div> : <BusinessHoursText settings={businessHours} className="hours" />}
+        </button>
+        <nav id="kitchen-staff-navigation" aria-label={isKitchen ? "厨房ナビゲーション" : "スタッフナビゲーション"}>{navItems.map((item) => <button key={item.route} className={route.startsWith(item.route) ? "is-active" : ""} aria-label={isKitchen ? item.label : undefined} aria-current={isKitchen && route.startsWith(item.route) ? "page" : undefined} title={isKitchen ? item.label : undefined} onClick={() => navigate(item.route)}><item.icon size={30} weight="bold" /><span className="staff-sidebar__nav-label">{item.label}</span>{item.route === "/kitchen" && newOrderCount ? <b className="badge">{newOrderCount}</b> : null}</button>)}</nav>
+        <BusinessHoursText settings={businessHours} className="hours" />
+        <div className="staff-sidebar__status">{railStatus}</div>
       </aside>
       <main className="staff-main">
         {isKitchen ? <>
@@ -1449,7 +1453,6 @@ function StaffShell({ route, title, subtitle, state, children, right, status = n
           <div className="staff-title staff-title--admin"><ClipboardText size={58} weight="bold" /><div><h1>{title}</h1><p>{subtitle}</p></div></div>
           {right}
         </header> : <header className="staff-topbar">
-            <div className="restaurant-name"><ClipboardText size={34} weight="bold" /><b>大衆酒場 一番星</b></div>
             <div className="staff-title"><span className="section-kicker">STAFF TERMINAL</span><h1>{title}</h1><p>{subtitle}</p></div>
             {right}
           </header>}
@@ -2167,7 +2170,7 @@ function HistoryScreen({ state, apiMode = false, loadHistory = null, loadPayment
     setCancellationTarget(null);
   };
   return (
-    <StaffShell route="/history" title="注文・会計履歴" subtitle="提供済みの注文内容と、会計記録を確認できます。" state={state} right={<ConnectionBadge online />}>
+    <StaffShell route="/history" title="注文・会計履歴" subtitle="提供済みの注文内容と、会計記録を確認できます。" state={state}>
       <section className="history-content">
         <div className="history-summary"><div><small>本日の提供済み注文</small><b>{completedToday.length}</b><span>件</span></div><div><small>本日の注文商品合計</small><b>{yen(todayTotal)}</b></div></div>
         {apiMode && remoteState.loading ? <div className="empty-state"><p>注文履歴を読み込み中です。</p></div> : null}
