@@ -1410,6 +1410,8 @@ const staffNavItems = [
 const adminNavItems = [
   { route: "/admin/menu", label: "メニュー管理", icon: ClipboardText },
   { route: "/admin/categories", label: "カテゴリ管理", icon: ListBullets },
+  { route: "/admin/hours", label: "営業時間", icon: ClockCounterClockwise },
+  { route: "/admin/ride-guidance", label: "タクシー／代行料金", icon: Car },
   { route: "/history", label: "注文履歴", icon: ClockCounterClockwise },
   { route: "/admin/devices", label: "設定", icon: Gear },
 ];
@@ -2216,6 +2218,8 @@ function HistoryScreen({ state, apiMode = false, loadHistory = null, loadPayment
 const adminTabs = [
   { id: "menu", label: "メニュー", icon: ClipboardText },
   { id: "categories", label: "カテゴリ", icon: ListBullets },
+  { id: "hours", label: "営業時間", icon: ClockCounterClockwise },
+  { id: "ride-guidance", label: "タクシー／代行料金", icon: Car },
   { id: "devices", label: "端末割り当て", icon: Monitor },
 ];
 
@@ -2465,7 +2469,7 @@ function AdminScreen({ state, updateState, section = "menu" }) {
   const [adminMenuCategory, setAdminMenuCategory] = useState("all");
   const menuCardRefs = useRef(new Map());
   const menuScrollAnchor = useRef(null);
-  const [businessHoursState, setBusinessHoursState] = useState({ loading: adminApiMode && section === "menu", saving: false, error: false, message: "", messageKind: "", formal: null, draft: DEFAULT_BUSINESS_HOURS });
+  const [businessHoursState, setBusinessHoursState] = useState({ loading: adminApiMode && section === "hours", saving: false, error: false, message: "", messageKind: "", formal: null, draft: DEFAULT_BUSINESS_HOURS });
   useEffect(() => {
     if (!adminApiMode || !["menu", "categories"].includes(section)) return undefined;
     let cancelled = false;
@@ -2503,7 +2507,7 @@ function AdminScreen({ state, updateState, section = "menu" }) {
     }
   };
   useEffect(() => {
-    if (!adminApiMode || section !== "menu") {
+    if (!adminApiMode || section !== "hours") {
       setBusinessHoursState({ loading: false, saving: false, error: false, message: "", messageKind: "", formal: null, draft: DEFAULT_BUSINESS_HOURS });
       return undefined;
     }
@@ -2979,7 +2983,7 @@ function AdminScreen({ state, updateState, section = "menu" }) {
   }, [diagnosticHasIssue]);
 
   return (
-    <StaffShell route={`/admin/${section}`} title="メニュー管理" subtitle="メニューの追加・編集・並び順の変更ができます。" state={state} right={<button className="save-indicator" type="button"><Check size={24} weight="bold" /> {catalogState.saving ? "保存中" : catalogState.message || "保存する"}</button>}>
+    <StaffShell route={`/admin/${section}`} title={section === "hours" ? "営業時間" : section === "ride-guidance" ? "タクシー／代行料金" : section === "categories" ? "カテゴリ管理" : "メニュー管理"} subtitle={section === "hours" ? "客席とスタッフ画面に表示する営業時間を設定します。" : section === "ride-guidance" ? "タクシー・運転代行の案内と料金情報を管理します。" : "メニューの追加・編集・並び順の変更ができます。"} state={state} right={section === "menu" || section === "categories" ? <button className="save-indicator" type="button"><Check size={24} weight="bold" /> {catalogState.saving ? "保存中" : catalogState.message || "保存する"}</button> : null}>
       <section className="admin-content">
         <nav className="admin-tabs">{adminTabs.map((tab) => <button key={tab.id} className={section === tab.id ? "is-active" : ""} onClick={() => { resetMenuEditor(); navigate(`/admin/${tab.id}`); }}><tab.icon size={24} weight="bold" /> {tab.label}</button>)}</nav>
 
@@ -2988,8 +2992,6 @@ function AdminScreen({ state, updateState, section = "menu" }) {
 
         {section === "menu" ? <>
            <div className="admin-toolbar"><div className="admin-metrics"><span>登録数 <b>{state.menuItems.length}</b> 品</span><span>売り切れ <b>{Math.max(2, state.menuItems.filter((item) => item.isSoldOut).length)}</b> 品</span></div><div className="admin-toolbar__actions"><button className="button button--outline" type="button" onClick={() => reorderMode ? cancelReorder() : beginReorder()}>{reorderMode ? "通常編集へ戻る" : "並び替えモード"}</button><button className="button button--outline button--large" onClick={() => showAdd ? resetMenuEditor() : (setEditingMenuId(null), setShowAdd(true))}><Plus size={28} weight="bold" /> {showAdd ? "編集を閉じる" : "新しいメニューを追加"}</button></div></div>
-           <BusinessHoursEditor state={businessHoursState} adminApiMode={adminApiMode} onChange={updateBusinessHoursDraft} onSave={saveBusinessHours} onDiscard={discardBusinessHours} onReload={loadBusinessHours} />
-           <RideGuidanceEditor adminApiMode={adminApiMode} />
            <div className="admin-menu-filters" aria-label="メニューカテゴリ切替">
              <div className="admin-menu-filters__row" role="tablist" aria-label="大分類">
                {[['all', 'すべて'], ...adminSectionOptions.map((id) => [id, ({ food: 'フード', drink: 'ドリンク', winter: '冬季限定', seasonal: '季節・気まぐれ' }[id] || id)])].map(([id, label]) => <button type="button" role="tab" aria-selected={adminMenuSection === id} className={adminMenuSection === id ? 'is-active' : ''} key={id} onClick={() => { setAdminMenuSection(id); setAdminMenuCategory('all'); }}>{label}</button>)}
@@ -3037,6 +3039,10 @@ function AdminScreen({ state, updateState, section = "menu" }) {
           {showAdd ? <form className="inline-form inline-form--category" onSubmit={saveCategory}><label>カテゴリー名<input name="name" required maxLength="80" placeholder="例：揚げ物" defaultValue={state.categories.find((category) => category.id === categoryEditorId)?.name ?? ""} /></label><label>所属レール<select name="sectionKey" defaultValue={state.categories.find((category) => category.id === categoryEditorId)?.sectionKey ?? "food"}><option value="drink">ドリンク</option><option value="food">フード</option><option value="winter">冬季限定</option><option value="seasonal">季節・気まぐれ</option></select></label><label>表示順<input name="sortOrder" type="number" min="0" defaultValue={state.categories.find((category) => category.id === categoryEditorId)?.sortOrder ?? 0} /></label><label className="menu-editor__check"><input name="isVisible" type="checkbox" defaultChecked={state.categories.find((category) => category.id === categoryEditorId)?.isVisible ?? false} /> 客席に表示</label><button className="button button--primary" type="submit" disabled={catalogState.saving}>{catalogState.saving ? "保存中" : categoryEditorId ? "変更を保存" : "追加する"}</button><button className="button button--quiet" type="button" onClick={() => { setShowAdd(false); setCategoryEditorId(null); }} disabled={catalogState.saving}>キャンセル</button></form> : null}
           <div className="category-admin-grid">{[...state.categories].sort((a, b) => a.sortOrder - b.sortOrder || a.id.localeCompare(b.id, "ja")).map((category, index) => <article key={category.id}><div className="category-admin-index">{String(index + 1).padStart(2, "0")}</div><div><b>{category.name}</b><small>{category.sectionKey}・表示順 {category.sortOrder}</small></div><button className={`toggle ${category.isVisible ? "is-on" : ""}`} onClick={() => { setCategoryEditorId(category.id); setShowAdd(true); }}><i></i><span>編集</span></button><button className="button button--quiet" type="button" onClick={() => moveCategory(category, -1)} disabled={catalogState.saving}>上へ</button><button className="button button--quiet" type="button" onClick={() => moveCategory(category, 1)} disabled={catalogState.saving}>下へ</button></article>)}</div>
         </> : null}
+
+        {section === "hours" ? <section className="admin-settings-content"><BusinessHoursEditor state={businessHoursState} adminApiMode={adminApiMode} onChange={updateBusinessHoursDraft} onSave={saveBusinessHours} onDiscard={discardBusinessHours} onReload={loadBusinessHours} /></section> : null}
+
+        {section === "ride-guidance" ? <section className="admin-settings-content"><RideGuidanceEditor adminApiMode={adminApiMode} /></section> : null}
 
         {section === "devices" ? <>
           <div className="pairing-admin-panel">
