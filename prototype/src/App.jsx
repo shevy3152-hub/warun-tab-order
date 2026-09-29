@@ -95,6 +95,11 @@ function kitchenMenuName(item, registeredAliases) {
   return suffix ? `${base}（${suffix}）` : base;
 }
 
+function kitchenAdditionMenuName(item) {
+  const alias = typeof item?.kitchenAlias === "string" ? item.kitchenAlias.trim() : "";
+  return alias || item?.name || "";
+}
+
 const defaultState = {
   categories: [
     { id: "recommended", name: "おすすめ", sortOrder: 1, isVisible: true },
@@ -1984,9 +1989,9 @@ function KitchenAdditionModal({ target, menuItems, busy, onClose, onSubmit }) {
             <button type="button" role="tab" aria-selected={menuSection === "drink"} className={menuSection === "drink" ? "is-active" : ""} onClick={() => selectMenuSection("drink")}>ドリンク</button>
           </div>
           <div className="kitchen-add-order-menu-grid" role="tabpanel" aria-label={`${menuSection === "food" ? "フード" : "ドリンク"}の商品一覧`}>
-            {menuItemsForSection.length ? menuItemsForSection.map((item) => <button key={item.id} type="button" className={item.id === menuItemId ? "is-selected" : ""} aria-pressed={item.id === menuItemId} onClick={() => { setMenuItemId(item.id); setError(""); }}><span>{item.name}</span></button>) : <p className="kitchen-add-order-empty">販売中の商品がありません。</p>}
+            {menuItemsForSection.length ? menuItemsForSection.map((item) => <button key={item.id} type="button" className={item.id === menuItemId ? "is-selected" : ""} aria-pressed={item.id === menuItemId} onClick={() => { setMenuItemId(item.id); setError(""); }}><span>{kitchenAdditionMenuName(item)}</span></button>) : <p className="kitchen-add-order-empty">販売中の商品がありません。</p>}
           </div>
-          {selectedMenuItem ? <div className="kitchen-add-order-selection"><span>選択中</span><b>{selectedMenuItem.name}</b><small>単価 {yen(selectedMenuItem.price)}</small></div> : null}
+          {selectedMenuItem ? <div className="kitchen-add-order-selection"><span>選択中</span><b>{kitchenAdditionMenuName(selectedMenuItem)}</b><small>単価 {yen(selectedMenuItem.price)}</small></div> : null}
         </> : <div className="kitchen-add-order-custom-fields"><label>商品名<input value={name} onChange={(event) => setName(event.target.value)} maxLength={120} autoFocus /></label><label>金額<input type="number" min="0" max="10000000" step="1" value={price} onChange={(event) => setPrice(event.target.value)} />円</label></div>}
         <div className="kitchen-add-order-quantity"><span>数量</span><div className="kitchen-add-order-quantity-control"><button type="button" aria-label="数量を1減らす" onClick={() => adjustQuantity(-1)} disabled={busy || quantityValue <= 1}>−</button><output aria-label="数量">{quantityValue}点</output><button type="button" aria-label="数量を1増やす" onClick={() => adjustQuantity(1)} disabled={busy || quantityValue >= 99}>＋</button></div></div>
         {error ? <p className="checkout-feedback checkout-feedback--error" role="alert">{error}</p> : null}
