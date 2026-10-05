@@ -137,6 +137,7 @@ function projectDevice(role, source) {
     device.tableId = requireInteger(value.tableId, 1);
     device.tableLabel = requireString(value.tableLabel);
     device.tableIsActive = requireBoolean(value.tableIsActive);
+    device.visitContextId = requireString(value.visitContextId);
   }
   return device;
 }

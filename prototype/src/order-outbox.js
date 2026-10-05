@@ -7,6 +7,7 @@ export const OUTBOX_STATES = Object.freeze({
   SENDING: "sending",
   SYNCED: "synced",
   REJECTED: "rejected",
+  REVIEW_REQUIRED: "review_required",
 });
 
 const DEFAULT_TIMEOUT_MS = 10_000;
@@ -86,13 +87,18 @@ function normalizeItems(items) {
   });
 }
 
-export function createOrderPayload({ clientOrderId, items }) {
+export function createOrderPayload({ clientOrderId, items, visitContextId }) {
   if (typeof clientOrderId !== "string" || !clientOrderId || !UUID_V4_PATTERN.test(clientOrderId)) {
     throw new TypeError("clientOrderId must be a UUID v4.");
+  }
+  if (visitContextId !== undefined && visitContextId !== null
+    && (typeof visitContextId !== "string" || !/^v1_[0-9a-f]{64}$/.test(visitContextId))) {
+    throw new TypeError("visitContextId must be an opaque visit context id.");
   }
   return {
     schemaVersion: items.some((item) => item?.temperature) ? 3 : 2,
     clientOrderId,
+    ...(visitContextId ? { visitContextId } : {}),
     items: normalizeItems(items),
   };
 }
@@ -702,6 +708,8 @@ export function createOrderOutbox({
     if (stopped) return { state: "stopped", clientOrderId };
     const records = await recordsForFlush(clientOrderId);
     if (!records.length) return { state: "not_found", clientOrderId };
+    const reviewRequired = records.find((record) => record.state === OUTBOX_STATES.REVIEW_REQUIRED);
+    if (reviewRequired) return { state: OUTBOX_STATES.REVIEW_REQUIRED, clientOrderId: reviewRequired.clientOrderId, errorCode: reviewRequired.lastErrorCode };
     if (typeof transport.canAttempt === "function" && !transport.canAttempt()) {
       const result = { state: OUTBOX_STATES.PENDING, clientOrderId: records[0].clientOrderId, errorCode: transport.unavailableCode || "OFFLINE" };
       emit({ ...records[0], lastErrorCode: result.errorCode }, { result: "not_attempted" });
@@ -712,6 +720,33 @@ export function createOrderOutbox({
     for (const record of records) {
       if (record.state !== OUTBOX_STATES.PENDING) continue;
       if (!force && !retryIsDue(record, now(), retryBaseMs, retryMaxMs)) continue;
+      if (record.payload?.visitContextId && typeof transport.checkVisitContext === "function") {
+        let contextCheck;
+        try {
+          contextCheck = await transport.checkVisitContext(record.payload.visitContextId);
+        } catch {
+          contextCheck = { status: "unavailable", errorCode: "VISIT_CONTEXT_CHECK_FAILED" };
+        }
+        const mayNeedAcceptedReplay = (record.attemptCount || 0) > 0;
+        if (contextCheck?.status === "stale" && !mayNeedAcceptedReplay) {
+          const review = await store.update(record.clientOrderId, {
+            state: OUTBOX_STATES.REVIEW_REQUIRED,
+            lastErrorCode: "VISIT_CONTEXT_STALE",
+          });
+          emit(review, { displayState: "review_required" });
+          lastResult = { state: review.state, clientOrderId: record.clientOrderId, errorCode: review.lastErrorCode };
+          continue;
+        }
+        if (contextCheck?.status === "unavailable" && !mayNeedAcceptedReplay) {
+          const errorCode = safeErrorCode(contextCheck.errorCode, "VISIT_CONTEXT_CHECK_FAILED");
+          emit(record, { displayState: "pending", result: "context_not_verified", errorCode });
+          scheduleRetry(record);
+          lastResult = { state: OUTBOX_STATES.PENDING, clientOrderId: record.clientOrderId, errorCode };
+          continue;
+        }
+        // A previously attempted order may have been accepted even if its response was lost.
+        // Let the server's replay-first idempotency lookup decide before its current-context check.
+      }
       const claimed = await store.claim(record.clientOrderId, now());
       if (!claimed) continue;
       const retrying = claimed.attemptCount > 1;
@@ -730,12 +765,14 @@ export function createOrderOutbox({
         emit(synced, { idempotencyResult: result.idempotencyResult, displayState: "synced" });
         lastResult = { state: OUTBOX_STATES.SYNCED, clientOrderId: record.clientOrderId, idempotencyResult: result.idempotencyResult };
       } else if (result?.kind === "rejected") {
+        const errorCode = safeErrorCode(result.errorCode, "BUSINESS_ERROR");
+        const requiresReview = ["VISIT_CONTEXT_STALE", "DEVICE_NOT_ASSIGNED", "TABLE_INACTIVE"].includes(errorCode);
         const rejected = await store.update(record.clientOrderId, {
-          state: OUTBOX_STATES.REJECTED,
-          lastErrorCode: safeErrorCode(result.errorCode, "BUSINESS_ERROR"),
+          state: requiresReview ? OUTBOX_STATES.REVIEW_REQUIRED : OUTBOX_STATES.REJECTED,
+          lastErrorCode: errorCode,
         });
-        emit(rejected, { displayState: "business_error" });
-        lastResult = { state: OUTBOX_STATES.REJECTED, clientOrderId: record.clientOrderId, errorCode: rejected.lastErrorCode };
+        emit(rejected, { displayState: requiresReview ? "review_required" : "business_error" });
+        lastResult = { state: rejected.state, clientOrderId: record.clientOrderId, errorCode: rejected.lastErrorCode };
       } else {
         const pending = await store.update(record.clientOrderId, {
           state: OUTBOX_STATES.PENDING,
@@ -763,12 +800,17 @@ export function createOrderOutbox({
   };
 
   return {
-    async enqueue({ items }) {
+    async enqueue({ items, visitContextId, holdForReview = false }) {
       const clientOrderId = idFactory();
-      const payload = createOrderPayload({ clientOrderId, items });
-      const record = await store.put(makeRecord(payload, now()));
-      emit(record, { displayState: "pending" });
-      return record;
+      const payload = createOrderPayload({ clientOrderId, items, visitContextId });
+      const record = makeRecord(payload, now());
+      if (holdForReview) {
+        record.state = OUTBOX_STATES.REVIEW_REQUIRED;
+        record.lastErrorCode = "VISIT_CONTEXT_UNAVAILABLE";
+      }
+      const saved = await store.put(record);
+      emit(saved, { displayState: saved.state === OUTBOX_STATES.REVIEW_REQUIRED ? "review_required" : "pending" });
+      return saved;
     },
     flush,
     async start() {
@@ -838,15 +880,56 @@ export function createCustomerOrderClient({
 
   const usableStore = store || (indexedDbApi ? createIndexedDbOutbox({ indexedDB: indexedDbApi }) : createMemoryOutbox());
   const hasDurableStore = Boolean(store || indexedDbApi);
+  let visitContextId = global.WARUN_VISIT_CONTEXT_ID;
+  const readCurrentVisitContext = async () => {
+    const fetchImpl = options.fetchImpl || global.fetch;
+    if (!config.enabled || typeof fetchImpl !== "function") {
+      return { status: "unavailable", errorCode: config.reason || "API_UNAVAILABLE" };
+    }
+    if (global.navigator?.onLine === false) return { status: "unavailable", errorCode: "OFFLINE" };
+    try {
+      const response = await fetchImpl(`${config.baseUrl}/device/config`, {
+        headers: { Accept: "application/json", Authorization: `Bearer ${config.token}` },
+      });
+      if (!response.ok) return { status: "unavailable", errorCode: `HTTP_${response.status}` };
+      const body = await response.json();
+      if (body?.role !== "customer" || !/^v1_[0-9a-f]{64}$/.test(body.visitContextId || "")) {
+        return { status: "unavailable", errorCode: "INVALID_VISIT_CONTEXT_RESPONSE" };
+      }
+      visitContextId = body.visitContextId;
+      return { status: "available", visitContextId };
+    } catch {
+      return { status: "unavailable", errorCode: "NETWORK_ERROR" };
+    }
+  };
   const transport = createApiOrderTransport({
     config: hasDurableStore ? config : { ...config, enabled: false, reason: "INDEXEDDB_UNAVAILABLE", token: "" },
     env: global,
     eventTarget,
     ...options,
   });
+  transport.checkVisitContext = async (expectedVisitContextId) => {
+    const current = await readCurrentVisitContext();
+    if (current.status !== "available") return current;
+    return { status: current.visitContextId === expectedVisitContextId ? "match" : "stale" };
+  };
   const service = createOrderOutbox({ store: usableStore, transport, eventTarget, ...options });
   return {
     ...service,
+    async getVisitContextId() {
+      const current = await readCurrentVisitContext();
+      return current.status === "available" ? current.visitContextId : visitContextId || null;
+    },
+    async checkVisitContext(expectedVisitContextId) {
+      return transport.checkVisitContext(expectedVisitContextId);
+    },
+    async enqueue({ items, visitContextId: pinnedVisitContextId }) {
+      return service.enqueue({
+        items,
+        visitContextId: pinnedVisitContextId,
+        holdForReview: !pinnedVisitContextId,
+      });
+    },
     mode: "api",
     configured: Boolean(config.enabled && hasDurableStore),
     configReason: hasDurableStore ? config.reason : "INDEXEDDB_UNAVAILABLE",

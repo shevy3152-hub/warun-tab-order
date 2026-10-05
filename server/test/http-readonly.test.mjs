@@ -265,7 +265,7 @@ test('01 health is public and returns 200', async () => {
     assert.equal(response.statusCode, 200);
     assert.equal(response.json.status, 'ready');
     assert.equal(response.json.db, 'ready');
-  assert.equal(response.json.schemaVersion, 17);
+  assert.equal(response.json.schemaVersion, 18);
   }, { now: () => 1_786_300_000_000 });
 });
 
@@ -770,7 +770,7 @@ test('50 response DTOs exactly match the role-scoped OpenAPI schemas', async () 
     for (const [token, role] of [[CUSTOMER_TOKEN, 'customer'], [KITCHEN_TOKEN, 'kitchen'], [ADMIN_TOKEN, 'admin']]) {
       const config = (await request({ port, path: '/v1/device/config', headers: authHeaders(token) })).json;
       assertExactKeys(config, role === 'customer'
-        ? [...configRequired, 'tableId', 'tableLabel', 'tableIsActive']
+        ? [...configRequired, 'tableId', 'tableLabel', 'tableIsActive', 'visitContextId']
         : configRequired);
       assert.equal(config.role, role);
 

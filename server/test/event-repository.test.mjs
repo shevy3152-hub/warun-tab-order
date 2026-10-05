@@ -13,6 +13,7 @@ import {
 } from '../src/events/event-errors.mjs';
 import { createEventRepository } from '../src/events/event-repository.mjs';
 import { createOrderRepository } from '../src/orders/order-repository.mjs';
+import { createCustomerVisitContextId } from '../src/orders/visit-context.mjs';
 
 const uuid = (number) => `00000000-0000-4000-8000-${String(number).padStart(12, '0')}`;
 const DEVICE_A = uuid(1);
@@ -149,6 +150,16 @@ function createOrder(database, {
   items = [{ menuItemId: 'edamame', quantity: 1 }],
   now = FIXED_NOW,
 } = {}) {
+  const table = database.prepare(`
+    SELECT table_id, version FROM tables WHERE assigned_customer_device_id = ?
+  `).get(deviceId);
+  const lastClosed = table
+    ? database.prepare(`
+      SELECT session_id FROM table_sessions
+      WHERE table_id = ? AND closed_at_ms IS NOT NULL
+      ORDER BY opened_at_ms DESC, session_id DESC LIMIT 1
+    `).get(table.table_id)
+    : null;
   return createOrderRepository({
     database,
     now: () => now,
@@ -156,6 +167,14 @@ function createOrder(database, {
   }).createOrder({
     clientOrderId,
     authenticatedDeviceId: deviceId,
+    ...(table ? {
+      visitContextId: createCustomerVisitContextId({
+        tableId: table.table_id,
+        deviceId,
+        assignmentVersion: table.version,
+        lastClosedSessionId: lastClosed?.session_id ?? null,
+      }),
+    } : {}),
     items,
   });
 }

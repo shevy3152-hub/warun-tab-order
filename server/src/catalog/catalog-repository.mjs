@@ -7,6 +7,7 @@ import {
   CATALOG_ERROR_CODES,
   CatalogRepositoryError,
 } from './catalog-errors.mjs';
+import { createCustomerVisitContextId } from '../orders/visit-context.mjs';
 
 const DEVICE_ROLES = Object.freeze(['customer', 'kitchen', 'admin']);
 const OPAQUE_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
@@ -124,6 +125,8 @@ export function normalizeCatalogWriteRequest(request) {
   if (orderingMode !== 'normal' && orderingMode !== 'reservation_only') {
     throw invalidWrite('orderingMode must be normal or reservation_only.');
   }
+  const customerVisibilityMode = request.customerVisibilityMode ?? 'all_tables';
+  if (!['all_tables', 'per_session'].includes(customerVisibilityMode)) throw invalidWrite('customerVisibilityMode is invalid.');
   const sortOrder = normalizeNonNegativeInteger(request.sortOrder ?? 0, 'sortOrder');
   const imageUri = normalizeOptionalImage(request.imageUri, 'imageUri');
   const sectionKey = request.sectionKey === undefined || request.sectionKey === null || request.sectionKey === ''
@@ -199,6 +202,7 @@ export function normalizeCatalogWriteRequest(request) {
     isSoldOut,
     isActive,
     orderingMode,
+    customerVisibilityMode,
     sortOrder,
     imageUri,
     sectionKey,
@@ -428,6 +432,13 @@ export function createCatalogRepository({ database, now = Date.now } = {}) {
         WHERE s.singleton_id = 1
         GROUP BY s.event_epoch
       `),
+      findLastClosedSession: database.prepare(`
+        SELECT session_id
+        FROM table_sessions
+        WHERE table_id = ? AND closed_at_ms IS NOT NULL
+        ORDER BY rowid DESC
+        LIMIT 1
+      `),
       findSystemState: database.prepare(`
         SELECT event_epoch
         FROM system_state
@@ -451,6 +462,7 @@ export function createCatalogRepository({ database, now = Date.now } = {}) {
       findCategoryItems: database.prepare('SELECT menu_item_id, version, sort_order FROM menu_items WHERE category_id = ? ORDER BY sort_order, menu_item_id'),
       updateMenuItemOrder: database.prepare('UPDATE menu_items SET sort_order = ?, version = version + 1, updated_at_ms = ? WHERE menu_item_id = ? AND category_id = ?'),
       updateCategoryVersion: database.prepare('UPDATE categories SET version = version + 1, updated_at_ms = ? WHERE category_id = ? AND version = ?'),
+      deleteItemGrants: database.prepare('DELETE FROM session_menu_item_grants WHERE menu_item_id = ?'),
       findWriteMenuItem: database.prepare(`
         SELECT menu_item_id, version
         FROM menu_items
@@ -484,15 +496,15 @@ export function createCatalogRepository({ database, now = Date.now } = {}) {
       insertMenuItem: database.prepare(`
         INSERT INTO menu_items (
           menu_item_id, category_id, formal_name, kitchen_alias, description,
-          price_yen, is_sold_out, is_active, sort_order, image_uri, ordering_mode, version,
+          price_yen, is_sold_out, is_active, sort_order, image_uri, ordering_mode, customer_visibility_mode, version,
           created_at_ms, updated_at_ms, section_key
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)
       `),
       updateMenuItem: database.prepare(`
         UPDATE menu_items
         SET category_id = ?, formal_name = ?, kitchen_alias = ?, description = ?,
             price_yen = ?, is_sold_out = ?, is_active = ?, sort_order = ?,
-            image_uri = ?, ordering_mode = ?, version = version + 1, updated_at_ms = ?, section_key = ?
+            image_uri = ?, ordering_mode = ?, customer_visibility_mode = ?, version = version + 1, updated_at_ms = ?, section_key = ?
         WHERE menu_item_id = ? AND version = ?
       `),
       insertDetail: database.prepare(`
@@ -555,6 +567,26 @@ export function createCatalogRepository({ database, now = Date.now } = {}) {
         WHERE is_visible = 1
         ORDER BY sort_order, category_id
       `),
+      findCustomerCategories: database.prepare(`
+        SELECT c.category_id, c.name, c.section_key, c.sort_order
+        FROM categories AS c
+        WHERE c.is_visible = 1
+          AND EXISTS (
+            SELECT 1
+            FROM menu_items AS m
+            WHERE m.category_id = c.category_id AND m.is_active = 1
+              AND (m.customer_visibility_mode = 'all_tables' OR EXISTS (
+                SELECT 1 FROM session_menu_item_grants AS g
+                WHERE ? IS NOT NULL AND g.session_id = ? AND g.menu_item_id = m.menu_item_id
+              ))
+          )
+        ORDER BY c.sort_order, c.category_id
+      `),
+      findOpenTableSession: database.prepare(`
+        SELECT session_id
+        FROM table_sessions
+        WHERE table_id = ? AND closed_at_ms IS NULL
+      `),
       findAllCategories: database.prepare(`
         SELECT
           category_id,
@@ -601,6 +633,10 @@ export function createCatalogRepository({ database, now = Date.now } = {}) {
           ON d.menu_item_id = m.menu_item_id
         WHERE c.is_visible = 1
           AND m.is_active = 1
+          AND (m.customer_visibility_mode = 'all_tables' OR EXISTS (
+            SELECT 1 FROM session_menu_item_grants AS g
+            WHERE ? IS NOT NULL AND g.session_id = ? AND g.menu_item_id = m.menu_item_id
+          ))
         ORDER BY c.sort_order, m.sort_order, m.menu_item_id
       `),
       findKitchenMenuItems: database.prepare(`
@@ -629,6 +665,7 @@ export function createCatalogRepository({ database, now = Date.now } = {}) {
           m.price_yen,
           m.is_sold_out,
           m.ordering_mode,
+          m.customer_visibility_mode,
           m.is_active,
           m.sort_order,
           m.image_uri,
@@ -907,6 +944,7 @@ export function createCatalogRepository({ database, now = Date.now } = {}) {
           normalized.sortOrder,
           normalized.imageUri,
           normalized.orderingMode,
+          normalized.customerVisibilityMode,
           timestamp,
           timestamp,
           normalized.sectionKey,
@@ -923,6 +961,7 @@ export function createCatalogRepository({ database, now = Date.now } = {}) {
           normalized.sortOrder,
           normalized.imageUri,
           normalized.orderingMode,
+          normalized.customerVisibilityMode,
           timestamp,
           normalized.sectionKey,
           normalized.menuItemId,
@@ -935,6 +974,8 @@ export function createCatalogRepository({ database, now = Date.now } = {}) {
           );
         }
       }
+
+      if (normalized.customerVisibilityMode === 'all_tables') statements.deleteItemGrants.run(normalized.menuItemId);
 
       const currentDetail = statements.findWriteDetail.get(normalized.menuItemId);
       const detailValues = [
@@ -1152,6 +1193,12 @@ export function createCatalogRepository({ database, now = Date.now } = {}) {
         settings.tableId = table.table_id;
         settings.tableLabel = table.table_label;
         settings.tableIsActive = true;
+        settings.visitContextId = createCustomerVisitContextId({
+          tableId: table.table_id,
+          deviceId: device.device_id,
+          assignmentVersion: table.table_version,
+          lastClosedSessionId: statements.findLastClosedSession.get(table.table_id)?.session_id ?? null,
+        });
       }
 
       return deepFreeze(settings);
@@ -1199,8 +1246,12 @@ export function createCatalogRepository({ database, now = Date.now } = {}) {
       let mapItem;
 
       if (device.role === 'customer') {
-        categoryRows = statements.findVisibleCategories.all();
-        itemRows = statements.findCustomerMenuItems.all();
+        const tableId = device.assignedTable?.table_id ?? null;
+        const sessionId = tableId === null
+          ? null
+          : (statements.findOpenTableSession.get(tableId)?.session_id ?? null);
+        categoryRows = statements.findCustomerCategories.all(sessionId, sessionId);
+        itemRows = statements.findCustomerMenuItems.all(sessionId, sessionId);
         mapCategory = mapPublicCategory;
         mapItem = mapCustomerMenuItem;
       } else if (device.role === 'kitchen') {

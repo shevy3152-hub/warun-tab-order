@@ -155,12 +155,14 @@ test('payment records are idempotent, snapshot details, close the session atomic
     repository.createCheckout({ principal: customer, checkoutRequestId: CHECKOUT, receiptRequested: false });
     repository.saveAdjustments({ principal: kitchen, checkoutRequestId: CHECKOUT, expectedVersion: 1, adjustments: [{ kind: 'seat_charge', label: '席料（500円×2名）', amountYen: 1000 }] });
     const ready = repository.ready({ principal: kitchen, checkoutRequestId: CHECKOUT, expectedVersion: 2 });
+    database.prepare('INSERT INTO session_menu_item_grants (session_id, menu_item_id, granted_at_ms) VALUES (?, ?, ?)').run(SESSION, 'fixture-item', 100);
     const paid = repository.pay({ principal: kitchen, checkoutRequestId: CHECKOUT, expectedVersion: ready.request.version, paymentMethod: 'cash' });
     assert.equal(paid.idempotencyResult, 'created');
     assert.equal(paid.payment.confirmedTotalYen, 2000);
     assert.equal(paid.payment.orderItems[0].formalNameSnapshot, '架空商品');
     assert.deepEqual(paid.payment.adjustments.map((item) => [item.label, item.amountYen]), [['席料（500円×2名）', 1000]]);
     assert.equal(database.prepare('SELECT closed_at_ms FROM table_sessions WHERE session_id = ?').get(SESSION).closed_at_ms, 1000);
+    assert.equal(database.prepare('SELECT COUNT(*) AS count FROM session_menu_item_grants WHERE session_id = ?').get(SESSION).count, 0);
     assert.equal(repository.listActive({ principal: kitchen }).length, 0);
     assert.equal(repository.pay({ principal: kitchen, checkoutRequestId: CHECKOUT, expectedVersion: 999, paymentMethod: 'card' }).idempotencyResult, 'replayed');
     assert.equal(database.prepare('SELECT COUNT(*) AS count FROM payment_records').get().count, 1);

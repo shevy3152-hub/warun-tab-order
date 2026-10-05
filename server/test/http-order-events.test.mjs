@@ -16,6 +16,7 @@ import { createSseHub } from '../src/events/sse-hub.mjs';
 import { createHttpServer } from '../src/http/http-server.mjs';
 import { ORDER_JSON_BODY_LIMIT_BYTES } from '../src/http/json-body.mjs';
 import { createOrderRepository } from '../src/orders/order-repository.mjs';
+import { createCustomerVisitContextId } from '../src/orders/visit-context.mjs';
 
 const uuid = (number) => `00000000-0000-4000-8000-${String(number).padStart(12, '0')}`;
 const tokenFor = (byte) => Buffer.alloc(32, byte).toString('base64url');
@@ -34,6 +35,8 @@ const REVOKED_TOKEN = tokenFor(0x41);
 const UNKNOWN_TOKEN = tokenFor(0x51);
 const OTHER_EPOCH = uuid(999);
 const JSON_HEADERS = { 'Content-Type': 'application/json' };
+const fixtureDatabasesByPort = new Map();
+const deviceIdsByToken = new Map([[CUSTOMER_A_TOKEN, CUSTOMER_A_ID], [CUSTOMER_B_TOKEN, CUSTOMER_B_ID]]);
 
 function seedDatabase(database) {
   const insertDevice = database.prepare(`
@@ -159,6 +162,7 @@ async function withFixture(run, options = {}) {
       now: () => 1_800_000_001_000,
     });
     const port = await listen(server);
+    fixtureDatabasesByPort.set(port, connection.database);
     await run({
       connection,
       database: connection.database,
@@ -172,6 +176,8 @@ async function withFixture(run, options = {}) {
       closeServer: () => closeServer(server),
     });
   } finally {
+    const fixturePort = server?.address()?.port;
+    if (fixturePort) fixtureDatabasesByPort.delete(fixturePort);
     await closeServer(server).catch(() => {});
     try {
       hub?.close?.();
@@ -229,6 +235,7 @@ async function request({ port, path, method = 'GET', headers = {}, body = undefi
 }
 
 function postOrder(port, token, body, headers = {}) {
+  attachCurrentVisitContext(port, token, body);
   const encoded = typeof body === 'string' || Buffer.isBuffer(body)
     ? body
     : JSON.stringify(body);
@@ -239,6 +246,20 @@ function postOrder(port, token, body, headers = {}) {
     headers: { ...bearer(token), ...JSON_HEADERS, ...headers },
     body: encoded,
   });
+}
+
+function attachCurrentVisitContext(port, token, body) {
+  if (body && typeof body === 'object' && !Array.isArray(body) && !Object.hasOwn(body, 'visitContextId')) {
+    const database = fixtureDatabasesByPort.get(port);
+    const deviceId = deviceIdsByToken.get(token);
+    const table = database && deviceId
+      ? database.prepare('SELECT table_id, version FROM tables WHERE assigned_customer_device_id = ?').get(deviceId)
+      : null;
+    if (table) {
+      const closed = database.prepare('SELECT session_id FROM table_sessions WHERE table_id = ? AND closed_at_ms IS NOT NULL ORDER BY rowid DESC LIMIT 1').get(table.table_id);
+      body.visitContextId = createCustomerVisitContextId({ tableId: table.table_id, deviceId, assignmentVersion: table.version, lastClosedSessionId: closed?.session_id ?? null });
+    }
+  }
 }
 
 function postKitchenOrder(port, token, body) {
@@ -939,6 +960,30 @@ test('business validation, authentication, revocation, and customer-only authori
   });
 });
 
+test('stale visit context is rejected generically before creating a session or exposing grant details', async () => {
+  await withFixture(async ({ port, database }) => {
+    const config = await request({ port, path: '/v1/device/config', headers: bearer(CUSTOMER_A_TOKEN) });
+    assert.equal(config.statusCode, 200);
+    const oldContext = config.json.visitContextId;
+    database.prepare('UPDATE tables SET version = version + 1 WHERE table_id = 1').run();
+
+    const stale = await postOrder(port, CUSTOMER_A_TOKEN, orderBody(uuid(1_041), [{ menuItemId: 'secret-menu-item', quantity: 1 }], { visitContextId: oldContext }));
+    assert.equal(stale.statusCode, 409);
+    assert.equal(stale.json.error.code, 'VISIT_CONTEXT_STALE');
+    assert.equal(stale.json.error.message, 'The saved order needs staff review before it can be accepted.');
+    assert.doesNotMatch(JSON.stringify(stale.json), /secret-menu-item|table 1|per_session|visitContextId/i);
+    assert.equal(count(database, 'orders'), 0);
+    assert.equal(count(database, 'table_sessions'), 0);
+    assert.equal(count(database, 'event_log'), 0);
+
+    const legacyNoContext = await postOrder(port, CUSTOMER_A_TOKEN, JSON.stringify(orderBody(uuid(1_042))));
+    assert.equal(legacyNoContext.statusCode, 409);
+    assert.equal(legacyNoContext.json.error.code, 'VISIT_CONTEXT_STALE');
+    assert.equal(count(database, 'orders'), 0);
+    assert.equal(count(database, 'table_sessions'), 0);
+  });
+});
+
 test('order JSON boundary rejects untrusted fields, malformed/duplicate JSON, media errors, and over-limit bodies', async () => {
   await withFixture(async ({ port, database }) => {
     const malicious = orderBody(uuid(1_020), undefined, {
@@ -991,7 +1036,9 @@ test('order JSON boundary rejects untrusted fields, malformed/duplicate JSON, me
       body: '',
     }), 413, 'PAYLOAD_TOO_LARGE');
 
-    const exactJson = JSON.stringify(orderBody(uuid(1_024)));
+    const exactRequest = orderBody(uuid(1_024));
+    attachCurrentVisitContext(port, CUSTOMER_A_TOKEN, exactRequest);
+    const exactJson = JSON.stringify(exactRequest);
     const exactBody = exactJson + ' '.repeat(ORDER_JSON_BODY_LIMIT_BYTES - Buffer.byteLength(exactJson));
     const exact = await request({
       port,
@@ -1012,7 +1059,9 @@ test('order JSON boundary rejects untrusted fields, malformed/duplicate JSON, me
 test('a response socket loss leaves a durable order that safely replays with the same ID', async () => {
   await withFixture(async ({ port, database }) => {
     const clientOrderId = uuid(1_030);
-    const body = JSON.stringify(orderBody(clientOrderId));
+    const orderRequest = orderBody(clientOrderId);
+    attachCurrentVisitContext(port, CUSTOMER_A_TOKEN, orderRequest);
+    const body = JSON.stringify(orderRequest);
     await new Promise((resolve, reject) => {
       const socket = net.connect(port, '127.0.0.1');
       socket.once('error', reject);

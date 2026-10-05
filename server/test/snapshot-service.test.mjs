@@ -19,6 +19,7 @@ import {
 } from '../src/events/snapshot-errors.mjs';
 import { createSnapshotService } from '../src/events/snapshot-service.mjs';
 import { createOrderRepository } from '../src/orders/order-repository.mjs';
+import { createCustomerVisitContextId } from '../src/orders/visit-context.mjs';
 
 const uuid = (number) => `00000000-0000-4000-8000-${String(number).padStart(12, '0')}`;
 const EPOCH = uuid(900);
@@ -35,6 +36,7 @@ function customerDevice(eventId = 1, overrides = {}) {
     tableId: 1,
     tableLabel: 'テーブル1',
     tableIsActive: true,
+    visitContextId: `v1_${'a'.repeat(64)}`,
     ...overrides,
   };
 }
@@ -153,6 +155,7 @@ test('customer snapshot whitelists fields and omits staff state', () => {
   assert.deepEqual(Object.keys(snapshot), ['audience', 'eventEpoch', 'lastEventId', 'device', 'menu']);
   assert.doesNotMatch(JSON.stringify(snapshot), /secret|tokenHash|internalAudit/);
   assert.equal(snapshot.menu.items[0].priceYen, 999999);
+  assert.equal(snapshot.device.visitContextId, device.visitContextId);
 });
 
 test('kitchen snapshot includes explicitly projected order and call state', () => {
@@ -294,6 +297,7 @@ async function withIntegration(run) {
     await run({
       database: connection.database,
       service: createSnapshotService({ catalog, eventRepository: events }),
+      catalog,
       customer: authenticator.authenticateDeviceToken(TOKEN_CUSTOMER),
       kitchen: authenticator.authenticateDeviceToken(TOKEN_KITCHEN),
     });
@@ -320,7 +324,8 @@ test('real repositories compose a genuine role-scoped customer snapshot without 
 });
 
 test('real repositories compose active orders for kitchen from one stable cursor', async () => {
-  await withIntegration(({ database, service, kitchen }) => {
+  await withIntegration(({ database, service, catalog, customer, kitchen }) => {
+    const visitContextId = catalog.getDeviceSettings(customer).visitContextId;
     createOrderRepository({
       database,
       now: () => 2000,
@@ -328,6 +333,7 @@ test('real repositories compose active orders for kitchen from one stable cursor
     }).createOrder({
       clientOrderId: uuid(101),
       authenticatedDeviceId: DEVICE_CUSTOMER,
+      visitContextId,
       items: [{ menuItemId: 'edamame', quantity: 2 }],
     });
     const snapshot = service.getSnapshot(kitchen);

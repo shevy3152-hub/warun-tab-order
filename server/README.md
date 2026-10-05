@@ -221,7 +221,7 @@ role別の公開範囲は次のとおりです。
 
 ### 注文POST
 
-注文bodyは`application/json`（任意のcharset指定はUTF-8だけ）、最大16 KiBです。重複JSON key、不正UTF-8、不正JSON、未知field、server管理fieldを拒否します。受け付ける注文意図は`schemaVersion`、`clientOrderId`、任意の`clientCreatedAtMs`、`menuItemId`と`quantity`だけです。bodyのdeviceId、role、tableId、価格、合計、fingerprintは受け付けず、HTTP認証で得た`principal.deviceId`だけを注文repositoryへ渡します。
+注文bodyは`application/json`（任意のcharset指定はUTF-8だけ）、最大16 KiBです。重複JSON key、不正UTF-8、不正JSON、未知field、server管理fieldを拒否します。新規注文は`visitContextId`を端末設定APIから取得して固定保存します。受付済み注文の完全一致再送は冪等検索を先に行い元の結果を返し、未受付注文だけ現在の認証済み端末割当・割当世代・終了session markerと照合します。contextのない旧outboxも、同じIDの受付済み注文なら完全一致再送を許し、未受付ならスタッフ確認が必要な`409 VISIT_CONTEXT_STALE`として保持します。bodyのdeviceId、role、tableId、価格、合計、fingerprintは受け付けず、HTTP認証で得た`principal.deviceId`とDB内の現在状態だけを認可判断に使います。
 
 新規コミットは`201`と`Idempotency-Result: created`、同じ注文意図の再送は`200`と`Idempotency-Result: replayed`です。同じIDで異なる注文意図は`409`、売り切れ・存在しない商品は`422`です。customer向けreceiptには価格、合計、テーブル、fingerprint、内部明細を含めません。応答消失時も同じ`clientOrderId`で再送し、保存済み注文を取得します。HTTP応答の成否だけから別IDの注文を作らないでください。
 

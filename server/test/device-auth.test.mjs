@@ -16,6 +16,7 @@ import {
   createDeviceAuthenticator,
 } from '../src/auth/device-auth.mjs';
 import { createOrderRepository } from '../src/orders/order-repository.mjs';
+import { createCustomerVisitContextId } from '../src/orders/visit-context.mjs';
 
 const uuid = (number) => `00000000-0000-4000-8000-${String(number).padStart(12, '0')}`;
 const tokenFor = (byte) => Buffer.alloc(32, byte).toString('base64url');
@@ -503,6 +504,14 @@ test('authenticated customer principal supplies the order repository device boun
 
     const principal = authenticator.authenticateDeviceToken(CUSTOMER_TOKEN);
     authorizeDeviceRole(principal, ['customer']);
+    const table = database.prepare(`
+      SELECT table_id, version FROM tables WHERE assigned_customer_device_id = ?
+    `).get(principal.deviceId);
+    const visitContextId = createCustomerVisitContextId({
+      tableId: table.table_id,
+      deviceId: principal.deviceId,
+      assignmentVersion: table.version,
+    });
     const repository = createOrderRepository({
       database,
       now: () => FIXED_NOW,
@@ -511,6 +520,7 @@ test('authenticated customer principal supplies the order repository device boun
     const result = repository.createOrder({
       clientOrderId: CLIENT_ORDER_ID,
       authenticatedDeviceId: principal.deviceId,
+      visitContextId,
       items: [{ menuItemId: 'edamame', quantity: 1 }],
     });
 

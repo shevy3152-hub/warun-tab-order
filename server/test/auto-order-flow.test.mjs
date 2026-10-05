@@ -89,7 +89,8 @@ test('automatic customer-to-kitchen-to-history flow uses one SQLite order', asyn
     const environment = { location: { origin }, navigator: { onLine: true }, fetch: fetchImpl };
     const client = await bootstrapCustomerOrderClient({ globalObject: environment, credentialStore, createClient });
     assert.equal(client.mode, 'api');
-    const record = await client.enqueue({ items: [{ menuItemId: 'edamame', quantity: 2 }] });
+    const visitContextId = await client.getVisitContextId();
+    const record = await client.enqueue({ visitContextId, items: [{ menuItemId: 'edamame', quantity: 2 }] });
     const first = await client.flush({ clientOrderId: record.clientOrderId });
     assert.equal(first.state, 'synced');
     assert.equal(first.idempotencyResult, 'created');
@@ -162,7 +163,7 @@ test('automatic customer-to-kitchen-to-history flow uses one SQLite order', asyn
     const reloaded = await bootstrapCustomerOrderClient({ globalObject: environment, credentialStore, createClient });
     assert.equal(reloaded.mode, 'api');
     await reloaded.start();
-    assert.equal(fetchCalls, 1);
+    assert.equal(fetchCalls, 3, 'cart capture and send preflight read visit context before the order');
   } finally {
     await close(server).catch(() => {});
     hub?.close();

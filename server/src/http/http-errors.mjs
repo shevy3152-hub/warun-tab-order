@@ -7,6 +7,7 @@ export const HTTP_ERROR_CODES = Object.freeze({
   PAYLOAD_TOO_LARGE: 'PAYLOAD_TOO_LARGE',
   UNSUPPORTED_MEDIA_TYPE: 'UNSUPPORTED_MEDIA_TYPE',
   ORDER_CONFLICT: 'ORDER_CONFLICT',
+  VISIT_CONTEXT_STALE: 'VISIT_CONTEXT_STALE',
   PRICE_CEILING_EXCEEDED: 'PRICE_CEILING_EXCEEDED',
   CATALOG_CONFLICT: 'CATALOG_CONFLICT',
   BUSINESS_HOURS_CONFLICT: 'BUSINESS_HOURS_CONFLICT',
@@ -75,6 +76,10 @@ const DEFINITIONS = Object.freeze({
   [HTTP_ERROR_CODES.ORDER_CONFLICT]: Object.freeze({
     statusCode: 409,
     message: 'Order conflicts with an existing request.',
+  }),
+  [HTTP_ERROR_CODES.VISIT_CONTEXT_STALE]: Object.freeze({
+    statusCode: 409,
+    message: 'The saved order needs staff review before it can be accepted.',
   }),
   [HTTP_ERROR_CODES.CATALOG_CONFLICT]: Object.freeze({
     statusCode: 409,

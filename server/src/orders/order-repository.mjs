@@ -3,6 +3,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { authorizeDeviceRole } from '../auth/device-auth.mjs';
 import { ORDER_ERROR_CODES, OrderRepositoryError } from './order-errors.mjs';
 import { createOrderPricingRepository, orderItemAmounts, sumCurrentOrderItemTotals } from './order-pricing.mjs';
+import { createCustomerVisitContextId } from './visit-context.mjs';
 
 const FINGERPRINT_VERSION = 1;
 const MAX_ITEMS = 50;
@@ -12,6 +13,7 @@ const MAX_ORDER_TOTAL_YEN = 100_000_000;
 const MIN_QUANTITY_MENU_ITEM_IDS = new Set(['food-kushi-kushikatsu']);
 const TEMPERATURES = new Set(['冷酒', '燗酒']);
 const UUID_V4_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const VISIT_CONTEXT_PATTERN = /^v1_[0-9a-f]{64}$/;
 
 function repositoryError(code, message, options = undefined) {
   return new OrderRepositoryError(code, message, options);
@@ -201,15 +203,36 @@ function normalizeOrderRequest(request) {
   if (schemaVersion < 3 && items.some((item) => item.temperature)) {
     throw repositoryError(ORDER_ERROR_CODES.INVALID_ORDER_REQUEST, 'Temperature selections require schemaVersion 3.');
   }
+  const visitContextId = request.visitContextId ?? null;
+  if (visitContextId !== null && (typeof visitContextId !== 'string' || !VISIT_CONTEXT_PATTERN.test(visitContextId))) {
+    throw repositoryError(ORDER_ERROR_CODES.INVALID_ORDER_REQUEST, 'visitContextId is invalid.');
+  }
   return {
     schemaVersion,
     clientOrderId: normalizeUuid(request.clientOrderId, 'clientOrderId'),
     authenticatedDeviceId: normalizeAuthenticatedDeviceId(request.authenticatedDeviceId),
+    visitContextId,
     items,
   };
 }
 
-function buildCanonicalIntent({ schemaVersion, authenticatedDeviceId, items }) {
+function buildCanonicalIntent({ schemaVersion, authenticatedDeviceId, visitContextId, items }) {
+  if (visitContextId) {
+    const canonicalItems = items.map(({ menuItemId, quantity, variantId, servingOptionId, temperature }) => ({
+      menuItemId,
+      quantity,
+      ...(variantId ? { variantId } : {}),
+      ...(servingOptionId ? { servingOptionId } : {}),
+      ...(temperature ? { temperature } : {}),
+    }));
+    return JSON.stringify({
+      fingerprintVersion: 4,
+      schemaVersion,
+      authenticatedDeviceId,
+      visitContextId,
+      items: canonicalItems,
+    });
+  }
   if (schemaVersion === 1) {
     return JSON.stringify({
       fingerprintVersion: FINGERPRINT_VERSION,
@@ -678,9 +701,16 @@ export function createOrderRepository({ database, now = Date.now, idFactory = ra
         WHERE device_id = ?
       `),
       findAssignedTable: database.prepare(`
-        SELECT table_id, label, is_active
+        SELECT table_id, label, is_active, version
         FROM tables
         WHERE assigned_customer_device_id = ?
+      `),
+      findLastClosedSession: database.prepare(`
+        SELECT session_id
+        FROM table_sessions
+        WHERE table_id = ? AND closed_at_ms IS NOT NULL
+        ORDER BY rowid DESC
+        LIMIT 1
       `),
       findTableCustomerDevice: database.prepare(`
         SELECT assigned_customer_device_id
@@ -708,6 +738,7 @@ export function createOrderRepository({ database, now = Date.now, idFactory = ra
         WHERE session_id = ? AND status IN ('new', 'active')
           AND EXISTS (SELECT 1 FROM order_items WHERE order_items.order_id = orders.order_id AND is_cancelled = 0 AND quantity_reduced < quantity)
       `),
+      deleteSessionMenuGrants: database.prepare('DELETE FROM session_menu_item_grants WHERE session_id = ?'),
       closeSession: database.prepare(`
         UPDATE table_sessions
         SET closed_at_ms = ?, version = version + 1, updated_at_ms = ?
@@ -732,9 +763,15 @@ export function createOrderRepository({ database, now = Date.now, idFactory = ra
           price_yen,
           is_sold_out,
           ordering_mode,
-          is_active
+          is_active,
+          customer_visibility_mode
         FROM menu_items
         WHERE menu_item_id = ?
+      `),
+      findSessionMenuItemGrant: database.prepare(`
+        SELECT 1
+        FROM session_menu_item_grants
+        WHERE session_id = ? AND menu_item_id = ?
       `),
       findVariant: database.prepare(`
         SELECT variant_id, menu_item_id, name, volume_label, price_yen, is_active, temperature_options_json
@@ -940,16 +977,20 @@ export function createOrderRepository({ database, now = Date.now, idFactory = ra
 
       const table = statements.findAssignedTable.get(normalized.authenticatedDeviceId);
       if (!table) {
-        throw repositoryError(
-          ORDER_ERROR_CODES.DEVICE_NOT_ASSIGNED,
-          'The authenticated customer device is not assigned to a table.',
-        );
+        throw repositoryError(ORDER_ERROR_CODES.VISIT_CONTEXT_STALE, 'Order requires staff review.');
       }
       if (table.is_active !== 1) {
-        throw repositoryError(
-          ORDER_ERROR_CODES.TABLE_INACTIVE,
-          'The assigned table is inactive.',
-        );
+        throw repositoryError(ORDER_ERROR_CODES.VISIT_CONTEXT_STALE, 'Order requires staff review.');
+      }
+
+      const currentVisitContextId = createCustomerVisitContextId({
+        tableId: table.table_id,
+        deviceId: normalized.authenticatedDeviceId,
+        assignmentVersion: table.version,
+        lastClosedSessionId: statements.findLastClosedSession.get(table.table_id)?.session_id ?? null,
+      });
+      if (!normalized.visitContextId || normalized.visitContextId !== currentVisitContextId) {
+        throw repositoryError(ORDER_ERROR_CODES.VISIT_CONTEXT_STALE, 'Order requires staff review.');
       }
 
       const acceptedAtMs = now();
@@ -966,10 +1007,17 @@ export function createOrderRepository({ database, now = Date.now, idFactory = ra
       let totalAmountYen = 0;
       const snapshots = normalized.items.map((item, lineIndex) => {
         const menuItem = statements.findMenuItem.get(item.menuItemId);
-        if (!menuItem || menuItem.is_active !== 1) {
+        if (
+          !menuItem
+          || menuItem.is_active !== 1
+          || (
+            menuItem.customer_visibility_mode === 'per_session'
+            && !statements.findSessionMenuItemGrant.get(session.session_id, item.menuItemId)
+          )
+        ) {
           throw repositoryError(
             ORDER_ERROR_CODES.MENU_ITEM_NOT_FOUND,
-            `Menu item is not available: ${item.menuItemId}`,
+            'A requested menu item is unavailable.',
           );
         }
         if (menuItem.is_sold_out === 1) {
@@ -1389,6 +1437,7 @@ export function createOrderRepository({ database, now = Date.now, idFactory = ra
       if (Number(updated.changes) !== 1) {
         throw repositoryError(ORDER_ERROR_CODES.SESSION_CONFLICT, 'The table session is no longer current.');
       }
+      statements.deleteSessionMenuGrants.run(normalizedSessionId);
 
       const systemState = statements.findSystemState.get();
       if (!systemState?.event_epoch) {

@@ -54,6 +54,7 @@ const TOP_LEVEL_KEYS = new Set([
   'schemaVersion',
   'clientOrderId',
   'clientCreatedAtMs',
+  'visitContextId',
   'items',
 ]);
 const ITEM_KEYS = new Set(['menuItemId', 'quantity', 'variantId', 'servingOptionId', 'temperature']);
@@ -375,6 +376,10 @@ function validateOrderRequest(value) {
   ) {
     throw bodyError(ORDER_JSON_BODY_ERROR_CODES.INVALID_ORDER_REQUEST);
   }
+  if (Object.hasOwn(value, 'visitContextId')
+    && (typeof value.visitContextId !== 'string' || !/^v1_[0-9a-f]{64}$/.test(value.visitContextId))) {
+    throw bodyError(ORDER_JSON_BODY_ERROR_CODES.INVALID_ORDER_REQUEST);
+  }
   if (!Array.isArray(value.items) || value.items.length < 1 || value.items.length > MAX_ORDER_LINES) {
     throw bodyError(ORDER_JSON_BODY_ERROR_CODES.INVALID_ORDER_REQUEST);
   }
@@ -426,6 +431,7 @@ function validateOrderRequest(value) {
     clientOrderId: value.clientOrderId,
     items: Object.freeze(items),
   };
+  if (Object.hasOwn(value, 'visitContextId')) normalized.visitContextId = value.visitContextId;
   if (Object.hasOwn(value, 'clientCreatedAtMs')) {
     normalized.clientCreatedAtMs = value.clientCreatedAtMs;
   }

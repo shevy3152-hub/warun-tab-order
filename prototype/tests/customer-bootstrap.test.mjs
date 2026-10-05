@@ -30,6 +30,7 @@ test("credential survives reload-equivalent bootstrap and selects same-origin AP
   assert.equal(captured.global.WARUN_ORDER_MODE, "api");
   assert.equal(captured.global.WARUN_API_BASE, "http://192.168.1.12:5173/v1");
   assert.equal(captured.global.WARUN_API_TOKEN, TOKEN);
+  assert.equal(captured.global.WARUN_VISIT_CONTEXT_ID, undefined);
   assert.deepEqual(config, { tableId: 1, tableLabel: "テーブル1" });
   assert.doesNotMatch(captured.global.WARUN_API_BASE, new RegExp(TOKEN));
 });
@@ -64,7 +65,11 @@ test("credential-first client posts once with Bearer auth and intent-only payloa
     ...environment(),
     fetch: async (url, options) => {
       calls.push({ url, options });
-      return { ok: true, async json() { return { idempotencyResult: "created" }; } };
+      return { ok: true, status: url.endsWith("/device/config") ? 200 : 201, headers: { get: () => "created" }, async json() {
+        return url.endsWith("/device/config")
+          ? { role: "customer", visitContextId: `v1_${"a".repeat(64)}` }
+          : { idempotencyResult: "created" };
+      } };
     },
   };
   const store = createMemoryOutbox();
@@ -77,11 +82,15 @@ test("credential-first client posts once with Bearer auth and intent-only payloa
   });
 
   assert.equal(client.mode, "api");
-  const record = await client.enqueue({ items: [{ menuItemId: "edamame", quantity: 1 }] });
+  const visitContextId = await client.getVisitContextId();
+  const record = await client.enqueue({ visitContextId, items: [{ menuItemId: "edamame", quantity: 1 }] });
   await client.flush({ clientOrderId: record.clientOrderId });
-  assert.equal(calls.length, 1);
-  assert.equal(calls[0].url, "http://192.168.1.12:5173/v1/orders");
-  assert.equal(calls[0].options.headers.Authorization, `Bearer ${TOKEN}`);
-  assert.doesNotMatch(calls[0].options.body, new RegExp(TOKEN));
-  assert.deepEqual(JSON.parse(calls[0].options.body).items, [{ menuItemId: "edamame", quantity: 1 }]);
+  assert.equal(calls.length, 3);
+  assert.equal(calls[0].url, "http://192.168.1.12:5173/v1/device/config");
+  assert.equal(calls[1].url, "http://192.168.1.12:5173/v1/device/config");
+  assert.equal(calls[2].url, "http://192.168.1.12:5173/v1/orders");
+  assert.equal(calls[2].options.headers.Authorization, `Bearer ${TOKEN}`);
+  assert.doesNotMatch(calls[2].options.body, new RegExp(TOKEN));
+  assert.equal(JSON.parse(calls[2].options.body).visitContextId, `v1_${"a".repeat(64)}`);
+  assert.deepEqual(JSON.parse(calls[2].options.body).items, [{ menuItemId: "edamame", quantity: 1 }]);
 });

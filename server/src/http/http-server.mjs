@@ -19,6 +19,7 @@ import {
   RIDE_GUIDANCE_ERROR_CODES,
   isRideGuidanceRepositoryError,
 } from '../ride-guidance/ride-guidance-errors.mjs';
+import { isSessionMenuAccessError, SESSION_MENU_ACCESS_ERROR_CODES } from '../catalog/session-menu-access-repository.mjs';
 import {
   CATALOG_ERROR_CODES,
   isCatalogRepositoryError,
@@ -117,6 +118,8 @@ const ROUTE_METHODS = new Map([
   ['/v1/admin/pairing-codes', 'POST'],
   ['/v1/pairings/claim', 'POST'],
   ['/v1/admin/devices/revoke', 'POST'],
+  ['/v1/admin/session-menu-access', 'GET'],
+  ['/v1/admin/session-menu-access/grants', new Set(['POST', 'PUT'])],
   ['/v1/admin/catalog/menu-item', 'PUT'],
   ['/v1/admin/catalog/menu-item/image-layouts', 'PUT'],
   ['/v1/admin/catalog/category', 'PUT'],
@@ -539,6 +542,14 @@ function mapApplicationError(error) {
     return createHttpError(HTTP_ERROR_CODES.PAIRING_INVALID);
   }
 
+  if (isSessionMenuAccessError(error)) {
+    if (error.code === SESSION_MENU_ACCESS_ERROR_CODES.INVALID_REQUEST) return createHttpError(HTTP_ERROR_CODES.BAD_REQUEST);
+    if ([SESSION_MENU_ACCESS_ERROR_CODES.SESSION_CLOSED, SESSION_MENU_ACCESS_ERROR_CODES.SESSION_CONFLICT, SESSION_MENU_ACCESS_ERROR_CODES.SESSION_NOT_FOUND].includes(error.code)) return createHttpError(HTTP_ERROR_CODES.SESSION_CONFLICT);
+    if ([SESSION_MENU_ACCESS_ERROR_CODES.TABLE_NOT_FOUND, SESSION_MENU_ACCESS_ERROR_CODES.ITEM_NOT_FOUND].includes(error.code)) return createHttpError(HTTP_ERROR_CODES.NOT_FOUND);
+    if (error.code === SESSION_MENU_ACCESS_ERROR_CODES.ITEM_NOT_SESSION_RESTRICTED) return createHttpError(HTTP_ERROR_CODES.INVALID_CATALOG_REQUEST);
+    if (error.code === SESSION_MENU_ACCESS_ERROR_CODES.DATABASE_FAILURE && hasBusyCause(error)) return createHttpError(HTTP_ERROR_CODES.SERVICE_UNAVAILABLE);
+    return createHttpError(HTTP_ERROR_CODES.INTERNAL_ERROR);
+  }
   if (isCatalogRepositoryError(error)) {
     if (
       error.code === CATALOG_ERROR_CODES.AUTHENTICATION_REQUIRED
@@ -626,6 +637,9 @@ function mapApplicationError(error) {
     }
     if (error.code === ORDER_ERROR_CODES.ORDER_CONFLICT) {
       return createHttpError(HTTP_ERROR_CODES.ORDER_CONFLICT);
+    }
+    if (error.code === ORDER_ERROR_CODES.VISIT_CONTEXT_STALE) {
+      return createHttpError(HTTP_ERROR_CODES.VISIT_CONTEXT_STALE);
     }
     if (error.code === ORDER_ERROR_CODES.ORDER_NOT_FOUND) {
       return createHttpError(HTTP_ERROR_CODES.ORDER_NOT_FOUND);
@@ -870,6 +884,7 @@ function createConfiguredHttpServer({
   customerTheme = undefined,
   rideGuidance = undefined,
   checkout = undefined,
+  sessionMenuAccess = undefined,
 } = {}, { integrated }) {
   if (
     !authenticator
@@ -1240,6 +1255,7 @@ function createConfiguredHttpServer({
         const result = orders.createOrder({
           schemaVersion: body.schemaVersion,
           clientOrderId: body.clientOrderId,
+          ...(body.visitContextId ? { visitContextId: body.visitContextId } : {}),
           authenticatedDeviceId: principal.deviceId,
           items: body.items.map((item) => ({
             menuItemId: item.menuItemId,
@@ -1536,6 +1552,24 @@ function createConfiguredHttpServer({
         return;
       }
 
+      if (target.path === '/v1/admin/session-menu-access') {
+        authorizeDeviceRole(principal, ['admin']);
+        const body = requireService(sessionMenuAccess, 'listCurrentAccess').listCurrentAccess();
+        writeJsonResponse(response, { statusCode: 200, body, requestId });
+        return;
+      }
+
+      if (target.path === '/v1/admin/session-menu-access/grants') {
+        authorizeDeviceRole(principal, ['admin']);
+        const body = await readJsonBody(request);
+        const result = request.method === 'POST'
+          ? requireService(sessionMenuAccess, 'grantToCurrentSession').grantToCurrentSession({ ...body, actorDeviceId: principal.deviceId })
+          : requireService(sessionMenuAccess, 'revokeFromCurrentSession').revokeFromCurrentSession({ ...body, actorDeviceId: principal.deviceId });
+        const committed = result.event ? { idempotencyResult: 'created', event: result.event } : null;
+        if (committed) await notifyCommittedSafely(sseHub, committed);
+        writeJsonResponse(response, { statusCode: 200, body: { tableId: result.tableId, sessionId: result.sessionId, ...(result.openedAtMs === undefined ? {} : { openedAtMs: result.openedAtMs }), ...(result.version === undefined ? {} : { version: result.version }), menuItemId: result.menuItemId, granted: result.granted }, requestId });
+        return;
+      }
       if (target.path === '/v1/admin/catalog/menu-item/image-layouts') {
         authorizeDeviceRole(principal, ['admin']);
         const body = await readJsonBody(request);

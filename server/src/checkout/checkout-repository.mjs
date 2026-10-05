@@ -370,6 +370,7 @@ export function createCheckoutRepository({ database, now = Date.now, idFactory =
       const closedAtMs = paidAtMs;
       const closed = database.prepare('UPDATE table_sessions SET closed_at_ms = ?, version = version + 1, updated_at_ms = ? WHERE session_id = ? AND closed_at_ms IS NULL AND version = ?').run(closedAtMs, closedAtMs, current.table_session_id, session.version);
       if (Number(closed.changes) !== 1) throw error(CHECKOUT_ERROR_CODES.PAYMENT_CONFLICT, 'The table session changed while recording payment.');
+      database.prepare('DELETE FROM session_menu_item_grants WHERE session_id = ?').run(current.table_session_id);
       const sessionEvent = database.prepare(`INSERT INTO event_log (event_epoch, event_type, aggregate_type, aggregate_id, actor_device_id, payload_json, created_at_ms) VALUES (?, 'table.assignment_updated', 'table', ?, ?, ?, ?)`).run(eventEpoch, String(session.table_id), principal.deviceId, JSON.stringify({ tableId: session.table_id, sessionId: current.table_session_id, closedAtMs }), closedAtMs);
       database.prepare('UPDATE checkout_requests SET version = version + 1, updated_at_ms = ? WHERE checkout_request_id = ? AND version = ?').run(paidAtMs, id, version);
       const event = appendEvent(eventEpoch, principal, 'checkout.paid', id, { paymentRecordId, confirmedTotalYen }, paidAtMs);

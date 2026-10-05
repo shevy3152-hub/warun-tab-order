@@ -66,7 +66,7 @@ function eventTarget() {
 test("outbox constants keep the browser database contract fixed", () => {
   assert.equal(OUTBOX_DB_NAME, "warun-customer-order-outbox");
   assert.equal(OUTBOX_DB_VERSION, 1);
-  assert.deepEqual(Object.values(OUTBOX_STATES).sort(), ["pending", "rejected", "sending", "synced"]);
+  assert.deepEqual(Object.values(OUTBOX_STATES).sort(), ["pending", "rejected", "review_required", "sending", "synced"]);
 });
 
 test("clientOrderId is generated once and the record is saved before sending", async () => {
@@ -279,6 +279,53 @@ test("outbox success events map to a customer sent notice after recovery", () =>
     message: "注文内容エラーのため送信できませんでした。内容を確認してください。",
   });
   assert.equal(customerOrderNoticeFromOutboxEvent({ clientOrderId: uuid(43), state: "pending", displayState: "failed" }).kind, "failed");
+  assert.deepEqual(customerOrderNoticeFromOutboxEvent({ clientOrderId: uuid(44), state: "review_required", displayState: "review_required" }), {
+    kind: "error",
+    message: "来店または端末の割当が変わりました。注文内容を保持しています。スタッフへ確認してください。",
+  });
+});
+
+test("stale outbox submissions are retained in a non-retrying staff-review state", async () => {
+  const calls = [];
+  const service = createOrderOutbox({
+    store: createMemoryOutbox(),
+    transport: { ...successfulTransport("created", calls), async send(payload) { calls.push(payload); return { kind: "rejected", errorCode: "VISIT_CONTEXT_STALE" }; } },
+    idFactory: () => uuid(44),
+    autoRetry: false,
+  });
+  const record = await service.enqueue({ items: [{ menuItemId: ITEM_ID, quantity: 1 }], visitContextId: `v1_${"a".repeat(64)}` });
+  const result = await service.flush({ clientOrderId: record.clientOrderId });
+  const saved = await service.get(record.clientOrderId);
+  assert.equal(result.state, "review_required");
+  assert.equal(saved.state, "review_required");
+  assert.equal(saved.payload.items[0].menuItemId, ITEM_ID);
+  assert.equal((await service.flush({ clientOrderId: record.clientOrderId })).state, "review_required");
+  assert.equal(calls.length, 1);
+});
+
+test("legacy outbox payloads remain contextless until the server either replays or requires staff review", async () => {
+  const legacyPayload = { schemaVersion: 1, clientOrderId: uuid(46), items: [{ menuItemId: ITEM_ID, quantity: 1 }] };
+  const calls = [];
+  const store = createMemoryOutbox([{
+    clientOrderId: legacyPayload.clientOrderId,
+    payload: legacyPayload,
+    state: "pending",
+    attemptCount: 0,
+    createdAt: 1,
+    lastAttemptAt: null,
+    lastErrorCode: null,
+  }]);
+  const service = createOrderOutbox({
+    store,
+    transport: { ...successfulTransport("replayed", calls), async send(payload) { calls.push(payload); return { kind: "rejected", errorCode: "VISIT_CONTEXT_STALE" }; } },
+    autoRetry: false,
+  });
+  await service.flush({ clientOrderId: legacyPayload.clientOrderId });
+  const saved = await service.get(legacyPayload.clientOrderId);
+  assert.equal(calls.length, 1);
+  assert.equal(Object.hasOwn(calls[0], "visitContextId"), false);
+  assert.equal(Object.hasOwn(saved.payload, "visitContextId"), false);
+  assert.equal(saved.state, "review_required");
 });
 
 test("customer order errors are shown as safe categories without exposing server details", () => {
@@ -571,8 +618,117 @@ test("API mode without runtime configuration is safe and does not use demo trans
   assert.equal(client.configured, false);
   const record = await client.enqueue({ items: [{ menuItemId: ITEM_ID, quantity: 1 }] });
   const result = await client.flush({ clientOrderId: record.clientOrderId });
-  assert.equal(result.state, "pending");
-  assert.equal(result.errorCode, "API_TOKEN_UNCONFIGURED");
+  assert.equal(record.state, "review_required");
+  assert.equal(result.state, "review_required");
+});
+
+test("cart-pinned visit context is preserved and a never-attempted stale order is held for review", async () => {
+  const pinned = `v1_${"a".repeat(64)}`;
+  const current = `v1_${"b".repeat(64)}`;
+  const calls = [];
+  const env = {
+    WARUN_ORDER_MODE: "api",
+    WARUN_API_BASE: "https://api.example.test/v1",
+    WARUN_API_TOKEN: "customer-token",
+    WARUN_VISIT_CONTEXT_ID: pinned,
+    location: { origin: "https://tablet.example.test" },
+    navigator: { onLine: true },
+  };
+  const response = (body, headers = {}) => ({ ok: true, status: 200, headers: { get: (name) => headers[name] ?? null }, async json() { return body; } });
+  const client = createCustomerOrderClient({
+    global: env,
+    store: createMemoryOutbox(),
+    idFactory: () => uuid(28),
+    autoRetry: false,
+    fetchImpl: async (url, options) => {
+      calls.push({ url, options });
+      if (url.endsWith("/device/config")) return response({ role: "customer", visitContextId: current });
+      return response({}, { "Idempotency-Result": "created" });
+    },
+  });
+  const record = await client.enqueue({ visitContextId: pinned, items: [{ menuItemId: ITEM_ID, quantity: 1 }] });
+  assert.equal(record.payload.visitContextId, pinned);
+  const result = await client.flush({ clientOrderId: record.clientOrderId, force: true });
+  assert.equal(result.state, "review_required");
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, "https://api.example.test/v1/device/config");
+  const retained = await client.get(record.clientOrderId);
+  assert.equal(retained.payload.visitContextId, pinned);
+  assert.equal(retained.payload.items[0].menuItemId, ITEM_ID);
+});
+
+test("offline queued order keeps its captured visit context through same-visit recovery", async () => {
+  const pinned = `v1_${"c".repeat(64)}`;
+  const calls = [];
+  const env = {
+    WARUN_ORDER_MODE: "api",
+    WARUN_API_BASE: "https://api.example.test/v1",
+    WARUN_API_TOKEN: "customer-token",
+    WARUN_VISIT_CONTEXT_ID: pinned,
+    location: { origin: "https://tablet.example.test" },
+    navigator: { onLine: false },
+  };
+  const response = (body, headers = {}) => ({ ok: true, status: 200, headers: { get: (name) => headers[name] ?? null }, async json() { return body; } });
+  const client = createCustomerOrderClient({
+    global: env,
+    store: createMemoryOutbox(),
+    idFactory: () => uuid(29),
+    autoRetry: false,
+    fetchImpl: async (url, options) => {
+      calls.push({ url, options });
+      if (url.endsWith("/device/config")) return response({ role: "customer", visitContextId: pinned });
+      return response({}, { "Idempotency-Result": "created" });
+    },
+  });
+  const record = await client.enqueue({ visitContextId: await client.getVisitContextId(), items: [{ menuItemId: ITEM_ID, quantity: 1 }] });
+  assert.equal(record.payload.visitContextId, pinned);
+  assert.equal((await client.flush({ clientOrderId: record.clientOrderId })).state, "pending");
+  assert.equal(calls.length, 0);
+  env.navigator.onLine = true;
+  const result = await client.flush({ clientOrderId: record.clientOrderId, force: true });
+  assert.equal(result.state, "synced");
+  assert.equal(calls[0].url, "https://api.example.test/v1/device/config");
+  assert.equal(calls[1].url, "https://api.example.test/v1/orders");
+  assert.equal(JSON.parse(calls[1].options.body).visitContextId, pinned);
+});
+
+test("possibly accepted retry reaches replay-first server check after context changed", async () => {
+  const pinned = `v1_${"d".repeat(64)}`;
+  let current = pinned;
+  const changed = `v1_${"e".repeat(64)}`;
+  const calls = [];
+  const env = {
+    WARUN_ORDER_MODE: "api",
+    WARUN_API_BASE: "https://api.example.test/v1",
+    WARUN_API_TOKEN: "customer-token",
+    location: { origin: "https://tablet.example.test" },
+    navigator: { onLine: true },
+  };
+  const response = (body, headers = {}) => ({ ok: true, status: 200, headers: { get: (name) => headers[name] ?? null }, async json() { return body; } });
+  let loseFirstResponse = true;
+  const client = createCustomerOrderClient({
+    global: env,
+    store: createMemoryOutbox(),
+    idFactory: () => uuid(30),
+    autoRetry: false,
+    fetchImpl: async (url, options) => {
+      calls.push({ url, options });
+      if (url.endsWith("/device/config")) return response({ role: "customer", visitContextId: current });
+      if (loseFirstResponse) {
+        loseFirstResponse = false;
+        current = changed;
+        throw new Error("simulated response loss");
+      }
+      return response({}, { "Idempotency-Result": "replayed" });
+    },
+  });
+  const record = await client.enqueue({ visitContextId: pinned, items: [{ menuItemId: ITEM_ID, quantity: 1 }] });
+  assert.equal((await client.flush({ clientOrderId: record.clientOrderId, force: true })).state, "pending");
+  assert.equal((await client.get(record.clientOrderId)).attemptCount, 1);
+  const result = await client.flush({ clientOrderId: record.clientOrderId, force: true });
+  assert.equal(result.state, "synced");
+  assert.equal(result.idempotencyResult, "replayed");
+  assert.equal(JSON.parse(calls.at(-1).options.body).visitContextId, pinned);
 });
 
 test("demo mode remains local and immediately succeeds without IndexedDB", async () => {

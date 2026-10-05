@@ -14,6 +14,7 @@ import {
   CatalogRepositoryError,
 } from '../src/catalog/catalog-errors.mjs';
 import { createCatalogRepository } from '../src/catalog/catalog-repository.mjs';
+import { createSessionMenuAccessRepository, SESSION_MENU_ACCESS_ERROR_CODES } from '../src/catalog/session-menu-access-repository.mjs';
 import { initializeDatabase } from '../src/db/database.mjs';
 import { createOrderRepository } from '../src/orders/order-repository.mjs';
 
@@ -38,6 +39,9 @@ const ADMIN_TOKEN = tokenFor(0x31);
 const CLIENT_ORDER_ID = uuid(850);
 const ORDER_ID = uuid(851);
 const FIXED_NOW = 1_786_280_200_000;
+const OPEN_SESSION_ID = uuid(870);
+const OTHER_OPEN_SESSION_ID = uuid(871);
+const CLOSED_SESSION_ID = uuid(872);
 
 function seedCatalogFixture(database) {
   const insertDevice = database.prepare(`
@@ -423,12 +427,14 @@ test('customer settings include the current table identity and active state', as
     assert.equal(settings.tableId, 1);
     assert.equal(settings.tableLabel, 'テーブル1');
     assert.equal(settings.tableIsActive, true);
+    assert.match(settings.visitContextId, /^v1_[0-9a-f]{64}$/);
   });
 });
 
 test('customer settings use a table reassigned after principal issuance', async () => {
   await withCatalogFixture(({ database, authenticator, catalog }) => {
     const principal = authenticate(authenticator, CUSTOMER_TOKEN);
+    const beforeReassignment = catalog.getDeviceSettings(principal).visitContextId;
     database.exec(`
       UPDATE tables
       SET assigned_customer_device_id = NULL, version = 2, updated_at_ms = 7002
@@ -442,6 +448,22 @@ test('customer settings use a table reassigned after principal issuance', async 
     const settings = catalog.getDeviceSettings(principal);
     assert.equal(settings.tableId, 2);
     assert.equal(settings.tableLabel, 'テーブル2');
+    assert.notEqual(settings.visitContextId, beforeReassignment);
+  });
+});
+
+test('visit context lookup stays stable while the first session opens and advances when it closes', async () => {
+  await withCatalogFixture(({ database, authenticator, catalog }) => {
+    const principal = authenticate(authenticator, CUSTOMER_TOKEN);
+    const initial = catalog.getDeviceSettings(principal).visitContextId;
+    assert.equal(database.prepare('SELECT COUNT(*) AS count FROM table_sessions').get().count, 0);
+    database.prepare(`
+      INSERT INTO table_sessions (session_id, table_id, opened_at_ms, version, created_at_ms, updated_at_ms)
+      VALUES (?, 1, 1001, 1, 1001, 1001)
+    `).run(uuid(909));
+    assert.equal(catalog.getDeviceSettings(principal).visitContextId, initial);
+    database.prepare('UPDATE table_sessions SET closed_at_ms = 1002, version = version + 1, updated_at_ms = 1002 WHERE session_id = ?').run(uuid(909));
+    assert.notEqual(catalog.getDeviceSettings(principal).visitContextId, initial);
   });
 });
 
@@ -567,6 +589,70 @@ test('customer menu excludes items belonging to hidden categories', async () => 
   await withCatalogFixture(({ authenticator, catalog }) => {
     const menu = catalog.getMenuForPrincipal(authenticate(authenticator, CUSTOMER_TOKEN));
     assert.equal(itemIds(menu).includes('secret-item'), false);
+  });
+});
+
+test('session-restricted products, variants, and now-empty categories are private to granted open sessions', async () => {
+  await withCatalogFixture(({ database, authenticator, catalog }) => {
+    database.prepare("UPDATE menu_items SET customer_visibility_mode = 'per_session' WHERE menu_item_id IN ('tamago', 'edamame', 'sold-out')").run();
+    const addSession = database.prepare(`
+      INSERT INTO table_sessions (session_id, table_id, opened_at_ms, closed_at_ms, version, created_at_ms, updated_at_ms)
+      VALUES (?, ?, 6000, ?, 1, 6000, 6000)
+    `);
+    addSession.run(OPEN_SESSION_ID, 1, null);
+    addSession.run(OTHER_OPEN_SESSION_ID, 2, null);
+    database.prepare(`
+      INSERT INTO menu_item_variants (variant_id, menu_item_id, name, volume_label, price_yen, sort_order, created_at_ms, updated_at_ms)
+      VALUES ('tamago-secret-variant', 'tamago', '常連用サイズ', '特別', 1, 1, 6000, 6000)
+    `).run();
+    database.prepare(`
+      INSERT INTO menu_item_serving_options (serving_option_id, menu_item_id, name, sort_order, created_at_ms, updated_at_ms)
+      VALUES ('tamago-secret-option', 'tamago', '常連用提供', 1, 6000, 6000)
+    `).run();
+
+    const access = createSessionMenuAccessRepository({ database, now: () => 7000 });
+    access.grantToSession(OPEN_SESSION_ID, 'tamago');
+
+    const firstVisit = catalog.getMenuForPrincipal(authenticate(authenticator, CUSTOMER_TOKEN));
+    assert.equal(firstVisit.items.some(({ menuItemId }) => menuItemId === 'tamago'), true);
+    assert.equal(firstVisit.items.find(({ menuItemId }) => menuItemId === 'tamago').variants.some(({ variantId }) => variantId === 'tamago-secret-variant'), true);
+    assert.equal(firstVisit.categories.some(({ categoryId }) => categoryId === 'recommended'), true);
+    assert.equal(JSON.stringify(firstVisit).includes('customer_visibility_mode'), false);
+    assert.equal(JSON.stringify(firstVisit).includes(OPEN_SESSION_ID), false);
+
+    const secondVisit = catalog.getMenuForPrincipal(authenticate(authenticator, SECOND_CUSTOMER_TOKEN));
+    assert.equal(secondVisit.items.some(({ menuItemId }) => ['tamago', 'edamame', 'sold-out'].includes(menuItemId)), false);
+    assert.equal(secondVisit.categories.some(({ categoryId }) => categoryId === 'recommended'), false);
+    assert.equal(JSON.stringify(secondVisit).includes('tamago-secret-variant'), false);
+    assert.equal(JSON.stringify(secondVisit).includes('常連用提供'), false);
+
+    database.prepare('UPDATE table_sessions SET closed_at_ms = 7001, updated_at_ms = 7001 WHERE session_id = ?').run(OPEN_SESSION_ID);
+    const afterClose = catalog.getMenuForPrincipal(authenticate(authenticator, CUSTOMER_TOKEN));
+    assert.equal(afterClose.items.some(({ menuItemId }) => menuItemId === 'tamago'), false);
+    assert.equal(afterClose.categories.some(({ categoryId }) => categoryId === 'recommended'), false);
+  });
+});
+
+test('session menu access requires an existing open session and clears old grants when returning to all tables', async () => {
+  await withCatalogFixture(({ database }) => {
+    database.prepare("UPDATE menu_items SET customer_visibility_mode = 'per_session' WHERE menu_item_id = 'tamago'").run();
+    database.prepare(`
+      INSERT INTO table_sessions (session_id, table_id, opened_at_ms, closed_at_ms, version, created_at_ms, updated_at_ms)
+      VALUES (?, 1, 6000, NULL, 1, 6000, 6000), (?, 1, 7000, 7001, 1, 7000, 7001)
+    `).run(OPEN_SESSION_ID, CLOSED_SESSION_ID);
+    const access = createSessionMenuAccessRepository({ database, now: () => 7100 });
+    assert.throws(() => access.grantToSession(uuid(873), 'tamago'), (error) => error.code === SESSION_MENU_ACCESS_ERROR_CODES.SESSION_NOT_FOUND);
+    assert.throws(() => access.grantToSession(CLOSED_SESSION_ID, 'tamago'), (error) => error.code === SESSION_MENU_ACCESS_ERROR_CODES.SESSION_CLOSED);
+    assert.equal(database.prepare('SELECT COUNT(*) AS count FROM table_sessions').get().count, 2);
+    access.grantToSession(OPEN_SESSION_ID, 'tamago');
+    access.grantToSession(OPEN_SESSION_ID, 'tamago');
+    assert.equal(database.prepare('SELECT COUNT(*) AS count FROM session_menu_item_grants').get().count, 1);
+    access.revokeFromSession(OPEN_SESSION_ID, 'tamago');
+    assert.equal(database.prepare('SELECT COUNT(*) AS count FROM session_menu_item_grants').get().count, 0);
+    access.grantToSession(OPEN_SESSION_ID, 'tamago');
+    access.setMenuItemVisibilityMode('tamago', 'all_tables');
+    assert.equal(database.prepare('SELECT COUNT(*) AS count FROM session_menu_item_grants').get().count, 0);
+    assert.equal(database.prepare('SELECT customer_visibility_mode FROM menu_items WHERE menu_item_id = ?').get('tamago').customer_visibility_mode, 'all_tables');
   });
 });
 
@@ -937,6 +1023,7 @@ test('authenticated principal flows through settings, menu, authorization, and o
     const result = orderRepository.createOrder({
       clientOrderId: CLIENT_ORDER_ID,
       authenticatedDeviceId: principal.deviceId,
+      visitContextId: settings.visitContextId,
       items: [{ menuItemId: menu.items[0].menuItemId, quantity: 1 }],
     });
 

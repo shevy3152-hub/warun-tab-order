@@ -10,11 +10,13 @@ import { once } from 'node:events';
 import { createDeviceAuthenticator } from '../src/auth/device-auth.mjs';
 import { initializeDatabase } from '../src/db/database.mjs';
 import { createCheckoutRepository } from '../src/checkout/checkout-repository.mjs';
+import { createSessionMenuAccessRepository } from '../src/catalog/session-menu-access-repository.mjs';
 import {
   ORDER_ERROR_CODES,
   OrderRepositoryError,
 } from '../src/orders/order-errors.mjs';
 import { createOrderRepository } from '../src/orders/order-repository.mjs';
+import { createCustomerVisitContextId } from '../src/orders/visit-context.mjs';
 
 const uuid = (number) => `00000000-0000-4000-8000-${String(number).padStart(12, '0')}`;
 
@@ -29,6 +31,9 @@ const UNKNOWN_DEVICE = uuid(99);
 const CLIENT_ORDER_A = uuid(101);
 const CLIENT_ORDER_B = uuid(102);
 const CLIENT_ORDER_C = uuid(103);
+const CLIENT_ORDER_D = uuid(104);
+const CLIENT_ORDER_E = uuid(105);
+const CLIENT_ORDER_F = uuid(106);
 const ORDER_A = uuid(201);
 const ORDER_B = uuid(202);
 const ORDER_C = uuid(203);
@@ -152,11 +157,31 @@ async function withFixture(run) {
 
 function makeRepository(database, options = {}) {
   const orderIds = [...(options.orderIds ?? [ORDER_A, ORDER_B, ORDER_C])];
-  return createOrderRepository({
+  const repository = createOrderRepository({
     database,
     now: options.now ?? (() => FIXED_NOW),
     idFactory: options.idFactory ?? (() => orderIds.shift()),
   });
+  const contextsByClientOrderId = new Map();
+  return {
+    ...repository,
+    createOrder(request) {
+      if (Object.hasOwn(request, 'visitContextId')) return repository.createOrder(request);
+      let visitContextId = contextsByClientOrderId.get(request.clientOrderId);
+      if (!visitContextId) {
+        visitContextId = currentVisitContext(database, request.authenticatedDeviceId);
+        if (visitContextId) contextsByClientOrderId.set(request.clientOrderId, visitContextId);
+      }
+      return repository.createOrder({ ...request, ...(visitContextId ? { visitContextId } : {}) });
+    },
+  };
+}
+
+function currentVisitContext(database, deviceId) {
+  const table = database.prepare('SELECT table_id, version FROM tables WHERE assigned_customer_device_id = ?').get(deviceId);
+  if (!table) return null;
+  const closed = database.prepare('SELECT session_id FROM table_sessions WHERE table_id = ? AND closed_at_ms IS NOT NULL ORDER BY rowid DESC LIMIT 1').get(table.table_id);
+  return createCustomerVisitContextId({ tableId: table.table_id, deviceId, assignmentVersion: table.version, lastClosedSessionId: closed?.session_id ?? null });
 }
 
 function orderRequest(overrides = {}) {
@@ -968,7 +993,8 @@ test('canonical JSON has fixed keys and sorted items', async () => {
         { menuItemId: 'beer', quantity: 1 },
       ],
     }));
-    const expected = `{"fingerprintVersion":1,"authenticatedDeviceId":"${DEVICE_A}","items":[{"menuItemId":"beer","quantity":1},{"menuItemId":"edamame","quantity":2}]}`;
+    const visitContextId = currentVisitContext(database, DEVICE_A);
+    const expected = `{"fingerprintVersion":4,"schemaVersion":1,"authenticatedDeviceId":"${DEVICE_A}","visitContextId":"${visitContextId}","items":[{"menuItemId":"beer","quantity":1},{"menuItemId":"edamame","quantity":2}]}`;
     assert.equal(result.order.canonicalRequestJson, expected);
     assert.equal(
       result.order.requestFingerprint,
@@ -1149,7 +1175,7 @@ test('customer device without a table assignment is rejected', async () => {
       () => makeRepository(database).createOrder(orderRequest({
         authenticatedDeviceId: DEVICE_UNASSIGNED,
       })),
-      ORDER_ERROR_CODES.DEVICE_NOT_ASSIGNED,
+      ORDER_ERROR_CODES.VISIT_CONTEXT_STALE,
     );
   });
 });
@@ -1160,7 +1186,7 @@ test('inactive assigned table is rejected', async () => {
       () => makeRepository(database).createOrder(orderRequest({
         authenticatedDeviceId: DEVICE_INACTIVE_TABLE,
       })),
-      ORDER_ERROR_CODES.TABLE_INACTIVE,
+      ORDER_ERROR_CODES.VISIT_CONTEXT_STALE,
     );
   });
 });
@@ -1184,6 +1210,176 @@ test('inactive menu item is treated as unavailable', async () => {
       })),
       ORDER_ERROR_CODES.MENU_ITEM_NOT_FOUND,
     );
+  });
+});
+
+test('per-session menu grants are enforced for new orders while normal session creation and exact replay remain unchanged', async () => {
+  await withFixture(({ database }) => {
+    let currentTime = FIXED_NOW;
+    const repository = makeRepository(database, {
+      now: () => currentTime,
+      orderIds: [ORDER_A, ORDER_B, ORDER_C, ...[204, 205, 206, 207, 208, 209, 210].map(uuid)],
+    });
+    database.prepare("UPDATE menu_items SET customer_visibility_mode = 'per_session' WHERE menu_item_id = 'edamame'").run();
+    assertOrderError(
+      () => repository.createOrder(orderRequest()),
+      ORDER_ERROR_CODES.MENU_ITEM_NOT_FOUND,
+    );
+    assert.equal(countRows(database, 'table_sessions'), 0, 'a rejected restricted-only first order must not leave an empty session');
+
+    const firstVisit = repository.createOrder(orderRequest({
+      items: [{ menuItemId: 'beer', quantity: 1 }],
+    }));
+    const otherTable = repository.createOrder(orderRequest({
+      clientOrderId: CLIENT_ORDER_B,
+      authenticatedDeviceId: DEVICE_B,
+      items: [{ menuItemId: 'beer', quantity: 1 }],
+    }));
+    assert.equal(firstVisit.idempotencyResult, 'created');
+    assert.ok(firstVisit.order.sessionId);
+    assert.notEqual(otherTable.order.sessionId, firstVisit.order.sessionId);
+
+    database.prepare(`
+      INSERT INTO menu_items (
+        menu_item_id, category_id, formal_name, kitchen_alias, price_yen,
+        sort_order, created_at_ms, updated_at_ms, customer_visibility_mode
+      ) VALUES ('limited', 'recommended', '架空の限定品', '架空限定', 700, 10, 1000, 1000, 'per_session')
+    `).run();
+    const access = createSessionMenuAccessRepository({ database, now: () => FIXED_NOW + 1 });
+    access.grantToSession(firstVisit.order.sessionId, 'edamame');
+
+    const acceptedRestricted = repository.createOrder(orderRequest({
+      clientOrderId: CLIENT_ORDER_C,
+      items: [{ menuItemId: 'edamame', quantity: 1 }],
+    }));
+    assert.equal(acceptedRestricted.idempotencyResult, 'created');
+    assert.equal(acceptedRestricted.order.sessionId, firstVisit.order.sessionId);
+
+    access.revokeFromSession(firstVisit.order.sessionId, 'edamame');
+    const exactReplay = repository.createOrder(orderRequest({
+      clientOrderId: CLIENT_ORDER_C,
+      items: [{ menuItemId: 'edamame', quantity: 1 }],
+    }));
+    assert.equal(exactReplay.idempotencyResult, 'replayed');
+    assert.equal(exactReplay.order.orderId, acceptedRestricted.order.orderId);
+    assert.equal(exactReplay.order.sessionId, firstVisit.order.sessionId);
+
+    const beforeRejectedRequests = {
+      orders: countRows(database, 'orders'),
+      items: countRows(database, 'order_items'),
+      events: countRows(database, 'event_log'),
+    };
+    const captureError = (action) => {
+      try { action(); } catch (error) { return error; }
+      assert.fail('Expected the order request to be rejected.');
+    };
+    const restrictedError = captureError(
+      () => repository.createOrder(orderRequest({
+        clientOrderId: CLIENT_ORDER_D,
+        items: [{ menuItemId: 'edamame', quantity: 1 }],
+      })),
+    );
+    assert.equal(restrictedError instanceof OrderRepositoryError, true);
+    assert.equal(restrictedError.code, ORDER_ERROR_CODES.MENU_ITEM_NOT_FOUND);
+    const unknownError = captureError(
+      () => repository.createOrder(orderRequest({
+        clientOrderId: CLIENT_ORDER_E,
+        items: [{ menuItemId: 'unknown', quantity: 1 }],
+      })),
+    );
+    assert.equal(unknownError instanceof OrderRepositoryError, true);
+    assert.equal(unknownError.code, ORDER_ERROR_CODES.MENU_ITEM_NOT_FOUND);
+    assert.equal(restrictedError.message, unknownError.message);
+    assert.doesNotMatch(restrictedError.message, /edamame|架空|per_session|table|session/i);
+
+    access.grantToSession(firstVisit.order.sessionId, 'edamame');
+    assertOrderError(
+      () => repository.createOrder(orderRequest({
+        clientOrderId: CLIENT_ORDER_F,
+        items: [
+          { menuItemId: 'edamame', quantity: 1 },
+          { menuItemId: 'limited', quantity: 1 },
+        ],
+      })),
+      ORDER_ERROR_CODES.MENU_ITEM_NOT_FOUND,
+    );
+    assertOrderError(
+      () => repository.createOrder(orderRequest({
+        clientOrderId: uuid(107),
+        authenticatedDeviceId: DEVICE_B,
+        items: [{ menuItemId: 'edamame', quantity: 1 }],
+      })),
+      ORDER_ERROR_CODES.MENU_ITEM_NOT_FOUND,
+    );
+    assert.deepEqual({
+      orders: countRows(database, 'orders'),
+      items: countRows(database, 'order_items'),
+      events: countRows(database, 'event_log'),
+    }, beforeRejectedRequests);
+
+    database.prepare('UPDATE table_sessions SET closed_at_ms = ?, updated_at_ms = ? WHERE session_id = ?')
+      .run(FIXED_NOW + 2, FIXED_NOW + 2, firstVisit.order.sessionId);
+    currentTime = FIXED_NOW + 3;
+    const nextVisit = repository.createOrder(orderRequest({
+      clientOrderId: uuid(108),
+      items: [{ menuItemId: 'beer', quantity: 1 }],
+    }));
+    assert.equal(nextVisit.idempotencyResult, 'created');
+    assert.notEqual(nextVisit.order.sessionId, firstVisit.order.sessionId);
+    assertOrderError(
+      () => repository.createOrder(orderRequest({
+        clientOrderId: uuid(109),
+        items: [{ menuItemId: 'edamame', quantity: 1 }],
+      })),
+      ORDER_ERROR_CODES.MENU_ITEM_NOT_FOUND,
+    );
+    assert.deepEqual({
+      orders: countRows(database, 'orders'),
+      items: countRows(database, 'order_items'),
+      events: countRows(database, 'event_log'),
+    }, { ...beforeRejectedRequests, orders: beforeRejectedRequests.orders + 1, items: beforeRejectedRequests.items + 1, events: beforeRejectedRequests.events + 1 });
+  });
+});
+
+test('visit context survives first-order session creation, but not a closed visit or terminal reassignment', async () => {
+  await withFixture(({ database }) => {
+    const ids = [ORDER_A, ORDER_B];
+    const repository = createOrderRepository({ database, now: () => FIXED_NOW, idFactory: () => ids.shift() });
+    const initialContext = currentVisitContext(database, DEVICE_A);
+    assert.equal(countRows(database, 'table_sessions'), 0, 'context lookup must not create an empty session');
+    assertOrderError(() => repository.createOrder(orderRequest()), ORDER_ERROR_CODES.VISIT_CONTEXT_STALE);
+    assert.equal(countRows(database, 'orders'), 0, 'a contextless legacy outbox cannot bind itself to the current visit');
+
+    const firstRequest = { ...orderRequest(), visitContextId: initialContext };
+    const created = repository.createOrder(firstRequest);
+    assert.equal(created.idempotencyResult, 'created');
+    assert.equal(countRows(database, 'table_sessions'), 1, 'the first normal order keeps creating its session');
+    assert.equal(currentVisitContext(database, DEVICE_A), initialContext, 'open-session creation does not change the visit identity');
+    assert.equal(repository.createOrder(firstRequest).idempotencyResult, 'replayed', 'same-visit retry returns the accepted result');
+
+    const session = database.prepare('SELECT session_id FROM table_sessions WHERE table_id = 1 AND closed_at_ms IS NULL').get();
+    database.prepare("UPDATE orders SET status = 'completed', completed_at_ms = ? WHERE session_id = ?").run(FIXED_NOW + 1, session.session_id);
+    database.prepare('UPDATE table_sessions SET closed_at_ms = ?, version = version + 1, updated_at_ms = ? WHERE session_id = ?')
+      .run(FIXED_NOW + 2, FIXED_NOW + 2, session.session_id);
+
+    const newVisitAttempt = { ...orderRequest({ clientOrderId: CLIENT_ORDER_B }), visitContextId: initialContext };
+    assertOrderError(() => repository.createOrder(newVisitAttempt), ORDER_ERROR_CODES.VISIT_CONTEXT_STALE);
+    assert.equal(countRows(database, 'orders'), 1, 'stale unsent work is never attached to the new visit');
+    const nextVisitContext = currentVisitContext(database, DEVICE_A);
+    assert.notEqual(nextVisitContext, initialContext);
+    assert.equal(repository.createOrder(firstRequest).idempotencyResult, 'replayed', 'accepted replay is checked before changed visit context');
+
+    const nextVisit = repository.createOrder({ ...orderRequest({ clientOrderId: CLIENT_ORDER_C }), visitContextId: nextVisitContext });
+    assert.equal(nextVisit.idempotencyResult, 'created');
+    assert.equal(countRows(database, 'table_sessions'), 2);
+
+    database.prepare('UPDATE tables SET assigned_customer_device_id = NULL, version = version + 1 WHERE table_id = 1').run();
+    database.prepare('UPDATE tables SET assigned_customer_device_id = ?, version = version + 1 WHERE table_id = 1').run(DEVICE_A);
+    assertOrderError(
+      () => repository.createOrder({ ...orderRequest({ clientOrderId: CLIENT_ORDER_D }), visitContextId: nextVisitContext }),
+      ORDER_ERROR_CODES.VISIT_CONTEXT_STALE,
+    );
+    assert.equal(repository.createOrder({ ...orderRequest({ clientOrderId: CLIENT_ORDER_C }), visitContextId: nextVisitContext }).idempotencyResult, 'replayed');
   });
 });
 
@@ -1415,7 +1611,7 @@ test('parallel worker threads converge the same clientOrderId to one order', asy
       databaseModuleUrl: new URL('../src/db/database.mjs', import.meta.url).href,
       repositoryModuleUrl: new URL('../src/orders/order-repository.mjs', import.meta.url).href,
       now: FIXED_NOW,
-      request: orderRequest(),
+      request: { ...orderRequest(), visitContextId: currentVisitContext(database, DEVICE_A) },
     };
     const workers = [ORDER_A, ORDER_B].map((orderId) => new Worker(workerSource, {
       eval: true,
@@ -1514,7 +1710,7 @@ test('closed repository rejects further use without closing the supplied databas
 test('default idFactory creates a valid UUID order id', async () => {
   await withFixture(({ database }) => {
     const repository = createOrderRepository({ database, now: () => FIXED_NOW });
-    const result = repository.createOrder(orderRequest());
+    const result = repository.createOrder({ ...orderRequest(), visitContextId: currentVisitContext(database, DEVICE_A) });
     assert.match(result.order.orderId, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
   });
 });

@@ -57,6 +57,7 @@ function customerDevice(overrides = {}) {
     tableId: 1,
     tableLabel: 'Table 1',
     tableIsActive: true,
+    visitContextId: `v1_${'a'.repeat(64)}`,
     tokenHash: 'must-not-leak',
     ...overrides,
   };

@@ -546,7 +546,11 @@ paths:
         '403':
           $ref: '#/components/responses/ReadOnlyAuthorizationFailed'
         '409':
-          $ref: '#/components/responses/OrderConflict'
+          description: clientOrderIdの意図競合、または来店・端末割当contextが古くスタッフ確認が必要。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReadOnlyErrorResponse'
         '413':
           $ref: '#/components/responses/PayloadTooLarge'
         '415':
@@ -1956,6 +1960,7 @@ components:
             - PAYLOAD_TOO_LARGE
             - UNSUPPORTED_MEDIA_TYPE
             - ORDER_CONFLICT
+            - VISIT_CONTEXT_STALE
             - SESSION_NOT_FOUND
             - SESSION_CONFLICT
             - SESSION_HAS_ACTIVE_ORDERS
@@ -2142,6 +2147,7 @@ components:
         - tableId
         - tableLabel
         - tableIsActive
+        - visitContextId
       properties:
         deviceId:
           $ref: '#/components/schemas/Uuid'
@@ -2167,6 +2173,9 @@ components:
           type: string
         tableIsActive:
           type: boolean
+        visitContextId:
+          type: string
+          pattern: '^v1_[0-9a-f]{64}$'
     KitchenDeviceConfig:
       type: object
       additionalProperties: false
@@ -2554,11 +2563,14 @@ components:
       properties:
         schemaVersion:
           type: integer
-          const: 1
+          enum: [1, 2, 3]
         clientOrderId:
           $ref: '#/components/schemas/Uuid'
         clientCreatedAtMs:
           $ref: '#/components/schemas/TimestampMs'
+        visitContextId:
+          type: string
+          pattern: '^v1_[0-9a-f]{64}$'
         items:
           type: array
           minItems: 1
@@ -2566,10 +2578,10 @@ components:
           items:
             $ref: '#/components/schemas/CreateOrderItem'
       description: |
-        deviceId、role、tableId、価格、正式名、合計、fingerprintは送信しない。
-        サーバーは認証済みdeviceIdとmenuItemId順に安定ソートしたitemsから、固定キー順・空白なしUTF-8 JSON
+        deviceId、role、tableId、価格、正式名、合計、fingerprintは送信しない。新規注文ではvisitContextIdを端末設定から取得して固定保存する。これは来店の変更検出用であり、認可根拠は常にサーバー側の現在状態から判定する。受付済みclientOrderIdの完全一致再送は来店識別子の検証前に冪等結果を返す。contextのない旧outboxも受付済みの完全一致再送に限り受理し、未受付注文は409 VISIT_CONTEXT_STALEにする。
+        contextのない旧注文は、認証済みdeviceIdとmenuItemId順に安定ソートしたitemsから、固定キー順・空白なしUTF-8 JSON
         {"fingerprintVersion":1,"authenticatedDeviceId":"<device UUID>","items":[{"menuItemId":"<id>","quantity":1}]}
-        を作り、SHA-256を小文字hexで計算する。保存済みfingerprintは内部監査・競合判定専用で、customer向けレスポンスには含めない。
+        を作り、SHA-256を小文字hexで計算する。context付き新規注文ではfingerprintVersion 4にschemaVersionとvisitContextIdを含める。保存済みfingerprintは内部監査・競合判定専用で、customer向けレスポンスには含めない。
     OrderReceipt:
       type: object
       additionalProperties: false

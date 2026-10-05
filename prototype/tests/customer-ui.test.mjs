@@ -214,6 +214,19 @@ test("cart cancel buttons decrement one quantity at a time", () => {
   assert.match(customerScreen, /を1点取り消す/);
 });
 
+
+test("API cart pins the first visit context and keeps stale cart contents available for discard", () => {
+  assert.match(customerScreen, /const captureCartVisitContext = \(\) => \{/);
+  assert.match(customerScreen, /cartContextCapturedRef\.current = true/);
+  assert.match(customerScreen, /getVisitContextId\(\)/);
+  assert.match(customerScreen, /const pinnedVisitContextId = cartVisitContextIdRef\.current/);
+  assert.match(customerScreen, /enqueue\(\{ visitContextId: pinnedVisitContextId/);
+  assert.match(customerScreen, /setCartContextStale\(true\)[\s\S]*setModal\(null\)/);
+  assert.match(customerScreen, /カート内容を確認して破棄してください/);
+  assert.match(customerScreen, /onClick=\{discardStaleCart\}/);
+  assert.match(customerScreen, /disabled=\{!cartCount \|\| cartContextLoading \|\| cartContextStale\}/);
+  assert.match(styles, /\.cart-context-warning \{[^}]*border: 2px solid var\(--red\)/);
+});
 test("A90 landscape keeps product information readable beside a compact cart", () => {
   const a90Styles = styles.slice(styles.indexOf("@media (max-width: 1350px)"), styles.indexOf("@media (orientation: landscape) and (max-height: 700px)"));
   assert.match(a90Styles, /\.customer-content \{[\s\S]*grid-template-columns: minmax\(0, 1fr\) clamp\(280px, 30vw, 320px\)/);
@@ -739,4 +752,15 @@ test("production history requires an authenticated API and never falls back to l
   assert.match(historyRoute, /fetchKitchenOrderHistory/);
   assert.match(historyRoute, /apiMode=\{!explicitDemo\}/);
   assert.match(historyScreen, /completedToday\.length/);
+});
+
+test('session limited menu administration separates item mode from current visit permission', async () => {
+  const adminApi = await readFile(new URL('../src/admin-pairing.js', import.meta.url), 'utf8');
+  assert.match(appSource, /customerVisibilityMode.*per_session/);
+  assert.match(appSource, /来店ごとに許可/);
+  assert.match(appSource, /SessionMenuAccessPanel/);
+  assert.match(appSource, /来店開始・許可/);
+  assert.match(appSource, /期待|現在の来店に許可/);
+  assert.match(appSource, /expectedMenuItemIds: table\.openSession\.menuItemIds/);
+  assert.match(adminApi, /admin\/session-menu-access\/grants/);
 });

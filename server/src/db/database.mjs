@@ -5,7 +5,7 @@ import { DatabaseSync } from 'node:sqlite';
 
 export const LEGACY_SCHEMA_VERSION = 1;
 export const SESSION_SCHEMA_VERSION = 2;
-export const SCHEMA_VERSION = 17;
+export const SCHEMA_VERSION = 18;
 
 export const REQUIRED_TABLES = Object.freeze([
   'system_state',
@@ -28,6 +28,7 @@ export const REQUIRED_TABLES = Object.freeze([
   'order_items',
   'staff_calls',
   'event_log',
+  'session_menu_item_grants',
 ]);
 
 export const REQUIRED_INDEXES = Object.freeze([
@@ -51,6 +52,7 @@ export const REQUIRED_INDEXES = Object.freeze([
   'idx_event_log_type_event',
   'idx_event_log_aggregate',
   'idx_menu_item_image_layouts_item',
+  'idx_session_menu_item_grants_item_session',
   'idx_ride_service_contacts_type_visible_sort',
   'idx_ride_service_contacts_type_sort',
   'uq_checkout_requests_active_session',
@@ -147,6 +149,9 @@ export const DEFAULT_V16_MIGRATION_PATH = resolve(
 );
 export const DEFAULT_V17_MIGRATION_PATH = resolve(
   moduleDirectory, '..', '..', '..', 'docs', 'schema-v17-migration.sql',
+);
+export const DEFAULT_V18_MIGRATION_PATH = resolve(
+  moduleDirectory, '..', '..', '..', 'docs', 'schema-v18-migration.sql',
 );
 
 export class DatabaseInitializationError extends Error {
@@ -317,6 +322,7 @@ function validateLegacySchema(database) {
     'menu_item_image_layouts',
     'table_sessions', 'menu_item_details', 'menu_item_variants', 'menu_item_serving_options',
     'checkout_requests', 'checkout_adjustments',
+    'session_menu_item_grants',
   ].includes(name));
   const legacyIndexes = REQUIRED_INDEXES.filter((name) => ![
     'idx_ride_service_contacts_type_visible_sort',
@@ -332,6 +338,7 @@ function validateLegacySchema(database) {
     'idx_checkout_requests_status_requested',
     'idx_checkout_requests_session',
     'idx_checkout_adjustments_request_sort',
+    'idx_session_menu_item_grants_item_session',
   ].includes(name));
   legacyIndexes.push('uq_order_items_order_menu');
   const legacyTriggers = REQUIRED_TRIGGERS.filter((name) => ![
@@ -367,6 +374,7 @@ function validateSchemaV2(database) {
     'menu_item_image_layouts',
     'menu_item_details', 'menu_item_variants', 'menu_item_serving_options',
     'checkout_requests', 'checkout_adjustments',
+    'session_menu_item_grants',
   ].includes(name));
   const indexes = REQUIRED_INDEXES.filter((name) => ![
     'idx_ride_service_contacts_type_visible_sort',
@@ -380,6 +388,7 @@ function validateSchemaV2(database) {
     'idx_checkout_requests_status_requested',
     'idx_checkout_requests_session',
     'idx_checkout_adjustments_request_sort',
+    'idx_session_menu_item_grants_item_session',
   ].includes(name));
   indexes.push('uq_order_items_order_menu');
   assertRequiredNames(schemaObjectNames(database, 'table'), tables, 'tables');
@@ -524,6 +533,14 @@ function migrateSchemaV16ToV17(database, migrationPath) {
   catch (error) {
     try { if (database.isTransaction) database.exec('ROLLBACK;'); } catch {}
     throw new DatabaseInitializationError('MIGRATION_FAILED', 'The customer-theme schema migration failed.', { cause: error });
+  }
+}
+
+function migrateSchemaV17ToV18(database, migrationPath) {
+  try { database.exec(readFileSync(migrationPath, 'utf8')); }
+  catch (error) {
+    try { if (database.isTransaction) database.exec('ROLLBACK;'); } catch {}
+    throw new DatabaseInitializationError('MIGRATION_FAILED', 'The session menu visibility schema migration failed.', { cause: error });
   }
 }
 
@@ -736,6 +753,7 @@ function validateSchema(database) {
   assertRequiredNames(tableColumns(database, 'order_item_cancellation_events'), ['cancellation_event_id', 'order_id', 'order_item_id', 'action', 'actor_device_id', 'actor_label_snapshot', 'occurred_at_ms', 'reason', 'is_served_snapshot', 'served_at_ms_snapshot', 'served_by_device_id_snapshot', 'operation_id'], 'order item cancellation event columns');
   assertRequiredNames(tableColumns(database, 'categories'), ['section_key'], 'categories columns');
   assertRequiredNames(tableColumns(database, 'menu_items'), ['ordering_mode'], 'menu_items columns');
+  assertRequiredNames(tableColumns(database, 'menu_items'), ['customer_visibility_mode'], 'menu_items visibility columns');
   assertRequiredNames(tableColumns(database, 'menu_item_variants'), ['temperature_options_json'], 'menu_item_variants columns');
   assertRequiredNames(tableColumns(database, 'order_items'), ['temperature_snapshot', 'adjusted_unit_price_yen'], 'order_items columns');
   assertRequiredNames(tableColumns(database, 'order_item_price_adjustments'), ['adjustment_id', 'order_id', 'order_item_id', 'previous_unit_price_yen', 'adjusted_unit_price_yen', 'quantity', 'created_at_ms', 'actor_device_id'], 'order item price adjustment columns');
@@ -788,7 +806,7 @@ function validateSchema(database) {
     .get();
 
   if (
-    ![SCHEMA_VERSION - 1, SCHEMA_VERSION].includes(state?.schema_version)
+    ![16, 17].includes(state?.schema_version)
     || typeof state?.event_epoch !== 'string'
     || state.event_epoch.length !== 36
   ) {
@@ -867,6 +885,7 @@ export function initializeDatabase({
   v15MigrationPath = DEFAULT_V15_MIGRATION_PATH,
   v16MigrationPath = DEFAULT_V16_MIGRATION_PATH,
   v17MigrationPath = DEFAULT_V17_MIGRATION_PATH,
+  v18MigrationPath = DEFAULT_V18_MIGRATION_PATH,
 } = {}) {
   const resolvedDatabasePath = resolveFilePath(databasePath, 'databasePath');
   const resolvedSchemaPath = resolveFilePath(schemaPath, 'schemaPath');
@@ -885,6 +904,7 @@ export function initializeDatabase({
   const resolvedV15MigrationPath = resolveFilePath(v15MigrationPath, 'v15MigrationPath');
   const resolvedV16MigrationPath = resolveFilePath(v16MigrationPath, 'v16MigrationPath');
   const resolvedV17MigrationPath = resolveFilePath(v17MigrationPath, 'v17MigrationPath');
+  const resolvedV18MigrationPath = resolveFilePath(v18MigrationPath, 'v18MigrationPath');
 
   mkdirSync(dirname(resolvedDatabasePath), { recursive: true });
 
@@ -983,6 +1003,11 @@ export function initializeDatabase({
     }
     if (currentVersion === 16) {
       migrateSchemaV16ToV17(database, resolvedV17MigrationPath);
+      enableWriteAheadLogging(database);
+      currentVersion = 17;
+    }
+    if (currentVersion === 17) {
+      migrateSchemaV17ToV18(database, resolvedV18MigrationPath);
       enableWriteAheadLogging(database);
       currentVersion = SCHEMA_VERSION;
     }

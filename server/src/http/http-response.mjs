@@ -47,7 +47,7 @@ const EVENT_TYPES_BY_ROLE = Object.freeze({
     'customer_theme.updated',
   ]),
 });
-const SUPPORTED_SCHEMA_VERSION = 17;
+const SUPPORTED_SCHEMA_VERSION = 18;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const OPAQUE_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
 
@@ -519,6 +519,8 @@ export function mapDeviceConfigResponse(settings) {
     response.tableId = requireInteger(settings.tableId, 1);
     response.tableLabel = requireString(settings.tableLabel);
     response.tableIsActive = requireBoolean(settings.tableIsActive);
+    if (typeof settings.visitContextId !== 'string' || !/^v1_[0-9a-f]{64}$/.test(settings.visitContextId)) throw invalidDto();
+    response.visitContextId = settings.visitContextId;
     if (!response.tableIsActive) throw invalidDto();
   }
 

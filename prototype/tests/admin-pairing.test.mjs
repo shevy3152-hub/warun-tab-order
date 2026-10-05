@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { createAdminRideGuidanceContact, deleteAdminRideGuidanceContact, fetchAdminCheckoutRequests, fetchAdminCustomerTheme, fetchAdminCustomerThemeConfig, fetchAdminRideGuidance, saveAdminCustomerTheme, saveAdminCustomerThemeConfig, saveAdminRideGuidanceOrdering, saveAdminRideGuidancePickup, updateAdminRideGuidanceContact, fetchAdminBusinessHours, saveAdminBusinessHours, saveAdminCategory, saveAdminMenuItem, saveAdminMenuOrdering } from '../src/admin-pairing.js';
+import { createAdminRideGuidanceContact, deleteAdminRideGuidanceContact, fetchAdminCheckoutRequests, fetchAdminCustomerTheme, fetchAdminCustomerThemeConfig, fetchAdminRideGuidance, saveAdminCustomerTheme, saveAdminCustomerThemeConfig, saveAdminRideGuidanceOrdering, saveAdminRideGuidancePickup, updateAdminRideGuidanceContact, fetchAdminBusinessHours, saveAdminBusinessHours, saveAdminCategory, saveAdminMenuItem, saveAdminMenuOrdering, fetchAdminSessionMenuAccess, allowAdminSessionMenuItem, revokeAdminSessionMenuItem } from '../src/admin-pairing.js';
 
 const env = {
   WARUN_ADMIN_API_TOKEN: 'admin-token-for-test',
@@ -232,4 +232,43 @@ test('ride-guidance admin client preserves 409, 400, and 401 without reporting s
       (error) => error.status === status && error.code === code,
     );
   }
+});
+
+test('admin menu item saves the independent customer visibility mode', async () => {
+  let captured;
+  await saveAdminMenuItem({
+    env,
+    item: { id: 'regulars', categoryId: 'drink', name: '常連向け', kitchenAlias: '常連向け', price: 800, customerVisibilityMode: 'per_session', variants: [], servingOptions: [], detail: { enabled: false } },
+    fetchImpl: async (url, options) => {
+      captured = { url, options };
+      return { ok: true, json: async () => ({ menuItemId: 'regulars', version: 2, eventEpoch: '00000000-0000-4000-8000-000000000001', eventId: 8 }) };
+    },
+  });
+  assert.equal(JSON.parse(captured.options.body).customerVisibilityMode, 'per_session');
+});
+
+test('admin visit grant clients use the authenticated admin API and carry a stale-screen grant snapshot', async () => {
+  const sessionId = '00000000-0000-4000-8000-000000000009';
+  const tables = [{ tableId: 1, label: 'テーブル1', openSession: { sessionId, openedAtMs: 1, version: 1, menuItemIds: ['regulars'] } }];
+  let captured;
+  assert.deepEqual(await fetchAdminSessionMenuAccess({ env, fetchImpl: async (url, options) => {
+    captured = { url, options };
+    return { ok: true, json: async () => ({ tables }) };
+  } }), { tables });
+  assert.equal(captured.url, `${env.WARUN_API_BASE}/admin/session-menu-access`);
+  assert.equal(captured.options.headers.Authorization, 'Bearer admin-token-for-test');
+
+  await allowAdminSessionMenuItem({ env, tableId: 1, menuItemId: 'regulars', expectedSessionId: sessionId, expectedMenuItemIds: ['regulars'], fetchImpl: async (url, options) => {
+    captured = { url, options };
+    return { ok: true, json: async () => ({ tableId: 1, sessionId, menuItemId: 'regulars', granted: true }) };
+  } });
+  assert.equal(captured.options.method, 'POST');
+  assert.deepEqual(JSON.parse(captured.options.body).expectedMenuItemIds, ['regulars']);
+
+  await revokeAdminSessionMenuItem({ env, tableId: 1, menuItemId: 'regulars', expectedSessionId: sessionId, expectedMenuItemIds: ['regulars'], fetchImpl: async (url, options) => {
+    captured = { url, options };
+    return { ok: true, json: async () => ({ tableId: 1, sessionId, menuItemId: 'regulars', granted: false }) };
+  } });
+  assert.equal(captured.options.method, 'PUT');
+  assert.deepEqual(JSON.parse(captured.options.body).expectedMenuItemIds, ['regulars']);
 });

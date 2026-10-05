@@ -107,7 +107,7 @@ export async function claimCustomerDevice({ store, baseUrl, pairingCode, deviceI
   return { deviceId, config: body.config };
 }
 
-export function runtimeForCustomerCredentials({ globalObject = globalThis, baseUrl, token } = {}) {
+export function runtimeForCustomerCredentials({ globalObject = globalThis, baseUrl, token, config } = {}) {
   return {
     ...globalObject,
     location: globalObject.location,
@@ -116,5 +116,6 @@ export function runtimeForCustomerCredentials({ globalObject = globalThis, baseU
     WARUN_ORDER_MODE: "api",
     WARUN_API_BASE: baseUrl,
     WARUN_API_TOKEN: token,
+    WARUN_VISIT_CONTEXT_ID: config?.visitContextId,
   };
 }

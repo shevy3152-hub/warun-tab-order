@@ -413,6 +413,7 @@ export async function saveAdminMenuItem({ env = globalThis, item, expectedVersio
       priceYen: item.price,
       isSoldOut: Boolean(item.isSoldOut),
       orderingMode: item.orderingMode === "reservation_only" ? "reservation_only" : "normal",
+      customerVisibilityMode: item.customerVisibilityMode === "per_session" ? "per_session" : "all_tables",
       isActive: item.isActive !== false,
       sortOrder: item.sortOrder ?? 0,
       imageUri: item.imageUri ?? null,
@@ -577,4 +578,34 @@ export async function saveAdminRideGuidanceOrdering({ env = globalThis, type, co
   });
   if (body?.type !== type || !Array.isArray(body.contacts)) throw new AdminPairingError("連絡先の並び替え応答が不正です。", { status: 503, code: "API_UNAVAILABLE" });
   return body;
+}
+
+export async function fetchAdminSessionMenuAccess({ env = globalThis, fetchImpl = env.fetch } = {}) {
+  const { token, base, fetchImpl: request } = assertAdminTransport({ env, fetchImpl });
+  const response = await request(`${base}/admin/session-menu-access`, { headers: { Accept: 'application/json', Authorization: `Bearer ${token}` } });
+  if (!response.ok) await responseError(response, '来店限定商品の状態を取得できません。', 'SESSION_MENU_ACCESS_REQUEST_FAILED');
+  const body = await response.json();
+  if (!Array.isArray(body?.tables) || body.tables.some((table) => !Number.isSafeInteger(table.tableId) || typeof table.label !== 'string')) {
+    throw new AdminPairingError('来店限定商品の応答が不正です。', { status: 503, code: 'API_UNAVAILABLE' });
+  }
+  return body;
+}
+
+async function mutateAdminSessionMenuAccess({ env = globalThis, method, body, fetchImpl = env.fetch } = {}) {
+  const { token, base, fetchImpl: request } = assertAdminTransport({ env, fetchImpl });
+  const response = await request(`${base}/admin/session-menu-access/grants`, {
+    method,
+    headers: { Accept: 'application/json', 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) await responseError(response, '来店限定商品の許可を変更できません。', response.status === 409 ? 'SESSION_MENU_ACCESS_CONFLICT' : 'SESSION_MENU_ACCESS_REQUEST_FAILED');
+  return response.json();
+}
+
+export async function allowAdminSessionMenuItem({ env = globalThis, tableId, menuItemId, expectedSessionId = null, expectedMenuItemIds = [], startIfMissing = false, fetchImpl = env.fetch } = {}) {
+  return mutateAdminSessionMenuAccess({ env, method: 'POST', body: { tableId, menuItemId, expectedSessionId, expectedMenuItemIds, startIfMissing }, fetchImpl });
+}
+
+export async function revokeAdminSessionMenuItem({ env = globalThis, tableId, menuItemId, expectedSessionId, expectedMenuItemIds = [], fetchImpl = env.fetch } = {}) {
+  return mutateAdminSessionMenuAccess({ env, method: 'PUT', body: { tableId, menuItemId, expectedSessionId, expectedMenuItemIds }, fetchImpl });
 }

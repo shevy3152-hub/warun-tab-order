@@ -12,6 +12,6 @@ export async function bootstrapCustomerOrderClient({ globalObject = globalThis, 
 
   onConfig?.(credentials.config ?? null);
   const baseUrl = new URL("/v1", globalObject.location.origin).toString().replace(/\/+$/, "");
-  const runtime = runtimeForCustomerCredentials({ globalObject, baseUrl, token: credentials.token });
+  const runtime = runtimeForCustomerCredentials({ globalObject, baseUrl, token: credentials.token, config: credentials.config });
   return createClient({ global: runtime, indexedDB: globalObject.indexedDB });
 }

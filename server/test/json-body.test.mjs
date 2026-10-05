@@ -246,6 +246,15 @@ test('validates schemaVersion, clientOrderId, and clientCreatedAtMs', () => {
   }
 });
 
+test('accepts optional opaque visit context for compatibility replays and rejects malformed context', () => {
+  const visitContextId = `v1_${'a'.repeat(64)}`;
+  assert.equal(parseOrderJsonText(JSON.stringify(validOrder({ visitContextId }))).visitContextId, visitContextId);
+  assert.throws(() => parseOrderJsonText(JSON.stringify(validOrder({ visitContextId: 'table-1-session-1' }))), (error) => (
+    assertBodyError(error, ORDER_JSON_BODY_ERROR_CODES.INVALID_ORDER_REQUEST, 400)
+  ));
+  assert.equal(Object.hasOwn(parseOrderJsonText(JSON.stringify(validOrder())), 'visitContextId'), false);
+});
+
 test('schemaVersion 2 accepts structured variants and keeps distinct selections separate', () => {
   const result = parseOrderJsonText(JSON.stringify(validOrder({
     schemaVersion: 2,

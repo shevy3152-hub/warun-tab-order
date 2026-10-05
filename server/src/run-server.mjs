@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 
 import { createDeviceAuthenticator } from "./auth/device-auth.mjs";
 import { createCatalogRepository } from "./catalog/catalog-repository.mjs";
+import { createSessionMenuAccessRepository } from "./catalog/session-menu-access-repository.mjs";
 import { createCheckoutRepository } from "./checkout/checkout-repository.mjs";
 import { createBusinessHoursRepository } from "./business-hours/business-hours-repository.mjs";
 import { createCustomerThemeRepository } from "./customer-theme/customer-theme-repository.mjs";
@@ -109,6 +110,7 @@ export function createWarunServer({ databasePath, runtimeInfo = undefined, now =
   const { database } = connection;
   const authenticator = createDeviceAuthenticator({ database });
   const catalog = createCatalogRepository({ database });
+  const sessionMenuAccess = createSessionMenuAccessRepository({ database, now });
   const businessHours = createBusinessHoursRepository({ database, now });
   const customerTheme = createCustomerThemeRepository({ database, now });
   const rideGuidance = createRideGuidanceRepository({ database, now });
@@ -135,6 +137,7 @@ export function createWarunServer({ databasePath, runtimeInfo = undefined, now =
     database,
     authenticator,
     catalog,
+    sessionMenuAccess,
     eventRepository,
     orderRepository,
     snapshotService,
@@ -155,6 +158,7 @@ export function createWarunServer({ databasePath, runtimeInfo = undefined, now =
     sseHub.close();
     authenticator.close();
     catalog.close();
+    sessionMenuAccess.close?.();
     businessHours.close();
     customerTheme.close();
     rideGuidance.close();
