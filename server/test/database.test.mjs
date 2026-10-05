@@ -28,6 +28,8 @@ const EXPECTED_TABLES = [
   'order_item_quantity_events',
   'staff_calls',
   'event_log',
+  'customer_theme_settings',
+  'customer_theme_variants',
 ];
 
 const EXPECTED_INDEXES = [
@@ -183,24 +185,26 @@ function createV14Database(databasePath) {
   return database;
 }
 
-test('new database creates its parent directory and applies schema v16', async () => {
+test('new database creates its parent directory and applies schema v17', async () => {
   await withTemporaryDatabase(({ databasePath }) => {
     const connection = initializeDatabase({ databasePath });
     assert.equal(existsSync(databasePath), true);
-    assert.equal(connection.schemaVersion, 16);
+    assert.equal(connection.schemaVersion, 17);
     connection.close();
   });
 });
 
-test('new database records PRAGMA user_version = 16', async () => {
+test('new database records PRAGMA user_version = 17', async () => {
   await withTemporaryDatabase(({ databasePath }) => {
     const connection = initializeDatabase({ databasePath });
-    assert.equal(pragmaValue(connection.database, 'user_version'), 16);
+    assert.equal(pragmaValue(connection.database, 'user_version'), 17);
+    assert.equal(connection.database.prepare('SELECT COUNT(*) AS count FROM customer_theme_variants').get().count, 2);
+    assert.equal(connection.database.prepare("SELECT prompt_text LIKE '%文字%' AS has_prompt FROM customer_theme_variants WHERE theme_key = 'camellia'").get().has_prompt, 1);
     connection.close();
   });
 });
 
-test('schema v14 migrates to v16 without changing order-time snapshots or existing data', async () => {
+test('schema v14 migrates to v17 without changing order-time snapshots or existing data', async () => {
   await withTemporaryDatabase(({ databasePath }) => {
     const v14 = createV14Database(databasePath);
     assert.equal(pragmaValue(v14, 'user_version'), 14);
@@ -217,8 +221,8 @@ test('schema v14 migrates to v16 without changing order-time snapshots or existi
 
     const connection = initializeDatabase({ databasePath });
     const database = connection.database;
-    assert.equal(connection.schemaVersion, 16);
-    assert.equal(pragmaValue(database, 'user_version'), 16);
+    assert.equal(connection.schemaVersion, 17);
+    assert.equal(pragmaValue(database, 'user_version'), 17);
     assert.equal(database.prepare('SELECT schema_version FROM system_state').get().schema_version, 16);
     assert.deepEqual({ ...database.prepare('SELECT unit_price_yen_snapshot, line_total_yen, is_cancelled FROM order_items WHERE order_id = ?').get(ORDER_ID) }, {
       unit_price_yen_snapshot: 380,
@@ -232,6 +236,81 @@ test('schema v14 migrates to v16 without changing order-time snapshots or existi
     assert.equal(database.prepare('PRAGMA integrity_check').get().integrity_check, 'ok');
     assert.deepEqual(database.prepare('PRAGMA foreign_key_check').all(), []);
     connection.close();
+  });
+});
+
+test('schema v17 migration adds theme objects without rebuilding event infrastructure', async () => {
+  await withTemporaryDatabase(({ databasePath }) => {
+    const v16 = createV14Database(databasePath);
+    v16.exec(readFileSync(new URL('../../docs/schema-v15-migration.sql', import.meta.url), 'utf8'));
+    v16.exec(readFileSync(new URL('../../docs/schema-v16-migration.sql', import.meta.url), 'utf8'));
+    v16.exec(`
+      CREATE INDEX idx_event_log_review_preserve ON event_log (created_at_ms);
+      CREATE TRIGGER trg_event_log_review_preserve
+      AFTER INSERT ON event_log
+      BEGIN
+        SELECT NEW.event_id;
+      END;
+    `);
+    const beforeObjects = v16.prepare(`
+      SELECT type, name, sql
+      FROM sqlite_schema
+      WHERE name IN ('event_log', 'system_state', 'idx_event_log_review_preserve', 'trg_event_log_review_preserve')
+      ORDER BY type, name
+    `).all();
+    const beforeCounts = {
+      eventLog: v16.prepare('SELECT COUNT(*) AS count FROM event_log').get().count,
+      systemState: v16.prepare('SELECT COUNT(*) AS count FROM system_state').get().count,
+    };
+    v16.close();
+
+    const connection = initializeDatabase({ databasePath });
+    const afterObjects = connection.database.prepare(`
+      SELECT type, name, sql
+      FROM sqlite_schema
+      WHERE name IN ('event_log', 'system_state', 'idx_event_log_review_preserve', 'trg_event_log_review_preserve')
+      ORDER BY type, name
+    `).all();
+    assert.deepEqual(afterObjects, beforeObjects);
+    assert.deepEqual({
+      eventLog: connection.database.prepare('SELECT COUNT(*) AS count FROM event_log').get().count,
+      systemState: connection.database.prepare('SELECT COUNT(*) AS count FROM system_state').get().count,
+    }, beforeCounts);
+    assert.equal(pragmaValue(connection.database, 'user_version'), 17);
+    assert.equal(connection.database.prepare('SELECT schema_version FROM system_state').get().schema_version, 16);
+    assert.equal(connection.database.prepare('SELECT COUNT(*) AS count FROM customer_theme_variants').get().count, 2);
+    connection.close();
+  });
+});
+
+test('schema v17 migration rolls back atomically after a failed migration script', async () => {
+  await withTemporaryDatabase(({ directory, databasePath }) => {
+    const v16 = createV14Database(databasePath);
+    v16.exec(readFileSync(new URL('../../docs/schema-v15-migration.sql', import.meta.url), 'utf8'));
+    v16.exec(readFileSync(new URL('../../docs/schema-v16-migration.sql', import.meta.url), 'utf8'));
+    assert.equal(pragmaValue(v16, 'user_version'), 16);
+    v16.close();
+
+    const failedMigrationPath = join(directory, 'schema-v17-failing.sql');
+    writeFileSync(failedMigrationPath, `
+      BEGIN IMMEDIATE;
+      CREATE TABLE migration_partial (id INTEGER PRIMARY KEY);
+      THIS IS NOT VALID SQL;
+      COMMIT;
+    `);
+
+    assert.throws(
+      () => initializeDatabase({ databasePath, v17MigrationPath: failedMigrationPath }),
+      (error) => error.code === 'MIGRATION_FAILED',
+    );
+
+    const recovered = new DatabaseSync(databasePath);
+    assert.equal(pragmaValue(recovered, 'user_version'), 16);
+    assert.equal(recovered.prepare('SELECT schema_version FROM system_state').get().schema_version, 16);
+    assert.equal(recovered.prepare("SELECT COUNT(*) AS count FROM sqlite_schema WHERE type = 'table' AND name = 'customer_theme_settings'").get().count, 0);
+    assert.equal(recovered.prepare("SELECT COUNT(*) AS count FROM sqlite_schema WHERE type = 'table' AND name = 'customer_theme_variants'").get().count, 0);
+    assert.equal(recovered.prepare("SELECT COUNT(*) AS count FROM sqlite_schema WHERE type = 'table' AND name = 'migration_partial'").get().count, 0);
+    recovered.close();
   });
 });
 
@@ -263,8 +342,8 @@ test('schema v7 migrates to v8 with every existing menu item in normal mode', as
     raw.close();
 
     const connection = initializeDatabase({ databasePath });
-    assert.equal(connection.schemaVersion, 16);
-    assert.equal(pragmaValue(connection.database, 'user_version'), 16);
+    assert.equal(connection.schemaVersion, 17);
+    assert.equal(pragmaValue(connection.database, 'user_version'), 17);
     assert.equal(connection.database.prepare('SELECT schema_version FROM system_state').get().schema_version, 16);
     assert.equal(connection.database.prepare("SELECT COUNT(*) AS count FROM menu_items WHERE ordering_mode = 'normal'").get().count, 1);
     assert.equal(connection.database.prepare('SELECT COUNT(*) AS count FROM menu_items').get().count, 1);
@@ -327,8 +406,8 @@ test('schema v9 clone migrates through v10, v11, and v12 with notice defaults an
     raw.close();
 
     const connection = initializeDatabase({ databasePath });
-    assert.equal(connection.schemaVersion, 16);
-    assert.equal(pragmaValue(connection.database, 'user_version'), 16);
+    assert.equal(connection.schemaVersion, 17);
+    assert.equal(pragmaValue(connection.database, 'user_version'), 17);
     const noticeDefaults = connection.database.prepare('SELECT notice_text, notice_enabled FROM business_hours').get();
     assert.equal(noticeDefaults.notice_text, '');
     assert.equal(noticeDefaults.notice_enabled, 0);
@@ -370,16 +449,17 @@ test('synchronous mode is FULL', async () => {
   });
 });
 
-test('a valid schema v16 database can be closed and reopened', async () => {
+test('a valid schema v17 database can be closed and reopened', async () => {
   await withTemporaryDatabase(({ databasePath }) => {
     initializeDatabase({ databasePath }).close();
     const reopened = initializeDatabase({ databasePath });
-    assert.equal(reopened.schemaVersion, 16);
+    assert.equal(reopened.schemaVersion, 17);
+    assert.equal(reopened.database.prepare('SELECT COUNT(*) AS count FROM customer_theme_settings').get().count, 0);
     reopened.close();
   });
 });
 
-test('reopening schema v16 preserves existing data', async () => {
+test('reopening schema v17 preserves existing data', async () => {
   await withTemporaryDatabase(({ databasePath }) => {
     const first = initializeDatabase({ databasePath });
     first.database.exec(`
@@ -510,8 +590,8 @@ test('legacy schema v1 migrates through schema v10 and assigns existing orders t
       WHERE order_id = ?
     `).get(ORDER_ID);
 
-    assert.equal(connection.schemaVersion, 16);
-    assert.equal(pragmaValue(connection.database, 'user_version'), 16);
+    assert.equal(connection.schemaVersion, 17);
+    assert.equal(pragmaValue(connection.database, 'user_version'), 17);
     assert.equal(connection.database.prepare('SELECT schema_version FROM system_state').get().schema_version, 16);
     assert.deepEqual({
       orders: connection.database.prepare('SELECT COUNT(*) AS count FROM orders').get().count,
@@ -584,8 +664,8 @@ test('schema v4 fixture migrates through the formal v7 path while preserving cat
 
     const connection = initializeDatabase({ databasePath: v4Path });
     const database = connection.database;
-    assert.equal(connection.schemaVersion, 16);
-    assert.equal(pragmaValue(database, 'user_version'), 16);
+    assert.equal(connection.schemaVersion, 17);
+    assert.equal(pragmaValue(database, 'user_version'), 17);
     assert.equal(database.prepare('PRAGMA integrity_check').get().integrity_check, 'ok');
     assert.deepEqual({
       orders: database.prepare('SELECT COUNT(*) AS count FROM orders').get().count,
@@ -662,11 +742,11 @@ test('invalid item quantities are rejected by CHECK constraints', async () => {
   });
 });
 
-test('schema versions newer than v16 are rejected without migration', async () => {
+test('schema versions newer than v17 are rejected without migration', async () => {
   await withTemporaryDatabase(({ directory }) => {
     const databasePath = join(directory, 'version-5.sqlite3');
     const raw = new DatabaseSync(databasePath);
-    raw.exec('PRAGMA user_version = 17;');
+    raw.exec('PRAGMA user_version = 18;');
     raw.close();
 
     assert.throws(

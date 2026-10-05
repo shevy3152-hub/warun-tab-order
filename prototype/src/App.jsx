@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowLeft,
   ArrowRight,
@@ -14,6 +14,7 @@ import {
   ListBullets,
   Minus,
   Monitor,
+  PaintBrush,
   Plus,
   Receipt,
   WifiHigh,
@@ -25,7 +26,7 @@ import * as React from "react";
 import { createClientOrderId, createCustomerOrderClient, CustomerCheckoutError, resolveOrderApiConfig } from "./order-outbox.js";
 import { claimCustomerDevice, createIndexedDbCredentialStore, loadOrCreateCustomerDevice, pairingClaimErrorMessage, runtimeForCustomerCredentials } from "./device-credentials.js";
 import { customerOrderErrorCategory, customerOrderNoticeFromOutboxEvent } from "./customer-order-notice.js";
-import { AdminPairingError, configuredAdminToken, createAdminRideGuidanceContact, deleteAdminRideGuidanceContact, fetchAdminBusinessHours, fetchAdminCheckoutRequests, fetchAdminDiagnostics, fetchAdminMenu, fetchAdminOrderHistory, fetchAdminPaymentHistory, fetchAdminPairingPreflight, fetchAdminRideGuidance, issueCustomerPairingCode, revokeAdminDevice, saveAdminBusinessHours, saveAdminImageLayouts, saveAdminCategory, saveAdminMenuItem, saveAdminMenuOrdering, saveAdminRideGuidanceOrdering, saveAdminRideGuidancePickup, updateAdminRideGuidanceContact, voidAdminPayment } from "./admin-pairing.js";
+import { AdminPairingError, configuredAdminToken, createAdminRideGuidanceContact, deleteAdminRideGuidanceContact, fetchAdminBusinessHours, fetchAdminCheckoutRequests, fetchAdminCustomerThemeConfig, fetchAdminDiagnostics, fetchAdminMenu, fetchAdminOrderHistory, fetchAdminPaymentHistory, fetchAdminPairingPreflight, fetchAdminRideGuidance, issueCustomerPairingCode, revokeAdminDevice, saveAdminBusinessHours, saveAdminCustomerThemeConfig, saveAdminImageLayouts, saveAdminCategory, saveAdminMenuItem, saveAdminMenuOrdering, saveAdminRideGuidanceOrdering, saveAdminRideGuidancePickup, updateAdminRideGuidanceContact, voidAdminPayment } from "./admin-pairing.js";
 import { adjustKitchenItemUnitPrice, adjustKitchenOrderItemQuantity as adjustKitchenItemQuantityRequest, cancelKitchenCheckout, cancelKitchenOrderItem, closeKitchenTableSession, createKitchenOrder, fetchKitchenCheckoutRequests, fetchKitchenOrderHistory, fetchKitchenPaymentHistory, fetchKitchenSnapshot, kitchenAdditionRequestItem, kitchenApiConfigured, KitchenApiError, markKitchenItemServed, payKitchenCheckout, readyKitchenCheckout, restoreKitchenOrderItem, saveKitchenCheckoutAdjustments, subscribeKitchenInvalidations, voidKitchenPayment } from "./kitchen-api.js";
 import { buildKitchenTableGroups } from "./kitchen-order-board.js";
 import { bootstrapCustomerOrderClient } from "./customer-bootstrap.js";
@@ -624,15 +625,35 @@ function BusinessHoursText({ settings, className }) {
   return <div className={className}><b>本日の営業時間</b><span>{display.range}</span><small>{display.lastOrder}</small></div>;
 }
 
-function CustomerBusinessHours({ settings, onOpenNotice }) {
+function CustomerBusinessHours({ settings, onOpenNotice, guideKey = undefined }) {
   const showHours = settings?.isVisible === true;
   const showNotice = settings?.noticeEnabled === true && Boolean(settings.noticeText?.trim());
   if (!showHours && !showNotice) return null;
   const display = businessHoursDisplay(settings);
-  return <div className="customer-hours">
+  return <div className="customer-hours" {...(guideKey ? { "data-customer-guide": guideKey } : {})}>
     {showHours ? <><b>本日の営業時間</b><span>{display.range}</span><small>{display.lastOrder}</small></> : null}
     {showNotice ? <button type="button" className="business-hours-notice-button" onClick={onOpenNotice}>その他ご案内</button> : null}
   </div>;
+}
+
+function CustomerRailContent({ expanded, categories, currentCategoryId, onSelectCategory, onExpand, businessHours, onOpenNotice }) {
+  return <>
+    <div className="customer-title customer-title--horizontal" data-customer-guide="brand"><span>IZAKAYA WARUN</span></div>
+    {expanded ? <nav className="category-nav" aria-label="大分類カテゴリー" data-customer-guide="categories">
+      {categories.map((category, index) => category.isPlaceholder
+        ? <span key={category.id} className="category-nav__placeholder" aria-hidden="true"><b>{String(index + 1).padStart(2, "0")}</b><span></span></span>
+        : <button key={category.id} type="button" className={category.id === currentCategoryId ? "is-active" : ""} onClick={() => onSelectCategory?.(category.id)}><b>{String(index + 1).padStart(2, "0")}</b><span>{category.name}</span></button>)}
+    </nav> : <button type="button" className="customer-sidebar__collapsed-toggle" onClick={onExpand} aria-label="メインカテゴリーに戻る"><span>現在</span><strong>{categories.find((category) => category.id === currentCategoryId)?.name || "メニュー"}</strong><span>メインカテゴリーに戻る</span></button>}
+    <CustomerBusinessHours settings={businessHours} onOpenNotice={onOpenNotice} guideKey="hours" />
+  </>;
+}
+
+function normalizeCustomerThemeConfig(value, fallbackTheme = CUSTOMER_TEST_THEME) {
+  const theme = normalizeCustomerTheme(value?.theme ?? fallbackTheme);
+  const positionX = typeof value?.positionX === "number" && Number.isFinite(value.positionX) && value.positionX >= 0 && value.positionX <= 1 ? value.positionX : 0.5;
+  const positionY = typeof value?.positionY === "number" && Number.isFinite(value.positionY) && value.positionY >= 0 && value.positionY <= 1 ? value.positionY : 0.5;
+  const zoom = typeof value?.zoom === "number" && Number.isFinite(value.zoom) && value.zoom >= 0.5 && value.zoom <= 3 ? value.zoom : 1;
+  return { theme, positionX, positionY, zoom };
 }
 
 function IconButton({ icon: Icon, children, badge, onClick, className = "" }) {
@@ -759,10 +780,71 @@ function CustomerCheckoutModal({ checkoutState, receiptRequested, onReceiptChang
 }
 
 function CustomerScreen({ state, updateState, deviceId, orderClient, customerDeviceConfig, theme = CUSTOMER_TEST_THEME }) {
-  const customerTheme = normalizeCustomerTheme(theme);
+  const fallbackCustomerTheme = normalizeCustomerTheme(theme);
+  const fallbackCustomerThemeConfig = normalizeCustomerThemeConfig({ theme: fallbackCustomerTheme }, fallbackCustomerTheme);
   const localDevice = state.devices.find((item) => item.deviceId === deviceId) ?? state.devices[0];
   const apiMode = orderClient.mode === "api";
+  const initialCustomerThemeConfig = apiMode
+    ? normalizeCustomerThemeConfig({ theme: "standard" }, "standard")
+    : fallbackCustomerThemeConfig;
+  const [customerThemeState, setCustomerThemeState] = useState({ loading: apiMode, error: false, ...initialCustomerThemeConfig });
+  const customerThemeRequestRef = useRef(null);
+  const customerThemeRefreshPendingRef = useRef(false);
+  const customerThemeRefreshRef = useRef(null);
+  const [customerThemeImageFailed, setCustomerThemeImageFailed] = useState(false);
+  const customerThemeConfig = normalizeCustomerThemeConfig(apiMode ? customerThemeState : fallbackCustomerThemeConfig, apiMode ? "standard" : fallbackCustomerTheme);
+  const customerTheme = customerThemeConfig.theme;
   const businessHours = usePublicBusinessHours(apiMode);
+  useEffect(() => {
+    let cancelled = false;
+    const loadCustomerTheme = async () => {
+      if (!apiMode || (typeof orderClient?.getThemeConfig !== "function" && typeof orderClient?.getTheme !== "function")) {
+        if (!cancelled) setCustomerThemeState({ loading: false, error: false, ...fallbackCustomerThemeConfig });
+        return;
+      }
+      if (customerThemeRequestRef.current) {
+        customerThemeRefreshPendingRef.current = true;
+        return customerThemeRequestRef.current;
+      }
+      setCustomerThemeState((current) => ({ ...current, loading: true, error: false }));
+      const themeRequest = typeof orderClient.getThemeConfig === "function"
+        ? orderClient.getThemeConfig()
+        : orderClient.getTheme();
+      customerThemeRequestRef.current = themeRequest;
+      try {
+        const result = await themeRequest;
+        if (!cancelled) setCustomerThemeState({ loading: false, error: false, ...normalizeCustomerThemeConfig(result, "standard") });
+      } catch {
+        if (!cancelled) setCustomerThemeState({ loading: false, error: true, ...normalizeCustomerThemeConfig({ theme: "standard" }, "standard") });
+      } finally {
+        if (customerThemeRequestRef.current === themeRequest) customerThemeRequestRef.current = null;
+        if (!cancelled && customerThemeRefreshPendingRef.current) {
+          customerThemeRefreshPendingRef.current = false;
+          void loadCustomerTheme();
+        }
+      }
+    };
+    customerThemeRefreshRef.current = loadCustomerTheme;
+    void loadCustomerTheme();
+    return () => {
+      cancelled = true;
+      if (customerThemeRefreshRef.current === loadCustomerTheme) customerThemeRefreshRef.current = null;
+    };
+  }, [apiMode, orderClient, fallbackCustomerTheme]);
+  useEffect(() => {
+    if (!apiMode || typeof orderClient?.subscribeInvalidations !== "function") return undefined;
+    const refreshTheme = () => { void customerThemeRefreshRef.current?.(); };
+    return orderClient.subscribeInvalidations((event) => {
+      if (event?.resource === "customerTheme" || event?.payload?.resource === "customerTheme" || event?.type === "customer_theme.updated") refreshTheme();
+    }, { onReconnect: refreshTheme });
+  }, [apiMode, orderClient]);
+  useEffect(() => { setCustomerThemeImageFailed(false); }, [customerTheme, customerThemeConfig.positionX, customerThemeConfig.positionY, customerThemeConfig.zoom]);
+  const customerThemeImageStyle = {
+    "--customer-theme-position-x": `${customerThemeConfig.positionX * 100}%`,
+    "--customer-theme-position-y": `${customerThemeConfig.positionY * 100}%`,
+    "--customer-theme-zoom": customerThemeConfig.zoom,
+  };
+  const visibleCustomerTheme = customerThemeImageFailed ? "standard" : customerTheme;
   const assignedTableId = apiMode && Number.isSafeInteger(customerDeviceConfig?.tableId) ? String(customerDeviceConfig.tableId) : null;
   const device = assignedTableId
     ? { ...localDevice, tableId: assignedTableId, label: customerDeviceConfig.tableLabel || localDevice.label }
@@ -1272,15 +1354,12 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
   const rideGuidanceTypeLabel = rideGuidanceType === "taxi" ? "タクシー" : "運転代行";
 
   return (
-    <div className={`customer-app ${majorNavOpen ? "" : "customer-app--category-collapsed"}`} data-customer-theme={customerTheme}>
+    <div className={`customer-app ${majorNavOpen ? "" : "customer-app--category-collapsed"}`} data-customer-theme={visibleCustomerTheme}>
       {modal === "ride-guidance" ? <RideGuidanceModal dataState={rideGuidanceState} selectedType={rideGuidanceType} onSelectType={setRideGuidanceType} onBack={() => setRideGuidanceType(null)} onClose={closeRideGuidance} /> : null}
       {modal === "checkout" ? <CustomerCheckoutModal checkoutState={checkoutState} receiptRequested={checkoutReceiptRequested} onReceiptChange={setCheckoutReceiptRequested} onRequest={requestCheckout} onRetry={retryCheckout} onResetCancelled={resetCancelledCheckout} onClose={() => setModal(null)} submitting={checkoutSubmitting} /> : null}
       <aside className="customer-sidebar">
-        <div className="customer-title customer-title--horizontal"><span>IZAKAYA WARUN</span></div>
-        {majorNavOpen ? <nav className="category-nav" aria-label="大分類カテゴリー">
-          {customerMajorCategories.map((category, index) => category.isPlaceholder ? <span key={category.id} className="category-nav__placeholder" aria-hidden="true"><b>{String(index + 1).padStart(2, "0")}</b><span></span></span> : <button key={category.id} className={category.id === majorCategoryId ? "is-active" : ""} onClick={() => selectMajorCategory(category.id)}><b>{String(index + 1).padStart(2, "0")}</b><span>{category.name}</span></button>)}
-        </nav> : <button className="customer-sidebar__collapsed-toggle" onClick={() => setMajorNavOpen(true)} aria-label="メインカテゴリーに戻る"><span>現在</span><strong>{currentMajorCategory.name}</strong><span>メインカテゴリーに戻る</span></button>}
-        <CustomerBusinessHours settings={businessHours} onOpenNotice={() => setShowBusinessNotice(true)} />
+        {majorNavOpen && visibleCustomerTheme === "camellia" ? <img className="customer-sidebar__theme-image" src="/customer-rail-washi-camellia-accepted.png" alt="椿模様の客席レール" style={customerThemeImageStyle} onError={() => setCustomerThemeImageFailed(true)} /> : null}
+        <CustomerRailContent expanded={majorNavOpen} categories={customerMajorCategories} currentCategoryId={majorCategoryId} onSelectCategory={selectMajorCategory} onExpand={() => setMajorNavOpen(true)} businessHours={businessHours} onOpenNotice={() => setShowBusinessNotice(true)} />
       </aside>
 
       <section className={`customer-main ${isMenuHeaderHidden ? "customer-main--menu-active" : ""} ${notice ? "customer-main--has-notice" : ""}`}>
@@ -2226,10 +2305,219 @@ function HistoryScreen({ state, apiMode = false, loadHistory = null, loadPayment
 const adminTabs = [
   { id: "menu", label: "メニュー", icon: ClipboardText },
   { id: "categories", label: "カテゴリ", icon: ListBullets },
+  { id: "customer-theme", label: "客席レール", icon: PaintBrush },
   { id: "hours", label: "営業時間", icon: ClockCounterClockwise },
   { id: "ride-guidance", label: "タクシー／代行料金", icon: Car },
   { id: "devices", label: "端末割り当て", icon: Monitor },
 ];
+
+function customerThemeErrorMessage(error, action = "操作") {
+  if (error?.status === 409 || error?.code === "CUSTOMER_THEME_CONFLICT") return "409：別の管理端末で更新されています。再読込してから保存してください。";
+  if (error?.status === 401 || error?.code === "AUTH_TOKEN_MISMATCH") return "401：管理者tokenを確認してください。";
+  if (error?.status === 400) return "400：テーマの選択内容を確認してください。";
+  if (error?.status === 503 || error?.code === "API_UNAVAILABLE") return `${action}できません。管理APIを確認してください。`;
+  return `${action}できませんでした。`;
+}
+
+const DEFAULT_CUSTOMER_THEME_VARIANTS = Object.freeze({
+  standard: Object.freeze({
+    prompt: "画像は使用しない標準の赤レール。文字やロゴを画像に描かず、UIが重なる領域に重要な絵柄を置かない。",
+    notes: "未設定・画像読込失敗時のfallback。客席レールは従来の赤表示。",
+    positionX: 0.5,
+    positionY: 0.5,
+    zoom: 1,
+  }),
+  camellia: Object.freeze({
+    prompt: "和紙に描いた椿の縦長模様。文字・ロゴを画像に描かない。UIが重なる領域に重要な絵柄を置かない。客席端末の展開時レールに使う背景素材。",
+    notes: "既存asset: 426×1587 px、縦長比率 426:1587（約0.268:1、縦が横の約3.73倍）。展開時のみ表示し、折り畳み時は赤レールへ戻す。",
+    positionX: 0.5,
+    positionY: 0.5,
+    zoom: 1,
+  }),
+});
+
+function cloneCustomerThemeVariants(source = DEFAULT_CUSTOMER_THEME_VARIANTS) {
+  return Object.fromEntries(Object.entries(DEFAULT_CUSTOMER_THEME_VARIANTS).map(([theme, fallback]) => [theme, {
+    ...fallback,
+    ...(source?.[theme] ?? {}),
+  }]));
+}
+
+const CUSTOMER_THEME_PREVIEW_SCALE = 0.55;
+
+function CustomerThemePreview({ theme, variant, collapsed, onChangePosition, onImageError }) {
+  const railRef = useRef(null);
+  const dragRef = useRef(null);
+  const [guides, setGuides] = useState([]);
+  const [imageFailed, setImageFailed] = useState(false);
+  const guideLabels = { brand: "店名・ブランド", categories: "カテゴリ／画像が重なる領域", hours: "営業時間" };
+  const measureGuides = () => {
+    const rail = railRef.current;
+    if (!rail) return;
+    const railRect = rail.getBoundingClientRect();
+    const next = Object.entries(guideLabels).map(([key, label]) => {
+      const element = rail.querySelector(`[data-customer-guide="${key}"]`);
+      if (!element) return null;
+      const rect = element.getBoundingClientRect();
+      return {
+        key,
+        label,
+        left: ((rect.left - railRect.left) / railRect.width) * 100,
+        top: ((rect.top - railRect.top) / railRect.height) * 100,
+        width: (rect.width / railRect.width) * 100,
+        height: (rect.height / railRect.height) * 100,
+      };
+    }).filter(Boolean);
+    setGuides(next);
+  };
+  useLayoutEffect(() => {
+    measureGuides();
+    const rail = railRef.current;
+    if (!rail || typeof ResizeObserver !== "function") return undefined;
+    const observer = new ResizeObserver(measureGuides);
+    observer.observe(rail);
+    return () => observer.disconnect();
+  }, [collapsed, theme]);
+  useEffect(() => { setImageFailed(false); }, [theme, variant?.prompt]);
+  const positionStyle = {
+    "--customer-theme-position-x": `${(variant?.positionX ?? 0.5) * 100}%`,
+    "--customer-theme-position-y": `${(variant?.positionY ?? 0.5) * 100}%`,
+    "--customer-theme-zoom": variant?.zoom ?? 1,
+  };
+  const onPointerDown = (event) => {
+    if (collapsed || theme !== "camellia" || imageFailed) return;
+    if (event.button !== undefined && event.button !== 0) return;
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+    dragRef.current = { x: event.clientX, y: event.clientY, positionX: variant.positionX, positionY: variant.positionY };
+  };
+  const onPointerMove = (event) => {
+    if (!dragRef.current || !railRef.current) return;
+    const rect = railRef.current.getBoundingClientRect();
+    const logicalWidth = rect.width / CUSTOMER_THEME_PREVIEW_SCALE;
+    const logicalHeight = rect.height / CUSTOMER_THEME_PREVIEW_SCALE;
+    onChangePosition({
+      positionX: Math.max(0, Math.min(1, dragRef.current.positionX + (event.clientX - dragRef.current.x) / logicalWidth)),
+      positionY: Math.max(0, Math.min(1, dragRef.current.positionY + (event.clientY - dragRef.current.y) / logicalHeight)),
+    });
+  };
+  const stopDrag = () => { dragRef.current = null; };
+  const handleImageError = () => {
+    setImageFailed(true);
+    onImageError?.();
+  };
+  return <div className="customer-theme-preview" aria-label={`${collapsed ? "折り畳み時" : "展開時"}の客席レールプレビュー`}>
+    <div className={`customer-theme-preview__viewport ${collapsed ? "is-collapsed" : ""}`}>
+      <div
+        ref={railRef}
+        className={`customer-theme-preview__rail customer-sidebar ${collapsed ? "is-collapsed" : ""}`}
+        style={{ ...positionStyle, "--customer-theme-preview-scale": CUSTOMER_THEME_PREVIEW_SCALE }}
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={stopDrag}
+      onPointerCancel={stopDrag}
+      >
+        {!collapsed && theme === "camellia" && !imageFailed ? <img className="customer-sidebar__theme-image" src="/customer-rail-washi-camellia-accepted.png" alt="椿模様の客席レール配置プレビュー" style={positionStyle} onError={handleImageError} draggable="false" /> : null}
+        <CustomerRailContent expanded={!collapsed} categories={CUSTOMER_MAJOR_CATEGORIES} currentCategoryId="drink" onSelectCategory={() => {}} onExpand={() => {}} businessHours={DEFAULT_BUSINESS_HOURS} />
+        {!collapsed ? guides.map((guide) => <span key={guide.key} className="customer-theme-preview__guide" style={{ left: `${guide.left}%`, top: `${guide.top}%`, width: `${guide.width}%`, height: `${guide.height}%` }}><b>{guide.label}</b></span>) : null}
+      </div>
+    </div>
+    {imageFailed ? <p className="customer-theme-preview__fallback" role="status">画像を読み込めない場合は標準の赤レールへfallbackします。</p> : null}
+    {!collapsed && !imageFailed ? <p className="customer-theme-preview__hint">画像をドラッグして位置を調整。破線は実際のレールUI要素から測定した重なり領域です。</p> : <p className="customer-theme-preview__hint">折り畳み時は画像を表示せず、従来の赤レールに戻ります。</p>}
+  </div>;
+}
+
+function CustomerThemeEditor({ adminApiMode }) {
+  const [state, setState] = useState({ loading: adminApiMode, saving: false, error: "", message: "", formal: null, draft: "standard", draftThemes: cloneCustomerThemeVariants() });
+  const [previewCollapsed, setPreviewCollapsed] = useState(false);
+  const [copyMessage, setCopyMessage] = useState("");
+
+  const load = async ({ keepMessage = false } = {}) => {
+    if (!adminApiMode) return null;
+    setState((current) => ({ ...current, loading: true, error: "", ...(keepMessage ? {} : { message: "" }) }));
+    try {
+      const formal = await fetchAdminCustomerThemeConfig({ env: window });
+      setState((current) => ({ ...current, loading: false, saving: false, error: "", formal, draft: formal.theme, draftThemes: cloneCustomerThemeVariants(formal.themes), ...(keepMessage ? {} : { message: "" }) }));
+      return formal;
+    } catch (error) {
+      setState((current) => ({ ...current, loading: false, error: customerThemeErrorMessage(error, "テーマ設定の取得"), formal: current.formal }));
+      return null;
+    }
+  };
+
+  useEffect(() => {
+    if (!adminApiMode) {
+      setState({ loading: false, saving: false, error: "", message: "", formal: null, draft: "standard", draftThemes: cloneCustomerThemeVariants() });
+      return undefined;
+    }
+    void load();
+    return undefined;
+  }, [adminApiMode]);
+
+  const selectedVariant = state.draftThemes[state.draft] ?? DEFAULT_CUSTOMER_THEME_VARIANTS.standard;
+  const setSelectedVariant = (patch) => setState((current) => ({
+    ...current,
+    draftThemes: { ...current.draftThemes, [current.draft]: { ...current.draftThemes[current.draft], ...patch } },
+    message: "",
+  }));
+  const copyPrompt = async () => {
+    try {
+      if (typeof window.navigator?.clipboard?.writeText === "function") {
+        await window.navigator.clipboard.writeText(selectedVariant.prompt);
+      } else {
+        const textarea = document.createElement("textarea");
+        textarea.value = selectedVariant.prompt;
+        textarea.setAttribute("readonly", "");
+        textarea.style.position = "fixed";
+        textarea.style.opacity = "0";
+        document.body.appendChild(textarea);
+        textarea.select();
+        if (!document.execCommand("copy")) throw new Error("copy failed");
+        textarea.remove();
+      }
+      setCopyMessage("プロンプトをコピーしました。");
+    } catch {
+      setCopyMessage("コピーできませんでした。欄の文字を選択してコピーしてください。");
+    }
+  };
+  const save = async () => {
+    if (!adminApiMode || state.saving || !state.formal) return;
+    setState((current) => ({ ...current, saving: true, error: "", message: "" }));
+    try {
+      const formal = await saveAdminCustomerThemeConfig({ env: window, theme: state.draft, themes: state.draftThemes, expectedVersion: state.formal.version });
+      setState({ loading: false, saving: false, error: "", message: `保存しました（version ${formal.version}）。`, formal, draft: formal.theme, draftThemes: cloneCustomerThemeVariants(formal.themes) });
+    } catch (error) {
+      if (error?.status === 409 || error?.code === "CUSTOMER_THEME_CONFLICT") await load({ keepMessage: true });
+      setState((current) => ({ ...current, saving: false, error: customerThemeErrorMessage(error, "テーマ設定の保存"), message: "" }));
+    }
+  };
+  const discard = () => setState((current) => current.formal ? ({ ...current, draft: current.formal.theme, draftThemes: cloneCustomerThemeVariants(current.formal.themes), message: "", error: "" }) : current);
+  const previewTheme = state.draft;
+  return <section className="customer-theme-editor" aria-label="客席左レールテーマ設定">
+    <header className="customer-theme-editor__heading"><div><span className="section-kicker">CUSTOMER RAIL THEME</span><h2>客席左レールのテーマ</h2><p>客席画面だけに適用します。折り畳み時は従来の赤レールに戻ります。</p></div><span className="customer-theme-editor__version">正式version {state.formal?.version ?? "—"}</span></header>
+    {state.loading ? <p className="customer-theme-editor__status" role="status">正式値を読み込み中です。</p> : null}
+    {!adminApiMode ? <p className="customer-theme-editor__status">管理API接続時に編集できます。</p> : null}
+    <fieldset className="customer-theme-editor__options" disabled={!adminApiMode || state.loading || state.saving}>
+      <legend className="sr-only">客席レールテーマ</legend>
+      <label className="customer-theme-option"><input type="radio" name="customer-rail-theme" value="standard" checked={state.draft === "standard"} onChange={() => setState((current) => ({ ...current, draft: "standard", message: "" }))} /><span className="customer-theme-option__copy"><strong>標準（赤レール）</strong><small>未設定時・画像読込失敗時のfallback</small><span className="customer-theme-option__preview customer-theme-option__preview--standard">STANDARD</span></span></label>
+      <label className="customer-theme-option"><input type="radio" name="customer-rail-theme" value="camellia" checked={state.draft === "camellia"} onChange={() => setState((current) => ({ ...current, draft: "camellia", message: "" }))} /><span className="customer-theme-option__copy"><strong>椿（camellia）</strong><small>既存の椿assetを展開時だけ表示</small><img className="customer-theme-option__preview" src="/customer-rail-washi-camellia-accepted.png" alt="椿模様の客席レールプレビュー" /></span></label>
+    </fieldset>
+    <div className="customer-theme-editor__details">
+      <div className="customer-theme-editor__metadata">
+        <div className="customer-theme-editor__field"><label htmlFor="customer-theme-prompt">画像生成プロンプト</label><textarea id="customer-theme-prompt" rows={6} maxLength={4000} value={selectedVariant.prompt} disabled={!adminApiMode || state.loading || state.saving} onChange={(event) => setSelectedVariant({ prompt: event.target.value })} /><div className="customer-theme-editor__field-actions"><span>{[...selectedVariant.prompt].length} / 4000</span><button type="button" className="button button--outline" onClick={() => void copyPrompt()} disabled={!selectedVariant.prompt}>プロンプトをコピー</button></div>{copyMessage ? <small className="customer-theme-editor__copy-status" role="status">{copyMessage}</small> : null}</div>
+        <label className="customer-theme-editor__field" htmlFor="customer-theme-notes"><span>制作メモ</span><textarea id="customer-theme-notes" rows={5} maxLength={4000} value={selectedVariant.notes} disabled={!adminApiMode || state.loading || state.saving} onChange={(event) => setSelectedVariant({ notes: event.target.value })} /><small>{[...selectedVariant.notes].length} / 4000</small></label>
+        <dl className="customer-theme-editor__spec"><div><dt>推奨キャンバス</dt><dd>{state.draft === "camellia" ? "426 × 1587 px" : "画像なし（標準の赤レール）"}</dd></div><div><dt>縦横比</dt><dd>{state.draft === "camellia" ? "426:1587（約0.268:1／縦長3.73:1）" : "—"}</dd></div><div><dt>適用範囲</dt><dd>客席画面の展開時のみ</dd></div></dl>
+      </div>
+      <div className="customer-theme-editor__preview-panel">
+        <div className="customer-theme-editor__preview-heading"><div><strong>配置プレビュー</strong><small>実際の客席レールUI要素を測定した制作ガイド</small></div><div className="customer-theme-editor__preview-toggle"><button type="button" className={previewCollapsed ? "" : "is-active"} aria-pressed={!previewCollapsed} onClick={() => setPreviewCollapsed(false)}>展開時</button><button type="button" className={previewCollapsed ? "is-active" : ""} aria-pressed={previewCollapsed} onClick={() => setPreviewCollapsed(true)}>折り畳み時</button></div></div>
+        <CustomerThemePreview theme={previewTheme} variant={selectedVariant} collapsed={previewCollapsed} onChangePosition={setSelectedVariant} />
+        {!previewCollapsed ? <div className="customer-theme-editor__position-controls"><label>ズーム <output>{selectedVariant.zoom.toFixed(2)}×</output><input type="range" min="0.5" max="3" step="0.01" value={selectedVariant.zoom} disabled={!adminApiMode || state.loading || state.saving} onChange={(event) => setSelectedVariant({ zoom: Number(event.target.value) })} /></label><div><span>位置 X {Math.round(selectedVariant.positionX * 100)}% / Y {Math.round(selectedVariant.positionY * 100)}%</span><button type="button" className="button button--quiet" onClick={() => setSelectedVariant({ positionX: 0.5, positionY: 0.5, zoom: 1 })} disabled={!adminApiMode || state.loading || state.saving}>中央に戻す</button></div></div> : null}
+      </div>
+    </div>
+    {state.error ? <p className="customer-theme-editor__message is-error" role="alert">{state.error}</p> : null}
+    {state.message ? <p className="customer-theme-editor__message is-success" role="status">{state.message}</p> : null}
+    <div className="customer-theme-editor__actions"><button type="button" className="button button--quiet" onClick={discard} disabled={state.saving || !state.formal}>変更を破棄</button><button type="button" className="button button--outline" onClick={() => void load()} disabled={state.loading || state.saving || !adminApiMode}>再読込</button><button type="button" className="button button--primary" onClick={() => void save()} disabled={!adminApiMode || state.loading || state.saving || !state.formal}>{state.saving ? "保存中" : "テーマを保存"}</button></div>
+  </section>;
+}
 
 function BusinessHoursTimeFields({ label, value, maxHour, disabled, onChange }) {
   const selected = splitBusinessHoursTime(value);
@@ -2991,7 +3279,7 @@ function AdminScreen({ state, updateState, section = "menu" }) {
   }, [diagnosticHasIssue]);
 
   return (
-    <StaffShell route={`/admin/${section}`} title={section === "hours" ? "営業時間" : section === "ride-guidance" ? "タクシー／代行料金" : section === "categories" ? "カテゴリ管理" : "メニュー管理"} subtitle={section === "hours" ? "客席とスタッフ画面に表示する営業時間を設定します。" : section === "ride-guidance" ? "タクシー・運転代行の案内と料金情報を管理します。" : "メニューの追加・編集・並び順の変更ができます。"} state={state} right={section === "menu" || section === "categories" ? <button className="save-indicator" type="button"><Check size={24} weight="bold" /> {catalogState.saving ? "保存中" : catalogState.message || "保存する"}</button> : null}>
+    <StaffShell route={`/admin/${section}`} title={section === "hours" ? "営業時間" : section === "ride-guidance" ? "タクシー／代行料金" : section === "categories" ? "カテゴリ管理" : section === "customer-theme" ? "客席レール" : "メニュー管理"} subtitle={section === "hours" ? "客席とスタッフ画面に表示する営業時間を設定します。" : section === "ride-guidance" ? "タクシー・運転代行の案内と料金情報を管理します。" : section === "customer-theme" ? "客席画面だけに表示する左レールテーマを設定します。" : "メニューの追加・編集・並び順の変更ができます。"} state={state}>
       <section className="admin-content">
         <nav className="admin-tabs">{adminTabs.map((tab) => <button key={tab.id} className={section === tab.id ? "is-active" : ""} onClick={() => { resetMenuEditor(); navigate(`/admin/${tab.id}`); }}><tab.icon size={24} weight="bold" /> {tab.label}</button>)}</nav>
 
@@ -3049,6 +3337,8 @@ function AdminScreen({ state, updateState, section = "menu" }) {
         </> : null}
 
         {section === "hours" ? <section className="admin-settings-content"><BusinessHoursEditor state={businessHoursState} adminApiMode={adminApiMode} onChange={updateBusinessHoursDraft} onSave={saveBusinessHours} onDiscard={discardBusinessHours} onReload={loadBusinessHours} /></section> : null}
+
+        {section === "customer-theme" ? <section className="admin-settings-content"><CustomerThemeEditor adminApiMode={adminApiMode} /></section> : null}
 
         {section === "ride-guidance" ? <section className="admin-settings-content"><RideGuidanceEditor adminApiMode={adminApiMode} /></section> : null}
 

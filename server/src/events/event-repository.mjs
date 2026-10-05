@@ -67,6 +67,7 @@ function eventResource(eventType) {
   if (eventType === 'business_hours.updated') return 'businessHours';
   if (eventType.startsWith('ride_guidance.')) return 'rideGuidance';
   if (eventType.startsWith('checkout.')) return 'checkout';
+  if (eventType === 'customer_theme.updated') return 'customerTheme';
   throw repositoryError(
     EVENT_ERROR_CODES.DATABASE_FAILURE,
     'The stored event type is unsupported.',
@@ -84,6 +85,8 @@ function canSeeEvent(row, device) {
       || resource === 'checkout'
       || row.event_type === 'table.assignment_updated';
   }
+
+  if (resource === 'customerTheme') return device.role === 'customer';
 
   if (resource === 'orders') {
     return row.order_customer_device_id === device.device_id;
@@ -105,6 +108,7 @@ function publicAggregateId(row, resource) {
   if (resource === 'orders' || resource === 'staffCalls') return row.aggregate_id;
   if (resource === 'menu') return 'menu';
   if (resource === 'businessHours') return 'business-hours';
+  if (resource === 'customerTheme') return 'customer-theme';
   if (resource === 'checkout') return row.aggregate_id;
   return 'device-config';
 }

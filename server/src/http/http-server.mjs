@@ -12,6 +12,10 @@ import {
   isBusinessHoursRepositoryError,
 } from '../business-hours/business-hours-errors.mjs';
 import {
+  CUSTOMER_THEME_ERROR_CODES,
+  isCustomerThemeRepositoryError,
+} from '../customer-theme/customer-theme-errors.mjs';
+import {
   RIDE_GUIDANCE_ERROR_CODES,
   isRideGuidanceRepositoryError,
 } from '../ride-guidance/ride-guidance-errors.mjs';
@@ -51,6 +55,8 @@ import {
   mapCustomerOrderHistoryResponse,
   mapCatalogWriteResponse,
   mapBusinessHoursResponse,
+  mapCustomerThemeResponse,
+  mapCustomerThemeConfigResponse,
   mapRideGuidanceResponse,
   mapRideGuidanceWriteResponse,
   mapCategoryWriteResponse,
@@ -81,6 +87,8 @@ import {
 const ROUTE_METHODS = new Map([
   ['/v1/health', 'GET'],
   ['/v1/business-hours', 'GET'],
+  ['/v1/customer/theme', 'GET'],
+  ['/v1/customer/theme-config', 'GET'],
   ['/v1/ride-guidance', 'GET'],
   ['/v1/device/config', 'GET'],
   ['/v1/menu', 'GET'],
@@ -114,6 +122,8 @@ const ROUTE_METHODS = new Map([
   ['/v1/admin/catalog/category', 'PUT'],
   ['/v1/admin/catalog/menu-order', 'PUT'],
   ['/v1/admin/business-hours', new Set(['GET', 'PUT'])],
+  ['/v1/admin/customer-theme', new Set(['GET', 'PUT'])],
+  ['/v1/admin/customer-theme-config', new Set(['GET', 'PUT'])],
   ['/v1/admin/ride-guidance', 'GET'],
   ['/v1/admin/ride-guidance/pickup', 'PUT'],
   ['/v1/admin/ride-guidance/contacts', 'POST'],
@@ -382,27 +392,29 @@ function defaultServiceStateReader(database) {
   }
 
   let statement;
+  let schemaVersionStatement;
   try {
     statement = database.prepare(`
       SELECT
-        s.schema_version,
         s.event_epoch,
         COALESCE(MAX(e.event_id), 0) AS last_event_id
       FROM system_state AS s
       LEFT JOIN event_log AS e
         ON e.event_epoch = s.event_epoch
       WHERE s.singleton_id = 1
-      GROUP BY s.schema_version, s.event_epoch
+      GROUP BY s.event_epoch
     `);
+    schemaVersionStatement = database.prepare('PRAGMA user_version');
   } catch {
     throw createHttpError(HTTP_ERROR_CODES.INTERNAL_ERROR);
   }
 
   return function readServiceState() {
     const row = statement.get();
+    const schemaVersion = Number(Object.values(schemaVersionStatement.get() ?? {})[0] ?? 0);
     if (
       !row
-      || row.schema_version !== SCHEMA_VERSION
+      || schemaVersion !== SCHEMA_VERSION
       || typeof row.event_epoch !== 'string'
       || !Number.isSafeInteger(row.last_event_id)
       || row.last_event_id < 0
@@ -410,7 +422,7 @@ function defaultServiceStateReader(database) {
       throw new Error('Service state is unavailable.');
     }
     return {
-      schemaVersion: row.schema_version,
+      schemaVersion,
       eventEpoch: row.event_epoch,
       lastEventId: row.last_event_id,
     };
@@ -430,13 +442,13 @@ function readDiagnosticStorageSummary(database) {
     GROUP BY status
     ORDER BY status
   `).all();
-  const schema = database.prepare('SELECT schema_version FROM system_state WHERE singleton_id = 1').get();
+  const schema = database.prepare('PRAGMA user_version').get();
   return {
     orders: Number(counts?.orders ?? 0),
     orderItems: Number(counts?.order_items ?? 0),
     eventLog: Number(counts?.event_log ?? 0),
     orderStatuses: statuses.map((row) => ({ status: row.status, count: Number(row.count) })),
-    schemaVersion: Number(schema?.schema_version ?? 0),
+    schemaVersion: Number(Object.values(schema ?? {})[0] ?? 0),
   };
 }
 
@@ -571,6 +583,13 @@ function mapApplicationError(error) {
     if (error.code === BUSINESS_HOURS_ERROR_CODES.DATABASE_FAILURE && hasBusyCause(error)) {
       return createHttpError(HTTP_ERROR_CODES.SERVICE_UNAVAILABLE);
     }
+    return createHttpError(HTTP_ERROR_CODES.INTERNAL_ERROR);
+  }
+
+  if (isCustomerThemeRepositoryError(error)) {
+    if (error.code === CUSTOMER_THEME_ERROR_CODES.INVALID_WRITE_REQUEST) return createHttpError(HTTP_ERROR_CODES.BAD_REQUEST);
+    if (error.code === CUSTOMER_THEME_ERROR_CODES.VERSION_CONFLICT) return createHttpError(HTTP_ERROR_CODES.CUSTOMER_THEME_CONFLICT);
+    if (error.code === CUSTOMER_THEME_ERROR_CODES.DATABASE_FAILURE && hasBusyCause(error)) return createHttpError(HTTP_ERROR_CODES.SERVICE_UNAVAILABLE);
     return createHttpError(HTTP_ERROR_CODES.INTERNAL_ERROR);
   }
 
@@ -752,14 +771,19 @@ function attachMenuDiagnosticLifecycle({ recorder, request, response, requestId,
 }
 
 async function notifyCommittedSafely(sseHub, result) {
+  if (!sseHub) return;
+  if (result?.sseNotification && typeof sseHub.notifyTransient === 'function') {
+    try {
+      await Promise.resolve(sseHub.notifyTransient(result.sseNotification));
+    } catch {
+      // A theme invalidation is intentionally ephemeral; clients re-fetch on reconnect.
+    }
+  }
   if (
     result?.idempotencyResult !== 'created'
     || !result.event
-    || !sseHub
     || typeof sseHub.notifyCommitted !== 'function'
-  ) {
-    return;
-  }
+  ) return;
   try {
     await Promise.resolve(sseHub.notifyCommitted({
       eventEpoch: result.event.eventEpoch,
@@ -843,6 +867,7 @@ function createConfiguredHttpServer({
   diagnosticRecorder = undefined,
   menuDiagnosticRecorder = undefined,
   businessHours = undefined,
+  customerTheme = undefined,
   rideGuidance = undefined,
   checkout = undefined,
 } = {}, { integrated }) {
@@ -1026,6 +1051,30 @@ function createConfiguredHttpServer({
       }
       if (diagnosticContext) diagnosticContext.stage = 'authenticated';
 
+      if (target.path === '/v1/customer/theme') {
+        authorizeDeviceRole(principal, ['customer']);
+        drainRequest(request);
+        const themes = requireService(customerTheme, 'getPublicCustomerTheme');
+        writeJsonResponse(response, {
+          statusCode: 200,
+          body: mapCustomerThemeResponse(themes.getPublicCustomerTheme()),
+          requestId,
+        });
+        return;
+      }
+
+      if (target.path === '/v1/customer/theme-config') {
+        authorizeDeviceRole(principal, ['customer']);
+        drainRequest(request);
+        const themes = requireService(customerTheme, 'getPublicCustomerThemeConfig');
+        writeJsonResponse(response, {
+          statusCode: 200,
+          body: mapCustomerThemeConfigResponse(themes.getPublicCustomerThemeConfig(), { publicOnly: true }),
+          requestId,
+        });
+        return;
+      }
+
       if (target.path === '/v1/admin/pairing-preflight') {
         authorizeDeviceRole(principal, ['admin']);
         if (diagnosticContext) diagnosticContext.stage = 'retrieved';
@@ -1070,6 +1119,50 @@ function createConfiguredHttpServer({
         writeJsonResponse(response, {
           statusCode: 200,
           body: mapBusinessHoursResponse(result, { includeVersion: true }),
+          requestId,
+        });
+        return;
+      }
+
+      if (target.path === '/v1/admin/customer-theme') {
+        authorizeDeviceRole(principal, ['admin']);
+        const themeRepository = requireService(customerTheme, request.method === 'GET' ? 'getCustomerTheme' : 'writeCustomerTheme');
+        if (request.method === 'GET') {
+          drainRequest(request);
+          writeJsonResponse(response, {
+            statusCode: 200,
+            body: mapCustomerThemeResponse(themeRepository.getCustomerTheme(), { includeVersion: true }),
+            requestId,
+          });
+          return;
+        }
+        const result = themeRepository.writeCustomerTheme(principal, await readJsonBody(request));
+        await notifyCommittedSafely(sseHub, result);
+        writeJsonResponse(response, {
+          statusCode: 200,
+          body: mapCustomerThemeResponse(result, { includeVersion: true }),
+          requestId,
+        });
+        return;
+      }
+
+      if (target.path === '/v1/admin/customer-theme-config') {
+        authorizeDeviceRole(principal, ['admin']);
+        const themeRepository = requireService(customerTheme, request.method === 'GET' ? 'getCustomerThemeConfig' : 'writeCustomerThemeConfig');
+        if (request.method === 'GET') {
+          drainRequest(request);
+          writeJsonResponse(response, {
+            statusCode: 200,
+            body: mapCustomerThemeConfigResponse(themeRepository.getCustomerThemeConfig(), { includeVersion: true }),
+            requestId,
+          });
+          return;
+        }
+        const result = themeRepository.writeCustomerThemeConfig(principal, await readJsonBody(request));
+        await notifyCommittedSafely(sseHub, result);
+        writeJsonResponse(response, {
+          statusCode: 200,
+          body: mapCustomerThemeConfigResponse(result, { includeVersion: true }),
           requestId,
         });
         return;

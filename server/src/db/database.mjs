@@ -5,7 +5,7 @@ import { DatabaseSync } from 'node:sqlite';
 
 export const LEGACY_SCHEMA_VERSION = 1;
 export const SESSION_SCHEMA_VERSION = 2;
-export const SCHEMA_VERSION = 16;
+export const SCHEMA_VERSION = 17;
 
 export const REQUIRED_TABLES = Object.freeze([
   'system_state',
@@ -144,6 +144,9 @@ export const DEFAULT_V15_MIGRATION_PATH = resolve(
 );
 export const DEFAULT_V16_MIGRATION_PATH = resolve(
   moduleDirectory, '..', '..', '..', 'docs', 'schema-v16-migration.sql',
+);
+export const DEFAULT_V17_MIGRATION_PATH = resolve(
+  moduleDirectory, '..', '..', '..', 'docs', 'schema-v17-migration.sql',
 );
 
 export class DatabaseInitializationError extends Error {
@@ -516,6 +519,14 @@ function migrateSchemaV15ToV16(database, migrationPath) {
   }
 }
 
+function migrateSchemaV16ToV17(database, migrationPath) {
+  try { database.exec(readFileSync(migrationPath, 'utf8')); }
+  catch (error) {
+    try { if (database.isTransaction) database.exec('ROLLBACK;'); } catch {}
+    throw new DatabaseInitializationError('MIGRATION_FAILED', 'The customer-theme schema migration failed.', { cause: error });
+  }
+}
+
 function migrateSchemaV1ToV2(database) {
   let transactionOpen = false;
   try {
@@ -704,6 +715,8 @@ function assertRequiredNames(actualNames, requiredNames, objectType) {
 
 function validateSchema(database) {
   assertRequiredNames(schemaObjectNames(database, 'table'), REQUIRED_TABLES, 'tables');
+  assertRequiredNames(schemaObjectNames(database, 'table'), ['customer_theme_settings'], 'tables');
+  assertRequiredNames(schemaObjectNames(database, 'table'), ['customer_theme_variants'], 'tables');
   assertRequiredNames(schemaObjectNames(database, 'index'), REQUIRED_INDEXES, 'indexes');
   assertRequiredNames(schemaObjectNames(database, 'trigger'), REQUIRED_TRIGGERS, 'triggers');
   assertRequiredNames(schemaObjectNames(database, 'trigger'), ['trg_order_item_cancellation_events_immutable_update', 'trg_order_item_cancellation_events_immutable_delete'], 'cancellation history triggers');
@@ -735,6 +748,11 @@ function validateSchema(database) {
     tableColumns(database, 'business_hours'),
     ['notice_text', 'notice_enabled'],
     'business_hours notice columns',
+  );
+  assertRequiredNames(
+    tableColumns(database, 'customer_theme_settings'),
+    ['singleton_id', 'theme_key', 'version', 'created_at_ms', 'updated_at_ms'],
+    'customer theme columns',
   );
   assertRequiredNames(
     tableColumns(database, 'store_pickup_settings'),
@@ -770,13 +788,13 @@ function validateSchema(database) {
     .get();
 
   if (
-    state?.schema_version !== SCHEMA_VERSION
+    ![SCHEMA_VERSION - 1, SCHEMA_VERSION].includes(state?.schema_version)
     || typeof state?.event_epoch !== 'string'
     || state.event_epoch.length !== 36
   ) {
     throw new DatabaseInitializationError(
       'SCHEMA_INCOMPLETE',
-      'Schema v1 system_state metadata is missing or invalid.',
+      'The system_state event metadata is missing or invalid.',
     );
   }
 
@@ -848,6 +866,7 @@ export function initializeDatabase({
   v14MigrationPath = DEFAULT_V14_MIGRATION_PATH,
   v15MigrationPath = DEFAULT_V15_MIGRATION_PATH,
   v16MigrationPath = DEFAULT_V16_MIGRATION_PATH,
+  v17MigrationPath = DEFAULT_V17_MIGRATION_PATH,
 } = {}) {
   const resolvedDatabasePath = resolveFilePath(databasePath, 'databasePath');
   const resolvedSchemaPath = resolveFilePath(schemaPath, 'schemaPath');
@@ -865,6 +884,7 @@ export function initializeDatabase({
   const resolvedV14MigrationPath = resolveFilePath(v14MigrationPath, 'v14MigrationPath');
   const resolvedV15MigrationPath = resolveFilePath(v15MigrationPath, 'v15MigrationPath');
   const resolvedV16MigrationPath = resolveFilePath(v16MigrationPath, 'v16MigrationPath');
+  const resolvedV17MigrationPath = resolveFilePath(v17MigrationPath, 'v17MigrationPath');
 
   mkdirSync(dirname(resolvedDatabasePath), { recursive: true });
 
@@ -958,6 +978,11 @@ export function initializeDatabase({
     }
     if (currentVersion === 15) {
       migrateSchemaV15ToV16(database, resolvedV16MigrationPath);
+      enableWriteAheadLogging(database);
+      currentVersion = 16;
+    }
+    if (currentVersion === 16) {
+      migrateSchemaV16ToV17(database, resolvedV17MigrationPath);
       enableWriteAheadLogging(database);
       currentVersion = SCHEMA_VERSION;
     }

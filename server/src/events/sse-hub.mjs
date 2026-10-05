@@ -2,14 +2,14 @@ const EVENT_EPOCH_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f
 const EVENT_TYPE_PATTERN = /^[a-z0-9]+(?:[._-][a-z0-9]+)*$/;
 const EVENT_AUDIENCES = new Set(['customer', 'kitchen', 'admin']);
 const OPAQUE_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
-const EVENT_RESOURCES = new Set(['orders', 'menu', 'staffCalls', 'deviceConfig', 'businessHours', 'rideGuidance', 'checkout']);
+const EVENT_RESOURCES = new Set(['orders', 'menu', 'staffCalls', 'deviceConfig', 'businessHours', 'rideGuidance', 'checkout', 'customerTheme']);
 const EVENT_TYPES_BY_AUDIENCE = Object.freeze({
   customer: new Set([
     'order.created', 'order.updated', 'order.completed',
     'menu.updated', 'menu.sold_out_updated',
     'staff_call.created', 'staff_call.resolved',
     'checkout.requested', 'checkout.adjustments_updated', 'checkout.ready', 'checkout.cancelled',
-    'device.revoked', 'table.assignment_updated',
+    'device.revoked', 'table.assignment_updated', 'customer_theme.updated',
   ]),
   kitchen: new Set([
     'order.created', 'order.updated', 'order.completed',
@@ -27,6 +27,7 @@ const EVENT_TYPES_BY_AUDIENCE = Object.freeze({
     'ride_guidance.contact_updated', 'ride_guidance.contact_deleted',
     'ride_guidance.contacts_reordered',
     'checkout.requested', 'checkout.adjustments_updated', 'checkout.ready', 'checkout.cancelled',
+    'customer_theme.updated',
   ]),
 });
 
@@ -110,6 +111,7 @@ function eventResource(eventType) {
   if (eventType.startsWith('business_hours.')) return 'businessHours';
   if (eventType.startsWith('ride_guidance.')) return 'rideGuidance';
   if (eventType.startsWith('checkout.')) return 'checkout';
+  if (eventType === 'customer_theme.updated') return 'customerTheme';
   return 'deviceConfig';
 }
 
@@ -176,6 +178,18 @@ function eventFrame(event) {
     payload: event.payload,
   };
   return `id: ${event.eventId}\nevent: ${event.type}\ndata: ${JSON.stringify(envelope)}\n\n`;
+}
+
+function transientEventFrame(notification) {
+  const envelope = {
+    audience: notification.audience,
+    eventEpoch: notification.eventEpoch,
+    type: notification.type,
+    aggregateId: notification.aggregateId,
+    occurredAtMs: notification.occurredAtMs,
+    payload: notification.payload,
+  };
+  return `event: ${notification.type}\ndata: ${JSON.stringify(envelope)}\n\n`;
 }
 
 function cursorFrame(eventId) {
@@ -522,6 +536,44 @@ export function createSseHub({
     return awakened;
   }
 
+  function notifyTransient(notification) {
+    if (
+      closed
+      || notification === null
+      || typeof notification !== 'object'
+      || typeof notification.eventEpoch !== 'string'
+      || !EVENT_EPOCH_PATTERN.test(notification.eventEpoch)
+      || notification.type !== 'customer_theme.updated'
+      || !OPAQUE_ID_PATTERN.test(notification.aggregateId)
+      || !isNonNegativeSafeInteger(notification.occurredAtMs)
+      || notification.payload === null
+      || typeof notification.payload !== 'object'
+      || Array.isArray(notification.payload)
+      || notification.payload.resource !== 'customerTheme'
+      || notification.payload.refreshRequired !== true
+    ) return 0;
+
+    const audiences = new Set(
+      Array.isArray(notification.audiences) && notification.audiences.length > 0
+        ? notification.audiences
+        : ['customer'],
+    );
+    let awakened = 0;
+    for (const connection of [...connections]) {
+      if (connection.eventEpoch !== notification.eventEpoch) {
+        removeConnection(connection);
+        continue;
+      }
+      if (!audiences.has(connection.audience)) continue;
+      const event = {
+        ...notification,
+        audience: connection.audience,
+      };
+      if (enqueueFrame(connection, transientEventFrame(event))) awakened += 1;
+    }
+    return awakened;
+  }
+
   const heartbeatTimer = timers.setInterval(() => {
     for (const connection of [...connections]) {
       if (
@@ -539,6 +591,7 @@ export function createSseHub({
   return Object.freeze({
     attach,
     notifyCommitted,
+    notifyTransient,
     close() {
       if (closed) return;
       closed = true;

@@ -8,6 +8,7 @@ import { createDeviceAuthenticator } from "./auth/device-auth.mjs";
 import { createCatalogRepository } from "./catalog/catalog-repository.mjs";
 import { createCheckoutRepository } from "./checkout/checkout-repository.mjs";
 import { createBusinessHoursRepository } from "./business-hours/business-hours-repository.mjs";
+import { createCustomerThemeRepository } from "./customer-theme/customer-theme-repository.mjs";
 import { createRideGuidanceRepository } from "./ride-guidance/ride-guidance-repository.mjs";
 import { initializeDatabase } from "./db/database.mjs";
 import { createDiagnosticRecorder } from "./diagnostics/diagnostic-recorder.mjs";
@@ -109,6 +110,7 @@ export function createWarunServer({ databasePath, runtimeInfo = undefined, now =
   const authenticator = createDeviceAuthenticator({ database });
   const catalog = createCatalogRepository({ database });
   const businessHours = createBusinessHoursRepository({ database, now });
+  const customerTheme = createCustomerThemeRepository({ database, now });
   const rideGuidance = createRideGuidanceRepository({ database, now });
   const checkout = createCheckoutRepository({ database, now });
   const eventRepository = createEventRepository({ database });
@@ -144,6 +146,7 @@ export function createWarunServer({ databasePath, runtimeInfo = undefined, now =
     diagnosticRecorder,
     menuDiagnosticRecorder,
     businessHours,
+    customerTheme,
     rideGuidance,
     checkout,
   });
@@ -153,6 +156,7 @@ export function createWarunServer({ databasePath, runtimeInfo = undefined, now =
     authenticator.close();
     catalog.close();
     businessHours.close();
+    customerTheme.close();
     rideGuidance.close();
     checkout.close();
     eventRepository.close();

@@ -241,6 +241,126 @@ export async function fetchAdminBusinessHours({ env = globalThis, fetchImpl = en
   }
 }
 
+function normalizeAdminCustomerTheme(body) {
+  if (!body || !['standard', 'camellia'].includes(body.theme)
+    || !Number.isSafeInteger(body.version) || body.version < 0
+    || !Number.isSafeInteger(body.updatedAtMs) || body.updatedAtMs < 0) {
+    throw new AdminPairingError("客席レールテーマの応答が不正です。", { status: 503, code: "API_UNAVAILABLE" });
+  }
+  return { theme: body.theme, version: body.version, updatedAtMs: body.updatedAtMs };
+}
+
+export async function fetchAdminCustomerTheme({ env = globalThis, fetchImpl = env.fetch } = {}) {
+  const { token, base, fetchImpl: request } = assertAdminTransport({ env, fetchImpl });
+  let response;
+  try {
+    response = await request(`${base}/admin/customer-theme`, {
+      headers: { Accept: "application/json", Authorization: `Bearer ${token}` },
+    });
+  } catch {
+    throw new AdminPairingError("客席レールテーマを取得できません。", { status: 503, code: "API_UNAVAILABLE" });
+  }
+  if (!response.ok) await responseError(response, "客席レールテーマを取得できません。", "CUSTOMER_THEME_REQUEST_FAILED");
+  try { return normalizeAdminCustomerTheme(await response.json()); }
+  catch (error) {
+    if (error instanceof AdminPairingError) throw error;
+    throw new AdminPairingError("客席レールテーマの応答が不正です。", { status: 503, code: "API_UNAVAILABLE" });
+  }
+}
+
+export async function saveAdminCustomerTheme({ env = globalThis, theme, expectedVersion = 0, fetchImpl = env.fetch } = {}) {
+  const { token, base, fetchImpl: request } = assertAdminTransport({ env, fetchImpl });
+  let response;
+  try {
+    response = await request(`${base}/admin/customer-theme`, {
+      method: "PUT",
+      headers: { Accept: "application/json", "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ theme, expectedVersion }),
+    });
+  } catch {
+    throw new AdminPairingError("客席レールテーマを保存できません。", { status: 503, code: "API_UNAVAILABLE" });
+  }
+  if (!response.ok) await responseError(response, "客席レールテーマを保存できません。", response.status === 409 ? "CUSTOMER_THEME_CONFLICT" : "CUSTOMER_THEME_REQUEST_FAILED");
+  try { return normalizeAdminCustomerTheme(await response.json()); }
+  catch (error) {
+    if (error instanceof AdminPairingError) throw error;
+    throw new AdminPairingError("客席レールテーマの保存応答が不正です。", { status: 503, code: "API_UNAVAILABLE" });
+  }
+}
+
+function normalizeCustomerThemeVariant(value) {
+  if (!value || typeof value !== "object"
+    || typeof value.prompt !== "string" || typeof value.notes !== "string"
+    || typeof value.positionX !== "number" || !Number.isFinite(value.positionX) || value.positionX < 0 || value.positionX > 1
+    || typeof value.positionY !== "number" || !Number.isFinite(value.positionY) || value.positionY < 0 || value.positionY > 1
+    || typeof value.zoom !== "number" || !Number.isFinite(value.zoom) || value.zoom < 0.5 || value.zoom > 3) {
+    throw new AdminPairingError("客席レールテーマのメタデータが不正です。", { status: 503, code: "API_UNAVAILABLE" });
+  }
+  return {
+    prompt: value.prompt,
+    notes: value.notes,
+    positionX: value.positionX,
+    positionY: value.positionY,
+    zoom: value.zoom,
+  };
+}
+
+export function normalizeAdminCustomerThemeConfig(body) {
+  if (!body || !["standard", "camellia"].includes(body.theme)
+    || !Number.isSafeInteger(body.version) || body.version < 0
+    || !Number.isSafeInteger(body.updatedAtMs) || body.updatedAtMs < 0
+    || !body.themes || typeof body.themes !== "object") {
+    throw new AdminPairingError("客席レールテーマ設定の応答が不正です。", { status: 503, code: "API_UNAVAILABLE" });
+  }
+  return {
+    theme: body.theme,
+    version: body.version,
+    updatedAtMs: body.updatedAtMs,
+    themes: {
+      standard: normalizeCustomerThemeVariant(body.themes.standard),
+      camellia: normalizeCustomerThemeVariant(body.themes.camellia),
+    },
+  };
+}
+
+export async function fetchAdminCustomerThemeConfig({ env = globalThis, fetchImpl = env.fetch } = {}) {
+  const { token, base, fetchImpl: request } = assertAdminTransport({ env, fetchImpl });
+  let response;
+  try {
+    response = await request(`${base}/admin/customer-theme-config`, {
+      headers: { Accept: "application/json", Authorization: `Bearer ${token}` },
+    });
+  } catch {
+    throw new AdminPairingError("客席レールテーマ設定を取得できません。", { status: 503, code: "API_UNAVAILABLE" });
+  }
+  if (!response.ok) await responseError(response, "客席レールテーマ設定を取得できません。", "CUSTOMER_THEME_REQUEST_FAILED");
+  try { return normalizeAdminCustomerThemeConfig(await response.json()); }
+  catch (error) {
+    if (error instanceof AdminPairingError) throw error;
+    throw new AdminPairingError("客席レールテーマ設定の応答が不正です。", { status: 503, code: "API_UNAVAILABLE" });
+  }
+}
+
+export async function saveAdminCustomerThemeConfig({ env = globalThis, theme, themes, expectedVersion = 0, fetchImpl = env.fetch } = {}) {
+  const { token, base, fetchImpl: request } = assertAdminTransport({ env, fetchImpl });
+  let response;
+  try {
+    response = await request(`${base}/admin/customer-theme-config`, {
+      method: "PUT",
+      headers: { Accept: "application/json", "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ expectedVersion, theme, themes }),
+    });
+  } catch {
+    throw new AdminPairingError("客席レールテーマ設定を保存できません。", { status: 503, code: "API_UNAVAILABLE" });
+  }
+  if (!response.ok) await responseError(response, "客席レールテーマ設定を保存できません。", response.status === 409 ? "CUSTOMER_THEME_CONFLICT" : "CUSTOMER_THEME_REQUEST_FAILED");
+  try { return normalizeAdminCustomerThemeConfig(await response.json()); }
+  catch (error) {
+    if (error instanceof AdminPairingError) throw error;
+    throw new AdminPairingError("客席レールテーマ設定の保存応答が不正です。", { status: 503, code: "API_UNAVAILABLE" });
+  }
+}
+
 export async function saveAdminBusinessHours({ env = globalThis, settings, expectedVersion = settings?.version, fetchImpl = env.fetch } = {}) {
   const token = configuredAdminToken(env);
   const base = apiBase(env);

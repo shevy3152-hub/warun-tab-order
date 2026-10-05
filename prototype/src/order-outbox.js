@@ -414,6 +414,48 @@ export async function fetchCustomerMenu({
   return body;
 }
 
+export async function fetchCustomerTheme({ config, fetchImpl = globalThis.fetch } = {}) {
+  const endpoint = config?.baseUrl ? `${config.baseUrl}/customer/theme` : null;
+  if (!config?.enabled || !endpoint || typeof fetchImpl !== "function") {
+    throw new Error("Customer theme API is not configured.");
+  }
+  const response = await fetchImpl(endpoint, {
+    method: "GET",
+    headers: { Accept: "application/json", Authorization: `Bearer ${config.token}` },
+  });
+  if (response.status !== 200) throw new Error("Customer theme request failed.");
+  const body = await response.json();
+  if (!body || !["standard", "camellia"].includes(body.theme)) {
+    throw new Error("Customer theme response is invalid.");
+  }
+  return { theme: body.theme };
+}
+
+export async function fetchCustomerThemeConfig({ config, fetchImpl = globalThis.fetch } = {}) {
+  const endpoint = config?.baseUrl ? `${config.baseUrl}/customer/theme-config` : null;
+  if (!config?.enabled || !endpoint || typeof fetchImpl !== "function") {
+    throw new Error("Customer theme config API is not configured.");
+  }
+  const response = await fetchImpl(endpoint, {
+    method: "GET",
+    headers: { Accept: "application/json", Authorization: `Bearer ${config.token}` },
+  });
+  if (response.status !== 200) throw new Error("Customer theme config request failed.");
+  const body = await response.json();
+  if (!body || !["standard", "camellia"].includes(body.theme)
+    || typeof body.positionX !== "number" || !Number.isFinite(body.positionX) || body.positionX < 0 || body.positionX > 1
+    || typeof body.positionY !== "number" || !Number.isFinite(body.positionY) || body.positionY < 0 || body.positionY > 1
+    || typeof body.zoom !== "number" || !Number.isFinite(body.zoom) || body.zoom < 0.5 || body.zoom > 3) {
+    throw new Error("Customer theme config response is invalid.");
+  }
+  return {
+    theme: body.theme,
+    positionX: body.positionX,
+    positionY: body.positionY,
+    zoom: body.zoom,
+  };
+}
+
 export class CustomerCheckoutError extends Error {
   constructor(message, { status = 0, code = "CHECKOUT_API_ERROR" } = {}) {
     super(message);
@@ -486,6 +528,7 @@ export function subscribeCustomerInvalidations({
   env = globalThis,
   fetchImpl = env.fetch,
   onEvent,
+  onReconnect,
 } = {}) {
   if (!config?.enabled || !config.baseUrl || typeof fetchImpl !== "function" || typeof onEvent !== "function") {
     return () => {};
@@ -496,6 +539,7 @@ export function subscribeCustomerInvalidations({
   let retryTimer = null;
   let eventEpoch = null;
   let lastEventId = 0;
+  let hasConnected = false;
 
   const schedule = () => {
     if (stopped || retryTimer !== null) return;
@@ -564,9 +608,12 @@ export function subscribeCustomerInvalidations({
       if (response.status === 410) {
         eventEpoch = null;
         lastEventId = 0;
+        onReconnect?.("epoch-reset");
       } else if (response.ok) {
         const responseEpoch = response.headers?.get?.("X-Event-Epoch");
         if (responseEpoch) eventEpoch = responseEpoch;
+        if (hasConnected) onReconnect?.("reconnect");
+        hasConnected = true;
         await readStream(response);
       }
     } catch {
@@ -781,6 +828,8 @@ export function createCustomerOrderClient({
       get() { return Promise.resolve(null); },
       getHistory() { return Promise.resolve([]); },
       getMenu() { return Promise.resolve(null); },
+      getTheme() { return Promise.resolve({ theme: "camellia" }); },
+      getThemeConfig() { return Promise.resolve({ theme: "camellia", positionX: 0.5, positionY: 0.5, zoom: 1 }); },
       getCheckout() { return Promise.resolve(null); },
       requestCheckout() { return Promise.reject(new CustomerCheckoutError("会計APIはデモモードでは利用できません。", { code: "DEMO_MODE" })); },
       list() { return Promise.resolve([]); },
@@ -815,18 +864,32 @@ export function createCustomerOrderClient({
         fetchImpl: options.fetchImpl || global.fetch,
       });
     },
+    getTheme() {
+      return fetchCustomerTheme({
+        config,
+        env: global,
+        fetchImpl: options.fetchImpl || global.fetch,
+      });
+    },
+    getThemeConfig() {
+      return fetchCustomerThemeConfig({
+        config,
+        fetchImpl: options.fetchImpl || global.fetch,
+      });
+    },
     getCheckout() {
       return fetchCustomerCheckout({ config, fetchImpl: options.fetchImpl || global.fetch });
     },
     requestCheckout({ checkoutRequestId, receiptRequested }) {
       return requestCustomerCheckout({ config, checkoutRequestId, receiptRequested, fetchImpl: options.fetchImpl || global.fetch });
     },
-    subscribeInvalidations(listener) {
+    subscribeInvalidations(listener, { onReconnect } = {}) {
       return subscribeCustomerInvalidations({
         config,
         env: global,
         fetchImpl: options.fetchImpl || global.fetch,
         onEvent: listener,
+        onReconnect,
       });
     },
   };

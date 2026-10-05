@@ -10,6 +10,8 @@ import {
   createOrderOutbox,
   createOrderPayload,
   fetchCustomerCheckout,
+  fetchCustomerTheme,
+  fetchCustomerThemeConfig,
   requestCustomerCheckout,
   fetchCustomerOrderHistory,
   resolveOrderApiConfig,
@@ -420,6 +422,47 @@ test("API customer client exposes authenticated history through its existing run
   assert.equal(authorization, `Bearer ${token}`);
 });
 
+test("customer theme API returns only the supported public identifier with the customer token", async () => {
+  let captured;
+  const result = await fetchCustomerTheme({
+    config: { enabled: true, baseUrl: "https://api.example.test/v1", token: "customer-runtime-secret" },
+    fetchImpl: async (url, options) => {
+      captured = { url, options };
+      return { status: 200, json: async () => ({ theme: "camellia", version: 4, updatedAtMs: 1234 }) };
+    },
+  });
+  assert.equal(captured.url, "https://api.example.test/v1/customer/theme");
+  assert.equal(captured.options.method, "GET");
+  assert.equal(captured.options.headers.Authorization, "Bearer customer-runtime-secret");
+  assert.deepEqual(result, { theme: "camellia" });
+});
+
+test("customer theme config API returns only safe placement values", async () => {
+  let captured;
+  const result = await fetchCustomerThemeConfig({
+    config: { enabled: true, baseUrl: "https://api.example.test/v1", token: "customer-runtime-secret" },
+    fetchImpl: async (url, options) => {
+      captured = { url, options };
+      return { status: 200, json: async () => ({ theme: "camellia", positionX: 0.2, positionY: 0.8, zoom: 1.25, prompt: "secret", notes: "secret" }) };
+    },
+  });
+  assert.equal(captured.url, "https://api.example.test/v1/customer/theme-config");
+  assert.equal(captured.options.headers.Authorization, "Bearer customer-runtime-secret");
+  assert.deepEqual(result, { theme: "camellia", positionX: 0.2, positionY: 0.8, zoom: 1.25 });
+  assert.equal(Object.hasOwn(result, "prompt"), false);
+  assert.equal(Object.hasOwn(result, "notes"), false);
+});
+
+test("customer theme API rejects unknown or malformed public responses", async () => {
+  await assert.rejects(
+    () => fetchCustomerTheme({
+      config: { enabled: true, baseUrl: "https://api.example.test/v1", token: "customer-runtime-secret" },
+      fetchImpl: async () => ({ status: 200, json: async () => ({ theme: "autumn" }) }),
+    }),
+    /Customer theme response is invalid/,
+  );
+});
+
 test("customer invalidation subscription refreshes on safe SSE events and preserves the cursor", async () => {
   const token = "runtime-customer-secret";
   const eventEpoch = uuid(31);
@@ -435,6 +478,7 @@ test("customer invalidation subscription refreshes on safe SSE events and preser
   const timers = [];
   const requests = [];
   const received = [];
+  const reconnectReasons = [];
   const encoded = new TextEncoder().encode(`id: 7\ndata: ${JSON.stringify(event)}\n\n`);
   const env = {
     WARUN_ORDER_MODE: "api",
@@ -463,6 +507,7 @@ test("customer invalidation subscription refreshes on safe SSE events and preser
       };
     },
     onEvent: (value) => received.push(value),
+    onReconnect: (reason) => reconnectReasons.push(reason),
   });
 
   await new Promise((resolve) => setImmediate(resolve));
@@ -477,6 +522,41 @@ test("customer invalidation subscription refreshes on safe SSE events and preser
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(requests[1].options.headers["X-Event-Epoch"], eventEpoch);
   assert.equal(requests[1].options.headers["Last-Event-ID"], "7");
+  assert.deepEqual(reconnectReasons, ["reconnect"]);
+  unsubscribe();
+});
+
+test("customer invalidation subscription requests a refresh after an epoch reset", async () => {
+  const eventEpoch = uuid(32);
+  const timers = [];
+  const requests = [];
+  const reasons = [];
+  const env = {
+    WARUN_ORDER_MODE: "api",
+    WARUN_API_BASE: "https://api.example.test/v1",
+    WARUN_API_TOKEN: "epoch-reset-token",
+    location: { origin: "https://tablet.example.test" },
+    setTimeout(callback, delay) { timers.push({ callback, delay }); return timers.length; },
+    clearTimeout() {},
+  };
+  const unsubscribe = subscribeCustomerInvalidations({
+    config: resolveOrderApiConfig(env),
+    env,
+    fetchImpl: async (_url, options) => {
+      requests.push(options);
+      if (requests.length === 1) return { ok: true, status: 410, headers: { get: () => eventEpoch } };
+      return { ok: true, status: 200, headers: { get: (name) => name === "X-Event-Epoch" ? eventEpoch : null }, body: null };
+    },
+    onEvent: () => {},
+    onReconnect: (reason) => reasons.push(reason),
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(reasons, ["epoch-reset"]);
+  assert.equal(timers.length, 1);
+  timers[0].callback();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(requests.length, 2);
+  assert.equal(requests[1].headers["X-Event-Epoch"], undefined);
   unsubscribe();
 });
 

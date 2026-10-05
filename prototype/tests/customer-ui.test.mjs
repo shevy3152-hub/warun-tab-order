@@ -23,16 +23,42 @@ test("CustomerScreen exposes a normalized rail theme with camellia as the active
   assert.equal(normalizeCustomerTheme("standard"), "standard");
   assert.equal(normalizeCustomerTheme("camellia"), "camellia");
   assert.match(appSource, /normalizeCustomerTheme\(theme\)/);
-  assert.match(customerScreen, /data-customer-theme=\{customerTheme\}/);
+  assert.match(customerScreen, /data-customer-theme=\{visibleCustomerTheme\}/);
 });
 
 test("Customer rail keeps standard red as the safe fallback and scopes camellia imagery", () => {
   assert.match(styles, /\.customer-sidebar \{[^}]*background: var\(--red\);/);
-  assert.match(styles, /\.customer-app\[data-customer-theme="camellia"\] \.customer-sidebar \{ background: var\(--red\) url\('\/customer-rail-washi-camellia-accepted\.png'\) center \/ 100% 100% no-repeat; \}/);
-  assert.match(styles, /\.customer-app\.customer-app--category-collapsed\[data-customer-theme="camellia"\] \.customer-sidebar \{ background-image: none; background-color: var\(--red\); \}/);
-  assert.doesNotMatch(styles, /customer-sidebar::before|customer-sidebar::after/);
+  assert.match(styles, /\.customer-sidebar__theme-image \{[\s\S]*object-fit: cover/);
+  assert.match(customerScreen, /visibleCustomerTheme === "camellia" \? <img className="customer-sidebar__theme-image"/);
+  assert.match(customerScreen, /onError=\{\(\) => setCustomerThemeImageFailed\(true\)\}/);
+  assert.match(styles, /\.customer-app--category-collapsed \.customer-sidebar \{ padding: 18px 10px; \}/);
+  assert.doesNotMatch(styles, /customer-sidebar::before|customer-sidebar::after|customer-sidebar \{ background: var\(--red\) url/);
   const standardRailRule = styles.match(/\.customer-sidebar \{[^}]*\}/)?.[0] ?? "";
   assert.doesNotMatch(standardRailRule, /customer-rail-washi-camellia/);
+});
+
+test("API customer themes are fetched with auth, refreshed by the existing invalidation stream, and fall back on image failure", () => {
+  assert.match(customerScreen, /orderClient\.getTheme\(\)/);
+  assert.match(customerScreen, /event\?\.resource === "customerTheme"/);
+  assert.match(customerScreen, /event\?\.type === "customer_theme\.updated"/);
+  assert.match(customerScreen, /setCustomerThemeImageFailed\(true\)/);
+  assert.match(customerScreen, /const visibleCustomerTheme = customerThemeImageFailed \? "standard" : customerTheme/);
+  assert.match(customerScreen, /data-customer-theme=\{visibleCustomerTheme\}/);
+  assert.match(customerScreen, /orderClient\.getThemeConfig\(\)/);
+  assert.match(customerScreen, /customerThemeConfig\.positionX/);
+  assert.match(customerScreen, /--customer-theme-position-x/);
+});
+
+test("admin customer theme editor includes production notes, measured guide preview, and placement controls", () => {
+  assert.match(appSource, /画像生成プロンプト/);
+  assert.match(appSource, /プロンプトをコピー/);
+  assert.match(appSource, /制作メモ/);
+  assert.match(appSource, /426 × 1587 px/);
+  assert.match(appSource, /data-customer-guide/);
+  assert.match(appSource, /中央に戻す/);
+  assert.match(appSource, /onPointerMove/);
+  assert.match(appSource, /折り畳み時/);
+  assert.match(styles, /customer-theme-preview__guide/);
 });
 
 test("customer menu uses major category navigation with a collapsible rail", () => {
@@ -52,8 +78,8 @@ test("customer menu uses major category navigation with a collapsible rail", () 
   assert.match(customerScreen, /Math\.max\(2/);
   assert.match(customerScreen, /majorNavOpen/);
   assert.match(customerScreen, /customer-app--category-collapsed/);
-  assert.match(customerScreen, /大分類カテゴリー/);
-  assert.match(customerScreen, /IZAKAYA WARUN/);
+  assert.match(appSource, /大分類カテゴリー/);
+  assert.match(appSource, /IZAKAYA WARUN/);
   assert.doesNotMatch(customerScreen, /IZAKAYA WARUN[\s\S]*お品書き/);
   assert.match(appSource, /id: "drink", name: "飲み物"/);
   assert.match(appSource, /id: "food", name: "お食事"/);
@@ -62,7 +88,7 @@ test("customer menu uses major category navigation with a collapsible rail", () 
   assert.match(styles, /\.customer-title--horizontal \{[\s\S]*transform: translateY\(-5px\)/);
   assert.match(styles, /\.category-nav \{ margin-top: 18px; padding-top: 155px; display: grid; \}/);
   assert.match(styles, /\.customer-title--horizontal strong \{ font-size: clamp\(36px, 4vw, 44px\); \}/);
-  assert.match(customerScreen, /<span>現在<\/span>[\s\S]*メインカテゴリーに戻る/);
+  assert.match(appSource, /<span>現在<\/span>[\s\S]*メインカテゴリーに戻る/);
   assert.match(customerScreen, /setMajorNavOpen\(true\)/);
   assert.match(customerScreen, /setMajorNavOpen\(false\)/);
   assert.match(customerScreen, /subcategory-nav/);
@@ -314,13 +340,14 @@ test("admin shochu edits reuse canonical serving option IDs", () => {
 
 test("major category selection collapses to a 78px rail and the rail reopens it", () => {
   assert.match(customerScreen, /const \[majorNavOpen, setMajorNavOpen\] = useState\(true\)/);
-  assert.match(customerScreen, /onClick=\{\(\) => selectMajorCategory\(category\.id\)\}/);
+  assert.match(appSource, /onClick=\{\(\) => onSelectCategory\?\.\(category\.id\)\}/);
   assert.match(customerScreen, /setMajorNavOpen\(false\)/);
   assert.match(customerScreen, /const selectSubcategory = \(nextCategoryId\) => \{[\s\S]*setMajorNavOpen\(false\)/);
-  assert.match(customerScreen, /customer-sidebar__collapsed-toggle.*setMajorNavOpen\(true\)/s);
-  assert.match(customerScreen, /<span>現在<\/span>[\s\S]*メインカテゴリーに戻る/);
-  assert.match(customerScreen, /category-nav__placeholder/);
-  assert.match(styles, /\.customer-app\.customer-app--category-collapsed \{ grid-template-columns: 78px/);
+  assert.match(appSource, /customer-sidebar__collapsed-toggle.*onExpand/s);
+  assert.match(appSource, /<span>現在<\/span>[\s\S]*メインカテゴリーに戻る/);
+  assert.match(appSource, /category-nav__placeholder/);
+  assert.match(styles, /--customer-rail-collapsed-width: 78px/);
+  assert.match(styles, /\.customer-app\.customer-app--category-collapsed \{ grid-template-columns: var\(--customer-rail-collapsed-width\)/);
   assert.match(styles, /\.customer-sidebar__collapsed-toggle \{/);
 });
 

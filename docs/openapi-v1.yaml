@@ -17,6 +17,7 @@ tags:
   - name: System
   - name: Pairing
   - name: Device
+  - name: Customer
   - name: Menu
   - name: Orders
   - name: StaffCalls
@@ -90,6 +91,124 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/AdminBusinessHours'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/AuthenticationFailed'
+        '403':
+          $ref: '#/components/responses/PermissionDenied'
+        '409':
+          $ref: '#/components/responses/VersionConflict'
+
+  /v1/customer/theme:
+    get:
+      tags: [Customer]
+      summary: 客席左レールのテーマ識別子を取得する
+      operationId: getCustomerTheme
+      responses:
+        '200':
+          description: 客席向けに公開するテーマ識別子だけを返す
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PublicCustomerTheme'
+        '401':
+          $ref: '#/components/responses/AuthenticationFailed'
+        '403':
+          $ref: '#/components/responses/PermissionDenied'
+
+  /v1/customer/theme-config:
+    get:
+      tags: [Customer]
+      summary: 客席左レールの表示テーマと配置値を取得する
+      operationId: getCustomerThemeConfig
+      responses:
+        '200':
+          description: 客席向けの安全なテーマ識別子・正規化配置値だけを返す
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PublicCustomerThemeConfig'
+        '401':
+          $ref: '#/components/responses/AuthenticationFailed'
+        '403':
+          $ref: '#/components/responses/PermissionDenied'
+
+  /v1/admin/customer-theme:
+    get:
+      tags: [Admin]
+      summary: 客席左レールのテーマ設定を取得する
+      operationId: getAdminCustomerTheme
+      responses:
+        '200':
+          description: versionを含む客席テーマ設定
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminCustomerTheme'
+        '401':
+          $ref: '#/components/responses/AuthenticationFailed'
+        '403':
+          $ref: '#/components/responses/PermissionDenied'
+    put:
+      tags: [Admin]
+      summary: 客席左レールのテーマを更新する
+      operationId: updateAdminCustomerTheme
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateCustomerThemeRequest'
+      responses:
+        '200':
+          description: 更新後の客席テーマ設定
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminCustomerTheme'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/AuthenticationFailed'
+        '403':
+          $ref: '#/components/responses/PermissionDenied'
+        '409':
+          $ref: '#/components/responses/VersionConflict'
+
+  /v1/admin/customer-theme-config:
+    get:
+      tags: [Admin]
+      summary: 客席左レールのテーマ制作設定を取得する
+      operationId: getAdminCustomerThemeConfig
+      responses:
+        '200':
+          description: プロンプト・制作メモ・正規化配置値を含む管理者向け設定
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminCustomerThemeConfig'
+        '401':
+          $ref: '#/components/responses/AuthenticationFailed'
+        '403':
+          $ref: '#/components/responses/PermissionDenied'
+    put:
+      tags: [Admin]
+      summary: 客席左レールのテーマ制作設定を更新する
+      operationId: updateAdminCustomerThemeConfig
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateCustomerThemeConfigRequest'
+      responses:
+        '200':
+          description: 更新後のテーマ制作設定
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminCustomerThemeConfig'
         '400':
           $ref: '#/components/responses/BadRequest'
         '401':
@@ -966,8 +1085,10 @@ paths:
       description: |
         Last-Event-IDとX-Event-Epochは両方指定するか、両方省略する。指定時は次のeventIdから
         欠落分を昇順送信し、その後ライブ配信する。両方省略した初回接続は現在tailからliveだけを受信する。
-        正式な初期同期はsnapshot取得後、そのcursorで接続する。commit済みevent_logだけをrole別に投影し、
+        正式な初期同期はsnapshot取得後、そのcursorで接続する。通常イベントはcommit済みevent_logからrole別に投影し、
         生payload_jsonは公開しない。不可視イベントでもid-only cursor frameでcursorを進める。
+        customer_theme.updatedだけはevent_logに保存しない一時invalidationで、customer audienceへdataを送るが
+        SSE idとeventIdを持たない。これは永続cursorを進めず、通知を受け取れなかった場合も再接続後にRESTで現在設定を再取得する。
         heartbeatはcommentとして送る。遅い接続は接続単位で制限・切断し、再接続replayへ戻す。
         SSE切断はREST注文の失敗を意味しない。履歴が利用不能なら410を返し、snapshotを取得する。
         Bearer tokenをURLへ出さずAuthorization headerを使えるfetch streaming clientを前提とする。
@@ -978,8 +1099,9 @@ paths:
       responses:
         '200':
           description: |
-            text/event-stream。各メッセージはid、event、dataを持つ。
-            dataはRoleScopedEventEnvelopeのJSON表現。id-only frameとheartbeat commentはdataを持たない。
+            text/event-stream。永続イベントはid、event、dataを持ち、dataはRoleScopedEventEnvelopeのJSON表現。
+            customer_theme.updatedはcustomer専用の一時invalidationで、eventとdataのみを持ち、dataはCustomerThemeTransientEventEnvelopeのJSON表現。
+            一時invalidationはid-only frameと同様にcursorを進めない。id-only frameとheartbeat commentはdataを持たない。
           headers:
             X-Event-Epoch:
               schema:
@@ -995,6 +1117,9 @@ paths:
                 id: 1842
                 event: order.created
                 data: {"audience":"kitchen","eventEpoch":"00000000-0000-4000-8000-000000000100","eventId":1842,"type":"order.created","aggregateId":"01912345-6789-4abc-8def-0123456789ab","occurredAtMs":1786280000000,"payload":{"resource":"orders","refreshRequired":true}}
+
+                event: customer_theme.updated
+                data: {"audience":"customer","eventEpoch":"00000000-0000-4000-8000-000000000100","type":"customer_theme.updated","aggregateId":"customer-theme","occurredAtMs":1786280000001,"payload":{"resource":"customerTheme","refreshRequired":true}}
 
         '400':
           $ref: '#/components/responses/ReadOnlyBadRequest'
@@ -1575,6 +1700,137 @@ components:
               minimum: 0
             updatedAtMs:
               $ref: '#/components/schemas/TimestampMs'
+    CustomerThemeKey:
+      type: string
+      enum: [standard, camellia]
+    PublicCustomerTheme:
+      type: object
+      additionalProperties: false
+      required: [theme]
+      properties:
+        theme:
+          $ref: '#/components/schemas/CustomerThemeKey'
+    CustomerThemePlacement:
+      type: object
+      additionalProperties: false
+      required: [positionX, positionY, zoom]
+      properties:
+        positionX:
+          type: number
+          minimum: 0
+          maximum: 1
+        positionY:
+          type: number
+          minimum: 0
+          maximum: 1
+        zoom:
+          type: number
+          minimum: 0.5
+          maximum: 3
+    PublicCustomerThemeConfig:
+      type: object
+      additionalProperties: false
+      required: [theme, positionX, positionY, zoom]
+      properties:
+        theme:
+          $ref: '#/components/schemas/CustomerThemeKey'
+        positionX:
+          type: number
+          minimum: 0
+          maximum: 1
+        positionY:
+          type: number
+          minimum: 0
+          maximum: 1
+        zoom:
+          type: number
+          minimum: 0.5
+          maximum: 3
+    CustomerThemeVariantConfig:
+      type: object
+      additionalProperties: false
+      required: [prompt, notes, positionX, positionY, zoom]
+      properties:
+        prompt:
+          type: string
+          maxLength: 4000
+        notes:
+          type: string
+          maxLength: 4000
+        positionX:
+          type: number
+          minimum: 0
+          maximum: 1
+        positionY:
+          type: number
+          minimum: 0
+          maximum: 1
+        zoom:
+          type: number
+          minimum: 0.5
+          maximum: 3
+    AdminCustomerThemeConfig:
+      type: object
+      additionalProperties: false
+      required: [theme, version, updatedAtMs, themes]
+      properties:
+        theme:
+          $ref: '#/components/schemas/CustomerThemeKey'
+        version:
+          type: integer
+          minimum: 0
+        updatedAtMs:
+          $ref: '#/components/schemas/TimestampMs'
+        themes:
+          type: object
+          additionalProperties: false
+          required: [standard, camellia]
+          properties:
+            standard:
+              $ref: '#/components/schemas/CustomerThemeVariantConfig'
+            camellia:
+              $ref: '#/components/schemas/CustomerThemeVariantConfig'
+    UpdateCustomerThemeConfigRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion, theme, themes]
+      properties:
+        expectedVersion:
+          type: integer
+          minimum: 0
+        theme:
+          $ref: '#/components/schemas/CustomerThemeKey'
+        themes:
+          type: object
+          additionalProperties: false
+          required: [standard, camellia]
+          properties:
+            standard:
+              $ref: '#/components/schemas/CustomerThemeVariantConfig'
+            camellia:
+              $ref: '#/components/schemas/CustomerThemeVariantConfig'
+    AdminCustomerTheme:
+      type: object
+      additionalProperties: false
+      required: [theme, version, updatedAtMs]
+      properties:
+        theme:
+          $ref: '#/components/schemas/CustomerThemeKey'
+        version:
+          type: integer
+          minimum: 0
+        updatedAtMs:
+          $ref: '#/components/schemas/TimestampMs'
+    UpdateCustomerThemeRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion, theme]
+      properties:
+        expectedVersion:
+          type: integer
+          minimum: 0
+        theme:
+          $ref: '#/components/schemas/CustomerThemeKey'
     UpdateBusinessHoursRequest:
       type: object
       additionalProperties: false
@@ -1652,6 +1908,7 @@ components:
             - item_sold_out
             - invalid_quantity
             - version_conflict
+            - customer_theme_conflict
             - ride_guidance_conflict
             - order_completed
             - event_history_unavailable
@@ -1681,7 +1938,7 @@ components:
           $ref: '#/components/schemas/TimestampMs'
         schemaVersion:
           type: integer
-          const: 2
+          const: 17
         eventEpoch:
           $ref: '#/components/schemas/Uuid'
     ReadOnlyErrorDetail:
@@ -2651,7 +2908,7 @@ components:
       properties:
         resource:
           type: string
-          enum: [orders, menu, staffCalls, deviceConfig, businessHours, rideGuidance]
+          enum: [orders, menu, staffCalls, deviceConfig, businessHours, rideGuidance, customerTheme]
         refreshRequired:
           type: boolean
           const: true
@@ -2680,6 +2937,7 @@ components:
             - staff_call.resolved
             - device.revoked
             - table.assignment_updated
+            - customer_theme.updated
         aggregateId:
           $ref: '#/components/schemas/OpaqueId'
         occurredAtMs:
@@ -2742,6 +3000,7 @@ components:
             - device.paired
             - device.revoked
             - table.assignment_updated
+            - customer_theme.updated
         aggregateId:
           $ref: '#/components/schemas/OpaqueId'
         occurredAtMs:
@@ -2756,6 +3015,36 @@ components:
         - $ref: '#/components/schemas/AdminEventEnvelope'
       discriminator:
         propertyName: audience
+    CustomerThemeTransientEventEnvelope:
+      type: object
+      additionalProperties: false
+      required: [audience, eventEpoch, type, aggregateId, occurredAtMs, payload]
+      properties:
+        audience:
+          type: string
+          const: customer
+        eventEpoch:
+          $ref: '#/components/schemas/Uuid'
+        type:
+          type: string
+          const: customer_theme.updated
+        aggregateId:
+          type: string
+          const: customer-theme
+        occurredAtMs:
+          $ref: '#/components/schemas/TimestampMs'
+        payload:
+          type: object
+          additionalProperties: false
+          required: [resource, refreshRequired]
+          properties:
+            resource:
+              type: string
+              const: customerTheme
+            refreshRequired:
+              type: boolean
+              const: true
+      description: 保存済み設定の再取得を促す非永続通知。SSE idとeventIdは持たず、再接続後はRESTから状態を再取得する。
     CustomerEventReplayResponse:
       type: object
       additionalProperties: false

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { createAdminRideGuidanceContact, deleteAdminRideGuidanceContact, fetchAdminCheckoutRequests, fetchAdminRideGuidance, saveAdminRideGuidanceOrdering, saveAdminRideGuidancePickup, updateAdminRideGuidanceContact, fetchAdminBusinessHours, saveAdminBusinessHours, saveAdminCategory, saveAdminMenuItem, saveAdminMenuOrdering } from '../src/admin-pairing.js';
+import { createAdminRideGuidanceContact, deleteAdminRideGuidanceContact, fetchAdminCheckoutRequests, fetchAdminCustomerTheme, fetchAdminCustomerThemeConfig, fetchAdminRideGuidance, saveAdminCustomerTheme, saveAdminCustomerThemeConfig, saveAdminRideGuidanceOrdering, saveAdminRideGuidancePickup, updateAdminRideGuidanceContact, fetchAdminBusinessHours, saveAdminBusinessHours, saveAdminCategory, saveAdminMenuItem, saveAdminMenuOrdering } from '../src/admin-pairing.js';
 
 const env = {
   WARUN_ADMIN_API_TOKEN: 'admin-token-for-test',
@@ -23,6 +23,35 @@ test('fetchAdminCheckoutRequests reads active checkout state with the admin toke
   assert.equal(captured.options.method, undefined);
   assert.equal(captured.options.headers.Authorization, 'Bearer admin-token-for-test');
   assert.deepEqual(result, checkouts);
+});
+
+test('customer theme config client preserves prompt metadata and sends normalized placement values', async () => {
+  let captured;
+  const responseBody = {
+    theme: 'camellia',
+    version: 4,
+    updatedAtMs: 1234,
+    themes: {
+      standard: { prompt: 'red', notes: 'fallback', positionX: 0.5, positionY: 0.5, zoom: 1 },
+      camellia: { prompt: '椿。文字なし', notes: '426x1587', positionX: 0.2, positionY: 0.8, zoom: 1.25 },
+    },
+  };
+  const loaded = await fetchAdminCustomerThemeConfig({ env, fetchImpl: async () => ({ ok: true, json: async () => responseBody }) });
+  assert.equal(loaded.themes.camellia.notes, '426x1587');
+  const saved = await saveAdminCustomerThemeConfig({
+    env,
+    expectedVersion: loaded.version,
+    theme: loaded.theme,
+    themes: loaded.themes,
+    fetchImpl: async (url, options) => {
+      captured = { url, options };
+      return { ok: true, json: async () => ({ ...responseBody, version: 5 }) };
+    },
+  });
+  assert.equal(captured.url, `${env.WARUN_API_BASE}/admin/customer-theme-config`);
+  assert.equal(captured.options.method, 'PUT');
+  assert.equal(JSON.parse(captured.options.body).themes.camellia.positionX, 0.2);
+  assert.equal(saved.version, 5);
 });
 
 test('saveAdminMenuItem sends the authenticated optimistic catalog write contract', async () => {
@@ -133,6 +162,35 @@ test('business-hours admin client preserves 409 conflict and does not report suc
       fetchImpl: async () => ({ ok: false, status: 409, json: async () => ({ error: { code: 'BUSINESS_HOURS_CONFLICT' } }) }),
     }),
     (error) => error.code === 'BUSINESS_HOURS_CONFLICT' && error.status === 409,
+  );
+});
+
+test('customer rail theme admin client uses its authenticated optimistic contract', async () => {
+  const requests = [];
+  const responseBody = { theme: 'camellia', version: 4, updatedAtMs: 1234 };
+  const fetchImpl = async (url, options = {}) => {
+    requests.push({ url, options, body: options.body ? JSON.parse(options.body) : null });
+    return { ok: true, status: 200, json: async () => responseBody };
+  };
+  const loaded = await fetchAdminCustomerTheme({ env, fetchImpl });
+  const saved = await saveAdminCustomerTheme({ env, theme: 'camellia', expectedVersion: loaded.version, fetchImpl });
+  assert.equal(requests[0].url, 'http://127.0.0.1:8787/v1/admin/customer-theme');
+  assert.equal(requests[0].options.headers.Authorization, 'Bearer admin-token-for-test');
+  assert.equal(requests[1].options.method, 'PUT');
+  assert.deepEqual(requests[1].body, { theme: 'camellia', expectedVersion: 4 });
+  assert.deepEqual(loaded, responseBody);
+  assert.deepEqual(saved, responseBody);
+});
+
+test('customer rail theme admin client preserves version conflicts', async () => {
+  await assert.rejects(
+    () => saveAdminCustomerTheme({
+      env,
+      theme: 'standard',
+      expectedVersion: 2,
+      fetchImpl: async () => ({ ok: false, status: 409, json: async () => ({ error: { code: 'CUSTOMER_THEME_CONFLICT' } }) }),
+    }),
+    (error) => error.code === 'CUSTOMER_THEME_CONFLICT' && error.status === 409,
   );
 });
 
