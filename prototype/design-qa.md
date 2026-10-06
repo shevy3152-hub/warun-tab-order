@@ -152,3 +152,13 @@ visual result: partial — controls and clipping inspected in demo at 1280×800 
 - QA runtime停止前の照合: health ready、schema 19、DB target other、runtime PIDとAPI/Web listener PID一致。runtime停止後は別途最終報告に停止確認を記録する。
 
 functional result: passed — user-confirmed table visibility modes, cart blocking/recovery, and independent session-grant interaction; viewport acceptance and empty-category presentation remain open.
+
+## 空カテゴリ修正・指定viewport画面QA追補 2026-10-06
+
+- 空API応答時、客席クライアントが静的な下位カテゴリ一覧へfallbackする共通経路を確認した。QA DBの商品が1件だけだったためテーブル2のメニューカテゴリが空になったが、原因はQA専用表示ではなく、API categoriesが空の場合に全客席で使われるfallbackだった。API応答後は表示対象商品を持つカテゴリだけを出す要件に合わせ、空配列の場合は下位カテゴリを隠すよう最小修正した。
+- 「飲み物」「お食事」など既存の大分類レール、固定操作「おかわり！」、APIカテゴリがまだないデモ時の静的fallbackは維持。大分類レールの表示は空API応答から商品や非表示商品を推測させる案内として追加したものではない。
+- 関連テスト57/57、Sitesテスト4/4、直接Vite production build（4,587 modules）、Sites build preparation、inline-client生成、`git diff --check`はPASS。通常の`pnpm run build`は未承認esbuild build scriptの安全チェックでbuild前に停止し、承認設定は変更していない。記載のテスト／buildは今回の確認時の結果で、終了処理では再実行していない。
+- 指定CSS viewport 1280×800／1637×602、DPR 1、`fullPage=false`の画面QAとPNG保存は未実施。管理編集欄・3方式・テーブル選択・保存ボタン、客席の表示差および注文不可カートの画面状態は未確認。Computer UseがWindows上のChrome URLを十分な確度で判定できず、ブラウザー操作を停止したため。既往の利用者手動機能QA PASSは前項に記録し、本画面QAの結果には含めない。
+- 画面QA用の新規使い捨てruntimeはhealth/db ready、schema v19、environment `table-menu-qa`、database target `other`。DB: `C:\Users\user\AppData\Local\Temp\warun-table-menu-visibility-screen-20261006-16a81a048e8a4f2882ffb4470ea5dd8a\database\qa.sqlite3`。runtime PID 8956、API listener 52537、Web listener 52538はいずれも同一PIDとして照合した。照合後に起動wrapperのCtrl+C／SIGINT経路で今回のQAだけへ停止を送り、対象PIDの終了および両listener消失を確認した。停止後の終了コード表示は取得できなかった。QA DB・bundle・起動資材・登録リンクは保持。
+
+visual result: incomplete — the empty-category fallback was corrected and automated checks passed, but neither exact viewport/DPR screen QA nor PNG capture was completed.

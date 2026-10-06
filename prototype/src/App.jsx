@@ -37,6 +37,7 @@ import { CUSTOMER_TEST_THEME, normalizeCustomerTheme } from "./customer-theme.js
 import { DEFAULT_BUSINESS_HOURS, businessHoursDisplay, businessHoursHourLabel, combineBusinessHoursTime, normalizeBusinessHours, splitBusinessHoursTime } from "./business-hours.js";
 import { DEFAULT_BUSINESS_HOURS_NOTICE, withBusinessHoursNotice } from "./business-hours-notice.js";
 import { CHECKOUT_ADJUSTMENT_TYPES, checkoutAdjustmentTotal, normalizeCheckoutAdjustments, parseFixedAdjustment } from "./checkout-adjustments.js";
+import { buildCustomerMajorCategories } from "./customer-category-navigation.js";
 
 const STORAGE_KEY = "izakaya-order-prototype-v3";
 
@@ -255,32 +256,6 @@ const FOOD_VARIANT_DEFINITIONS = {
 const CUSTOMER_DRINK_CATEGORY_IDS = new Set(CUSTOMER_DRINK_SUBCATEGORIES.flatMap((subcategory) => subcategory.categoryIds));
 const KITCHEN_DRINK_CATEGORY_IDS = new Set([...CUSTOMER_DRINK_CATEGORY_IDS, "drink", "soft"]);
 const CUSTOMER_FEATURED_MENU_IDS = ["edamame", "dashimaki", "beer", "lemon", "karaage"];
-
-function buildCustomerMajorCategories(categories) {
-  if (!Array.isArray(categories) || categories.length === 0) return CUSTOMER_MAJOR_CATEGORIES;
-  const rails = [
-    { id: "drink", name: "飲み物" },
-    { id: "food", name: "お食事" },
-    { id: "winter", name: "冬季限定" },
-    { id: "seasonal", name: "季節・気まぐれ" },
-  ];
-  return rails.map((rail) => {
-    const subcategories = categories
-      .filter((category) => category.sectionKey === rail.id)
-      .sort((a, b) => a.sortOrder - b.sortOrder || a.categoryId.localeCompare(b.categoryId, "ja"))
-      .map((category) => ({ id: category.categoryId, name: category.name, categoryIds: [category.categoryId] }));
-    const isPlaceholder = rail.id === "seasonal" && subcategories.length === 0;
-    return {
-      ...rail,
-      name: isPlaceholder ? "" : rail.name,
-      isPlaceholder,
-      subcategories: [
-      ...(rail.id === "drink" ? [{ id: "recommended", name: "おかわり！", categoryIds: [] }] : []),
-        ...subcategories,
-      ],
-    };
-  });
-}
 
 function mapAdminCatalogState(catalog) {
   return {
@@ -916,7 +891,7 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
   const menuIdleTimerRef = useRef(null);
   const imoRef = useRef(null);
   const otherRef = useRef(null);
-  const customerMajorCategories = buildCustomerMajorCategories(apiMenu?.categories);
+  const customerMajorCategories = buildCustomerMajorCategories(apiMenu?.categories, CUSTOMER_MAJOR_CATEGORIES);
   const currentMajorCategory = customerMajorCategories.find((category) => category.id === majorCategoryId) ?? customerMajorCategories[0];
   const currentSubcategories = currentMajorCategory.subcategories;
   const currentCategory = currentSubcategories.find((category) => category.id === categoryId) ?? currentSubcategories[0];
@@ -1485,8 +1460,8 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
 
         <div className="customer-content">
           <section className="menu-panel" onWheel={handleMenuInteraction} onTouchMove={handleMenuInteraction} onClick={handleMenuClick}>
-            <div className={`menu-heading ${currentMajorCategory.id === "drink" ? "menu-heading--drink" : ""} ${currentCategory?.id === "shochu" ? "menu-heading--shochu" : ""}`}><div className="menu-heading__breadcrumb"><span>{currentMajorCategory.name}</span><b>&gt;</b><strong>{currentCategoryLabel}</strong></div>{currentMajorCategory.id === "drink" && !drinkCategoryNavOpen ? <button className="category-return-button category-return-button--inline" type="button" onClick={(event) => { event.stopPropagation(); restoreDrinkCategoryNavigation(); }}>飲み物一覧に戻る</button> : null}</div>
-            {currentMajorCategory.id !== "drink" || drinkCategoryNavOpen ? <nav className={`subcategory-nav ${currentMajorCategory.id === "drink" ? "subcategory-nav--drink" : ""}`} aria-label={`${currentMajorCategory.name}の細分類`}>
+            <div className={`menu-heading ${currentMajorCategory.id === "drink" ? "menu-heading--drink" : ""} ${currentCategory?.id === "shochu" ? "menu-heading--shochu" : ""}`}><div className="menu-heading__breadcrumb"><span>{currentMajorCategory.name}</span>{currentCategory ? <><b>&gt;</b><strong>{currentCategoryLabel}</strong></> : null}</div>{currentMajorCategory.id === "drink" && !drinkCategoryNavOpen ? <button className="category-return-button category-return-button--inline" type="button" onClick={(event) => { event.stopPropagation(); restoreDrinkCategoryNavigation(); }}>飲み物一覧に戻る</button> : null}</div>
+            {currentSubcategories.length > 0 && (currentMajorCategory.id !== "drink" || drinkCategoryNavOpen) ? <nav className={`subcategory-nav ${currentMajorCategory.id === "drink" ? "subcategory-nav--drink" : ""}`} aria-label={`${currentMajorCategory.name}の細分類`}>
               {currentSubcategories.map((category) => <button key={category.id} className={category.id === currentCategory?.id ? "is-active" : ""} onClick={() => selectSubcategory(category.id)}>{category.name}</button>)}
             </nav> : null}
             {isShochu ? <nav className="drink-jump-nav" aria-label="焼酎の分類"><button onClick={() => imoRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })}>芋</button><button onClick={() => otherRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })}>麦・その他</button></nav> : null}
