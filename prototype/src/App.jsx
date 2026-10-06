@@ -288,7 +288,7 @@ function mapAdminCatalogState(catalog) {
     menuItems: catalog.items.map((item) => ({
       id: item.menuItemId, categoryId: item.categoryId, name: item.formalName, kitchenAlias: item.kitchenAlias,
       description: item.description, price: item.priceYen, imageUri: item.imageUri, sectionKey: item.sectionKey,
-      isSoldOut: item.isSoldOut, orderingMode: item.orderingMode ?? "normal", customerVisibilityMode: item.customerVisibilityMode ?? "all_tables", isActive: item.isActive, sortOrder: item.sortOrder, version: item.version,
+      isSoldOut: item.isSoldOut, orderingMode: item.orderingMode ?? "normal", customerVisibilityMode: item.customerVisibilityMode ?? "all_tables", tableVisibilityMode: item.tableVisibilityMode ?? "all_tables", tableVisibilityTableIds: item.tableVisibilityTableIds ?? [], isActive: item.isActive, sortOrder: item.sortOrder, version: item.version,
       detail: item.detail, variants: item.variants ?? [], servingOptions: item.servingOptions ?? [], imageLayouts: item.imageLayouts,
     })),
   };
@@ -2905,6 +2905,21 @@ function SessionMenuAccessPanel({ adminApiMode, menuItems }) {
     </> : null}
   </section>;
 }
+function TableVisibilityFields({ tables, mode = "all_tables", selectedTableIds = [], disabled = false }) {
+  const [currentMode, setCurrentMode] = useState(mode);
+  const [currentTableIds, setCurrentTableIds] = useState(selectedTableIds);
+  return <fieldset className="menu-table-visibility" disabled={disabled}>
+    <legend>テーブル別表示</legend>
+    <label><input type="radio" name="tableVisibilityMode" value="all_tables" checked={currentMode === "all_tables"} onChange={() => setCurrentMode("all_tables")} /> 全テーブルに表示</label>
+    <label><input type="radio" name="tableVisibilityMode" value="selected_tables" checked={currentMode === "selected_tables"} disabled={!tables.length} onChange={() => setCurrentMode("selected_tables")} /> 指定テーブルだけに表示</label>
+    <label><input type="radio" name="tableVisibilityMode" value="except_selected_tables" checked={currentMode === "except_selected_tables"} disabled={!tables.length} onChange={() => setCurrentMode("except_selected_tables")} /> 指定テーブルだけで非表示</label>
+    {currentMode !== "all_tables" ? <div className="menu-table-visibility__tables" aria-label="対象テーブル">
+      {tables.map((table) => <label key={table.tableId}><input type="checkbox" name="tableVisibilityTableIds" value={table.tableId} checked={currentTableIds.includes(table.tableId)} onChange={(event) => setCurrentTableIds((ids) => event.target.checked ? [...ids, table.tableId] : ids.filter((id) => id !== table.tableId))} /> {table.label}</label>)}
+      {!tables.length ? <span>テーブル一覧を取得できません。</span> : null}
+    </div> : null}
+  </fieldset>;
+}
+
 function AdminScreen({ state, updateState, section = "menu" }) {
   const adminApiMode = Boolean(configuredAdminToken(window));
   const [showAdd, setShowAdd] = useState(false);
@@ -2920,6 +2935,8 @@ function AdminScreen({ state, updateState, section = "menu" }) {
   const [diagnosticExpanded, setDiagnosticExpanded] = useState(false);
   const [imageLayoutItemId, setImageLayoutItemId] = useState(null);
   const [catalogState, setCatalogState] = useState({ loading: Boolean(configuredAdminToken(window)) && section === "menu", error: false, saving: false, message: "" });
+  const [tableVisibilityTables, setTableVisibilityTables] = useState(adminApiMode ? [] : [1, 2, 3, 4].map((tableId) => ({ tableId, label: `テーブル ${tableId}` })));
+  const [tableVisibilityTablesError, setTableVisibilityTablesError] = useState(false);
   const [reorderMode, setReorderMode] = useState(false);
   const [reorderCategoryId, setReorderCategoryId] = useState("");
   const [reorderDraftIds, setReorderDraftIds] = useState([]);
@@ -2948,6 +2965,17 @@ function AdminScreen({ state, updateState, section = "menu" }) {
       }
     };
     void load();
+    return () => { cancelled = true; };
+  }, [adminApiMode, section]);
+  useEffect(() => {
+    if (!adminApiMode || section !== "menu") return undefined;
+    let cancelled = false;
+    fetchAdminSessionMenuAccess({ env: window }).then((result) => {
+      if (!cancelled) {
+        setTableVisibilityTables(result.tables.map(({ tableId, label }) => ({ tableId, label })));
+        setTableVisibilityTablesError(false);
+      }
+    }).catch(() => { if (!cancelled) setTableVisibilityTablesError(true); });
     return () => { cancelled = true; };
   }, [adminApiMode, section]);
   const loadBusinessHours = async () => {
@@ -3086,6 +3114,12 @@ function AdminScreen({ state, updateState, section = "menu" }) {
     const name = form.get("name")?.toString().trim();
     const kitchenAlias = form.get("kitchenAlias")?.toString().trim();
     if (!name) return;
+    const tableVisibilityMode = form.get("tableVisibilityMode")?.toString() || "all_tables";
+    const tableVisibilityTableIds = form.getAll("tableVisibilityTableIds").map(Number);
+    if (tableVisibilityMode !== "all_tables" && tableVisibilityTableIds.length === 0) {
+      setCatalogState((current) => ({ ...current, message: "指定モードでは対象テーブルを1つ以上選択してください。" }));
+      return;
+    }
     const targetId = editingMenuId ?? makeId("menu");
     const variantDefinitions = [
       ["グラス", "110ml", "glassPrice", "glass", "glassCold", "glassHot"],
@@ -3137,6 +3171,8 @@ function AdminScreen({ state, updateState, section = "menu" }) {
       description: form.get("description")?.toString().trim() ?? "",
       orderingMode: form.get("orderingMode") === "reservation_only" ? "reservation_only" : "normal",
       customerVisibilityMode: form.get("customerVisibilityMode") === "per_session" ? "per_session" : "all_tables",
+      tableVisibilityMode,
+      tableVisibilityTableIds: tableVisibilityMode === "all_tables" ? [] : tableVisibilityTableIds,
       price: Number(form.get("price")) || 0,
       imageUri: form.get("imageUri")?.toString().trim() || undefined,
       sectionKey: form.get("sectionKey")?.toString().trim() || undefined,
@@ -3189,6 +3225,8 @@ function AdminScreen({ state, updateState, section = "menu" }) {
           isSoldOut: refreshedItem.isSoldOut,
           orderingMode: refreshedItem.orderingMode ?? "normal",
           customerVisibilityMode: refreshedItem.customerVisibilityMode ?? "all_tables",
+          tableVisibilityMode: refreshedItem.tableVisibilityMode ?? "all_tables",
+          tableVisibilityTableIds: refreshedItem.tableVisibilityTableIds ?? [],
           isActive: refreshedItem.isActive,
           sortOrder: refreshedItem.sortOrder,
           version: refreshedItem.version,
@@ -3238,7 +3276,13 @@ function AdminScreen({ state, updateState, section = "menu" }) {
       isActive: form.get("isActive") === "on",
       imageUri: form.get("imageUri")?.toString().trim() || null,
       customerVisibilityMode: form.get("customerVisibilityMode") === "per_session" ? "per_session" : "all_tables",
+      tableVisibilityMode: form.get("tableVisibilityMode")?.toString() || "all_tables",
+      tableVisibilityTableIds: form.get("tableVisibilityMode") === "all_tables" ? [] : form.getAll("tableVisibilityTableIds").map(Number),
     };
+    if (nextItem.tableVisibilityMode !== "all_tables" && nextItem.tableVisibilityTableIds.length === 0) {
+      setCatalogState((current) => ({ ...current, message: "指定モードでは対象テーブルを1つ以上選択してください。" }));
+      return;
+    }
     setCatalogState((current) => ({ ...current, saving: adminApiMode, message: "" }));
     try {
       if (adminApiMode) {
@@ -3453,6 +3497,8 @@ function AdminScreen({ state, updateState, section = "menu" }) {
 
         {adminApiMode && catalogState.loading ? <p className="empty-state">管理カタログを読み込み中です。</p> : null}
         {adminApiMode && catalogState.error ? <p className="empty-state" role="alert">{catalogState.message}</p> : null}
+        {section === "menu" && tableVisibilityTablesError ? <p className="session-menu-access__error" role="alert">テーブル別表示の対象一覧を取得できません。管理APIへ接続して再読込してください。</p> : null}
+        {section === "menu" && catalogState.message && !catalogState.error ? <p className="session-menu-access__message" role="status">{catalogState.message}</p> : null}
 
         {section === "menu-access" ? <SessionMenuAccessPanel adminApiMode={adminApiMode} menuItems={state.menuItems} /> : null}
         {section === "menu" ? <>
@@ -3473,6 +3519,7 @@ function AdminScreen({ state, updateState, section = "menu" }) {
             <label>カテゴリ<select name="categoryId" defaultValue={editingMenu?.categoryId}>{state.categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}</select></label>
             <label>税込マスター価格<input name="price" type="number" min="0" step="1" defaultValue={editingMenu?.price ?? 500} /></label>
             <label>客席での表示<select name="customerVisibilityMode" defaultValue={editingMenu?.customerVisibilityMode ?? "all_tables"}><option value="all_tables">全テーブル</option><option value="per_session">来店ごとに許可</option></select></label>
+            <TableVisibilityFields tables={tableVisibilityTables} mode={editingMenu?.tableVisibilityMode ?? "all_tables"} selectedTableIds={editingMenu?.tableVisibilityTableIds ?? []} />
             <label className="menu-editor__wide">{descriptionFieldLabel}<textarea name="description" defaultValue={editingMenu?.description ?? ""} /></label>
             <label className="menu-editor__check"><input type="checkbox" name="isSoldOut" defaultChecked={editingMenu?.isSoldOut ?? false} /> 売り切れ</label>
             <fieldset className="menu-ordering-mode"><legend>注文方法</legend><label><input type="radio" name="orderingMode" value="normal" defaultChecked={(editingMenu?.orderingMode ?? "normal") === "normal"} /> 注文方法：通常注文</label><label><input type="radio" name="orderingMode" value="reservation_only" defaultChecked={editingMenu?.orderingMode === "reservation_only"} /> 注文方法：予約限定</label></fieldset>
@@ -3497,7 +3544,7 @@ function AdminScreen({ state, updateState, section = "menu" }) {
             <label className="menu-editor__wide">おすすめコメント<textarea name="recommendation" defaultValue={editingMenu?.detail?.recommendation ?? ""} /></label>
              <div className="menu-editor__actions"><button className="button button--quiet" type="button" onClick={resetMenuEditor} disabled={catalogState.saving}>キャンセル</button><button className="button button--primary" type="submit" disabled={catalogState.saving}>{catalogState.saving ? "保存中" : editingMenu ? "変更を保存" : "追加する"}</button></div>
            </form> : null}
-          {reorderMode ? <div className="menu-reorder-list" aria-label="商品の並び替え">{reorderDraftIds.map((id) => selectedReorderGroup?.items.find((entry) => entry.id === id)).filter(Boolean).map((item) => <div className="menu-reorder-row" key={item.id} onDragOver={(event) => event.preventDefault()} onDrop={() => { moveReorderItem(draggedMenuId, item.id); setDraggedMenuId(null); }}><button className="reorder-handle" type="button" draggable={!catalogState.saving} aria-label={`${item.name}をドラッグして並び替え`} onDragStart={() => setDraggedMenuId(item.id)}>≡</button><b>{String(reorderDraftIds.indexOf(item.id) + 1).padStart(2, "0")}</b><span>{item.name}</span><small>{item.kitchenAlias ?? item.name}</small><button type="button" className="button button--quiet" onClick={() => shiftReorderItem(item.id, -1)} disabled={catalogState.saving}>上へ</button><button type="button" className="button button--quiet" onClick={() => shiftReorderItem(item.id, 1)} disabled={catalogState.saving}>下へ</button></div>)}</div> : <div className="menu-admin-list"><div className="admin-row admin-row--header"><span>画像</span><span>カテゴリー</span><span>正式名・通称</span><span>価格（税込）</span><span>販売状況</span><span>並び順</span><span>操作</span></div>{displayedMenuGroups.map(({ category, items }) => <section className="menu-admin-group" key={category.id}><h3 className="menu-admin-group__heading"><span>{category.name}</span><small>{items.length}品</small></h3>{items.map((item) => <React.Fragment key={item.id}><div className={`admin-row ${item.isSoldOut ? "is-muted" : ""}`} ref={(node) => { if (node) menuCardRefs.current.set(item.id, node); else menuCardRefs.current.delete(item.id); }}><div className="admin-menu-card__image">{item.imageUri || item.detail?.imageUri ? <img src={item.imageUri || item.detail.imageUri} alt="" /> : <span>画像なし</span>}</div><span className="category-tag">{category.name}</span><div className="admin-row__name"><b>{item.name}</b><small>通称：{item.kitchenAlias ?? DEFAULT_KITCHEN_MENU_ALIASES[item.id] ?? item.name}</small></div><div className="admin-menu-card__price"><small>税込</small><strong>{yen(item.price)}</strong></div><div className={`admin-menu-card__status ${item.isSoldOut ? "is-soldout" : ""}`}><i></i>{item.isSoldOut ? "売り切れ" : "販売中"}</div><div className="admin-row__actions"><button className="button button--primary" type="button" onClick={() => openMenuEditor(item.id)}>{editingMenuId === item.id ? "編集中" : "編集"}</button><button className="button button--quiet" type="button" onClick={() => setMenuItem(item.id, { isSoldOut: !item.isSoldOut })}>{item.isSoldOut ? "販売再開" : "売り切れ"}</button><button className="button button--quiet" type="button" onClick={() => setImageLayoutItemId(item.id)}>画像</button></div></div>{editingMenuId === item.id && showAdd ? <form className="admin-menu-inline-editor" onSubmit={(event) => saveInlineMenu(event, item)}><div className="admin-menu-inline-editor__heading"><b>{item.name}を編集</b><span>保存・キャンセル後も元の位置を維持します。</span></div><label>正式名<input name="name" required defaultValue={item.name} /></label><label>厨房用の通称<input name="kitchenAlias" required defaultValue={item.kitchenAlias ?? DEFAULT_KITCHEN_MENU_ALIASES[item.id] ?? item.name} /></label><label>カテゴリ<select name="categoryId" defaultValue={item.categoryId}>{state.categories.map((entry) => <option key={entry.id} value={entry.id}>{entry.name}</option>)}</select></label><label>税込価格<input name="price" type="number" min="0" step="1" defaultValue={item.price} /></label><label>客席での表示<select name="customerVisibilityMode" defaultValue={item.customerVisibilityMode ?? "all_tables"}><option value="all_tables">全テーブル</option><option value="per_session">来店ごとに許可</option></select></label><label className="admin-menu-inline-editor__wide">説明<textarea name="description" defaultValue={item.description ?? ""} /></label><label>商品画像URI<input name="imageUri" defaultValue={item.imageUri ?? ""} /></label><label className="menu-editor__check"><input type="checkbox" name="isSoldOut" defaultChecked={item.isSoldOut} /> 売り切れ</label><label className="menu-editor__check"><input type="checkbox" name="isActive" defaultChecked={item.isActive !== false} /> 販売中</label><div className="admin-menu-inline-editor__actions"><button className="button button--quiet" type="button" onClick={closeMenuEditor} disabled={catalogState.saving}>キャンセル</button><button className="button button--primary" type="submit" disabled={catalogState.saving}>{catalogState.saving ? "保存中" : "変更を保存"}</button></div></form> : null}</React.Fragment>)}</section>)}</div>}
+          {reorderMode ? <div className="menu-reorder-list" aria-label="商品の並び替え">{reorderDraftIds.map((id) => selectedReorderGroup?.items.find((entry) => entry.id === id)).filter(Boolean).map((item) => <div className="menu-reorder-row" key={item.id} onDragOver={(event) => event.preventDefault()} onDrop={() => { moveReorderItem(draggedMenuId, item.id); setDraggedMenuId(null); }}><button className="reorder-handle" type="button" draggable={!catalogState.saving} aria-label={`${item.name}をドラッグして並び替え`} onDragStart={() => setDraggedMenuId(item.id)}>≡</button><b>{String(reorderDraftIds.indexOf(item.id) + 1).padStart(2, "0")}</b><span>{item.name}</span><small>{item.kitchenAlias ?? item.name}</small><button type="button" className="button button--quiet" onClick={() => shiftReorderItem(item.id, -1)} disabled={catalogState.saving}>上へ</button><button type="button" className="button button--quiet" onClick={() => shiftReorderItem(item.id, 1)} disabled={catalogState.saving}>下へ</button></div>)}</div> : <div className="menu-admin-list"><div className="admin-row admin-row--header"><span>画像</span><span>カテゴリー</span><span>正式名・通称</span><span>価格（税込）</span><span>販売状況</span><span>並び順</span><span>操作</span></div>{displayedMenuGroups.map(({ category, items }) => <section className="menu-admin-group" key={category.id}><h3 className="menu-admin-group__heading"><span>{category.name}</span><small>{items.length}品</small></h3>{items.map((item) => <React.Fragment key={item.id}><div className={`admin-row ${item.isSoldOut ? "is-muted" : ""}`} ref={(node) => { if (node) menuCardRefs.current.set(item.id, node); else menuCardRefs.current.delete(item.id); }}><div className="admin-menu-card__image">{item.imageUri || item.detail?.imageUri ? <img src={item.imageUri || item.detail.imageUri} alt="" /> : <span>画像なし</span>}</div><span className="category-tag">{category.name}</span><div className="admin-row__name"><b>{item.name}</b><small>通称：{item.kitchenAlias ?? DEFAULT_KITCHEN_MENU_ALIASES[item.id] ?? item.name}</small></div><div className="admin-menu-card__price"><small>税込</small><strong>{yen(item.price)}</strong></div><div className={`admin-menu-card__status ${item.isSoldOut ? "is-soldout" : ""}`}><i></i>{item.isSoldOut ? "売り切れ" : "販売中"}</div><div className="admin-row__actions"><button className="button button--primary" type="button" onClick={() => openMenuEditor(item.id)}>{editingMenuId === item.id ? "編集中" : "編集"}</button><button className="button button--quiet" type="button" onClick={() => setMenuItem(item.id, { isSoldOut: !item.isSoldOut })}>{item.isSoldOut ? "販売再開" : "売り切れ"}</button><button className="button button--quiet" type="button" onClick={() => setImageLayoutItemId(item.id)}>画像</button></div></div>{editingMenuId === item.id && showAdd ? <form className="admin-menu-inline-editor" onSubmit={(event) => saveInlineMenu(event, item)}><div className="admin-menu-inline-editor__heading"><b>{item.name}を編集</b><span>保存・キャンセル後も元の位置を維持します。</span></div><label>正式名<input name="name" required defaultValue={item.name} /></label><label>厨房用の通称<input name="kitchenAlias" required defaultValue={item.kitchenAlias ?? DEFAULT_KITCHEN_MENU_ALIASES[item.id] ?? item.name} /></label><label>カテゴリ<select name="categoryId" defaultValue={item.categoryId}>{state.categories.map((entry) => <option key={entry.id} value={entry.id}>{entry.name}</option>)}</select></label><label>税込価格<input name="price" type="number" min="0" step="1" defaultValue={item.price} /></label><label>客席での表示<select name="customerVisibilityMode" defaultValue={item.customerVisibilityMode ?? "all_tables"}><option value="all_tables">全テーブル</option><option value="per_session">来店ごとに許可</option></select></label><TableVisibilityFields tables={tableVisibilityTables} mode={item.tableVisibilityMode ?? "all_tables"} selectedTableIds={item.tableVisibilityTableIds ?? []} /><label className="admin-menu-inline-editor__wide">説明<textarea name="description" defaultValue={item.description ?? ""} /></label><label>商品画像URI<input name="imageUri" defaultValue={item.imageUri ?? ""} /></label><label className="menu-editor__check"><input type="checkbox" name="isSoldOut" defaultChecked={item.isSoldOut} /> 売り切れ</label><label className="menu-editor__check"><input type="checkbox" name="isActive" defaultChecked={item.isActive !== false} /> 販売中</label><div className="admin-menu-inline-editor__actions"><button className="button button--quiet" type="button" onClick={closeMenuEditor} disabled={catalogState.saving}>キャンセル</button><button className="button button--primary" type="submit" disabled={catalogState.saving}>{catalogState.saving ? "保存中" : "変更を保存"}</button></div></form> : null}</React.Fragment>)}</section>)}</div>}
         </> : null}
 
         {section === "categories" ? <>

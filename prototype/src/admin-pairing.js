@@ -414,6 +414,8 @@ export async function saveAdminMenuItem({ env = globalThis, item, expectedVersio
       isSoldOut: Boolean(item.isSoldOut),
       orderingMode: item.orderingMode === "reservation_only" ? "reservation_only" : "normal",
       customerVisibilityMode: item.customerVisibilityMode === "per_session" ? "per_session" : "all_tables",
+      tableVisibilityMode: item.tableVisibilityMode ?? "all_tables",
+      tableVisibilityTableIds: item.tableVisibilityMode === "all_tables" ? [] : [...(item.tableVisibilityTableIds ?? [])],
       isActive: item.isActive !== false,
       sortOrder: item.sortOrder ?? 0,
       imageUri: item.imageUri ?? null,

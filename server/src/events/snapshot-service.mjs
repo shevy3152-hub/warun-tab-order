@@ -170,7 +170,13 @@ function projectMenuItem(role, source) {
     item.kitchenAlias = requireString(value.kitchenAlias);
   }
   item.isSoldOut = requireBoolean(value.isSoldOut);
-  if (role === 'admin') item.isActive = requireBoolean(value.isActive);
+  if (role === 'admin') {
+    item.isActive = requireBoolean(value.isActive);
+    item.customerVisibilityMode = requireOneOf(value.customerVisibilityMode ?? 'all_tables', new Set(['all_tables', 'per_session']));
+    item.tableVisibilityMode = requireOneOf(value.tableVisibilityMode ?? 'all_tables', new Set(['all_tables', 'selected_tables', 'except_selected_tables']));
+    item.tableVisibilityTableIds = requireArray(value.tableVisibilityTableIds ?? []).map((tableId) => requireInteger(tableId, 1));
+    if (new Set(item.tableVisibilityTableIds).size !== item.tableVisibilityTableIds.length) throw new InvalidSnapshotCandidate();
+  }
   item.sortOrder = requireInteger(value.sortOrder);
   item.version = requireInteger(value.version, 1);
   if (role === 'admin') item.updatedAtMs = requireInteger(value.updatedAtMs);

@@ -47,7 +47,7 @@ const EVENT_TYPES_BY_ROLE = Object.freeze({
     'customer_theme.updated',
   ]),
 });
-const SUPPORTED_SCHEMA_VERSION = 18;
+const SUPPORTED_SCHEMA_VERSION = 19;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const OPAQUE_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
 
@@ -256,6 +256,8 @@ function mapAdminMenuItem(item) {
     isSoldOut: requireBoolean(item.isSoldOut),
     orderingMode: requireOneOf(item.orderingMode ?? 'normal', new Set(['normal', 'reservation_only'])),
     customerVisibilityMode: requireOneOf(item.customerVisibilityMode ?? 'all_tables', new Set(['all_tables', 'per_session'])),
+    tableVisibilityMode: requireOneOf(item.tableVisibilityMode ?? 'all_tables', new Set(['all_tables', 'selected_tables', 'except_selected_tables'])),
+    tableVisibilityTableIds: requireArray(item.tableVisibilityTableIds ?? []).map((tableId) => requireInteger(tableId, 1)),
     isActive: requireBoolean(item.isActive),
     sortOrder: requireInteger(item.sortOrder),
     version: requireInteger(item.version, 1),
@@ -265,6 +267,7 @@ function mapAdminMenuItem(item) {
     servingOptions: requireArray(item.servingOptions).map((option) => mapServingOption(option, true)),
   });
   optionalStringField(item, response, 'sectionKey');
+  if (new Set(response.tableVisibilityTableIds).size !== response.tableVisibilityTableIds.length) throw invalidDto();
   const imageLayouts = mapImageLayouts(item);
   if (imageLayouts) response.imageLayouts = imageLayouts;
   return response;

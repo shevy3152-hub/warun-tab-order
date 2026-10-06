@@ -1341,6 +1341,50 @@ test('per-session menu grants are enforced for new orders while normal session c
   });
 });
 
+test('table visibility and session grants are both required for orders, with replay and session reset preserving table policy', async () => {
+  await withFixture(({ database }) => {
+    const repository = makeRepository(database, { orderIds: [ORDER_A, ORDER_B, ORDER_C, ...[220, 221, 222, 223].map(uuid)] });
+    const visit = repository.createOrder(orderRequest({ items: [{ menuItemId: 'beer', quantity: 1 }] }));
+    const sessionId = visit.order.sessionId;
+
+    database.prepare("UPDATE menu_items SET customer_visibility_mode = 'per_session', table_visibility_mode = 'selected_tables' WHERE menu_item_id = 'edamame'").run();
+    database.prepare('INSERT INTO menu_item_table_visibility (menu_item_id, table_id) VALUES (?, ?)').run('edamame', 1);
+    const access = createSessionMenuAccessRepository({ database, now: () => FIXED_NOW + 1 });
+    access.grantToSession(sessionId, 'edamame');
+
+    const accepted = repository.createOrder(orderRequest({ clientOrderId: CLIENT_ORDER_C, items: [{ menuItemId: 'edamame', quantity: 1 }] }));
+    assert.equal(accepted.idempotencyResult, 'created');
+    assert.equal(accepted.order.sessionId, sessionId);
+
+    database.prepare('DELETE FROM menu_item_table_visibility WHERE menu_item_id = ?').run('edamame');
+    database.prepare('INSERT INTO menu_item_table_visibility (menu_item_id, table_id) VALUES (?, ?)').run('edamame', 2);
+    assert.equal(database.prepare('SELECT COUNT(*) AS count FROM session_menu_item_grants WHERE session_id = ? AND menu_item_id = ?').get(sessionId, 'edamame').count, 1);
+    assert.equal(repository.createOrder(orderRequest({ clientOrderId: CLIENT_ORDER_C, items: [{ menuItemId: 'edamame', quantity: 1 }] })).idempotencyResult, 'replayed');
+
+    const before = { orders: countRows(database, 'orders'), items: countRows(database, 'order_items'), events: countRows(database, 'event_log') };
+    assertOrderError(() => repository.createOrder(orderRequest({
+      clientOrderId: CLIENT_ORDER_D,
+      items: [{ menuItemId: 'beer', quantity: 1 }, { menuItemId: 'edamame', quantity: 1 }],
+    })), ORDER_ERROR_CODES.MENU_ITEM_NOT_FOUND);
+    assert.deepEqual({ orders: countRows(database, 'orders'), items: countRows(database, 'order_items'), events: countRows(database, 'event_log') }, before);
+    assertOrderError(() => repository.createOrder(orderRequest({
+      clientOrderId: uuid(222),
+      authenticatedDeviceId: DEVICE_B,
+      items: [{ menuItemId: 'edamame', quantity: 1 }],
+    })), ORDER_ERROR_CODES.MENU_ITEM_NOT_FOUND);
+
+    database.prepare("UPDATE menu_items SET table_visibility_mode = 'except_selected_tables' WHERE menu_item_id = 'edamame'").run();
+    const exceptionAllowed = repository.createOrder(orderRequest({ clientOrderId: uuid(221), items: [{ menuItemId: 'edamame', quantity: 1 }] }));
+    assert.equal(exceptionAllowed.idempotencyResult, 'created', 'the exception mode allows the granted current table');
+    assertOrderError(() => repository.createOrder(orderRequest({ clientOrderId: uuid(223), authenticatedDeviceId: DEVICE_B, items: [{ menuItemId: 'edamame', quantity: 1 }] })), ORDER_ERROR_CODES.MENU_ITEM_NOT_FOUND);
+    assert.deepEqual(database.prepare('SELECT table_id FROM menu_item_table_visibility WHERE menu_item_id = ?').all('edamame').map(({ table_id }) => table_id), [2]);
+
+    database.prepare("UPDATE orders SET status = 'completed', completed_at_ms = ? WHERE session_id = ?").run(FIXED_NOW + 2, sessionId);
+    database.prepare('UPDATE table_sessions SET closed_at_ms = ?, version = version + 1, updated_at_ms = ? WHERE session_id = ?').run(FIXED_NOW + 3, FIXED_NOW + 3, sessionId);
+    assert.deepEqual(database.prepare('SELECT table_id FROM menu_item_table_visibility WHERE menu_item_id = ?').all('edamame').map(({ table_id }) => table_id), [2], 'table policy remains after the visit session closes');
+  });
+});
+
 test('visit context survives first-order session creation, but not a closed visit or terminal reassignment', async () => {
   await withFixture(({ database }) => {
     const ids = [ORDER_A, ORDER_B];

@@ -40,6 +40,12 @@ function seed(database) {
     ) VALUES (1, 'Table 1', ?, 1, 1, 1000, 1000)
   `).run(CUSTOMER_ID);
   database.prepare(`
+    INSERT INTO tables (
+      table_id, label, assigned_customer_device_id, is_active, version,
+      created_at_ms, updated_at_ms
+    ) VALUES (2, 'Table 2', NULL, 1, 1, 1000, 1000)
+  `).run();
+  database.prepare(`
     INSERT INTO categories (
       category_id, name, sort_order, is_visible, version, created_at_ms, updated_at_ms
     ) VALUES ('drink', 'Drink', 1, 1, 1, 1000, 1000)
@@ -178,7 +184,7 @@ async function withFixture(run) {
   }
 }
 
-function writeBody(expectedVersion = 1) {
+function writeBody(expectedVersion = 1, tableVisibility = { tableVisibilityMode: 'all_tables', tableVisibilityTableIds: [] }) {
   return {
     expectedVersion,
     menuItemId: 'sake',
@@ -211,6 +217,7 @@ function writeBody(expectedVersion = 1) {
       { variantId: 'sake_tokuri', name: '徳利1合', volumeLabel: '180ml', priceYen: 980, isActive: true, sortOrder: 2, temperatureOptions: ['冷酒', '燗酒'] },
     ],
     servingOptions: [],
+    ...tableVisibility,
   };
 }
 
@@ -302,6 +309,33 @@ test('admin catalog write rejects stale versions without changing the catalog or
     assert.equal(stale.json.error.code, 'CATALOG_CONFLICT');
     assert.deepEqual(database.prepare('SELECT version, price_yen FROM menu_items WHERE menu_item_id = ?').get('sake'), before);
     assert.equal(database.prepare('SELECT COUNT(*) AS count FROM event_log').get().count, eventCount);
+  });
+});
+
+test('admin catalog DTO round-trips table visibility while customer responses omit policy and hidden product details', async () => {
+  await withFixture(async ({ port, database }) => {
+    const response = await request({
+      port,
+      token: ADMIN_TOKEN,
+      body: writeBody(1, { tableVisibilityMode: 'selected_tables', tableVisibilityTableIds: [2] }),
+    });
+    assert.equal(response.statusCode, 200);
+    assert.equal(database.prepare('SELECT table_visibility_mode FROM menu_items WHERE menu_item_id = ?').get('sake').table_visibility_mode, 'selected_tables');
+    assert.deepEqual(database.prepare('SELECT table_id FROM menu_item_table_visibility WHERE menu_item_id = ? ORDER BY table_id').all('sake').map(({ table_id }) => table_id), [2]);
+
+    const adminMenu = await request({ port, token: ADMIN_TOKEN, method: 'GET', path: '/v1/menu' });
+    const adminItem = adminMenu.json.items.find(({ menuItemId }) => menuItemId === 'sake');
+    assert.equal(adminItem.tableVisibilityMode, 'selected_tables');
+    assert.deepEqual(adminItem.tableVisibilityTableIds, [2]);
+
+    const customerMenu = await request({ port, token: CUSTOMER_TOKEN, method: 'GET', path: '/v1/menu' });
+    assert.equal(customerMenu.statusCode, 200);
+    assert.equal(customerMenu.json.items.some(({ menuItemId }) => menuItemId === 'sake'), false);
+    assert.equal(customerMenu.json.categories.some(({ categoryId }) => categoryId === 'drink'), false);
+    const serialized = JSON.stringify(customerMenu.json);
+    for (const forbidden of ['tableVisibilityMode', 'tableVisibilityTableIds', 'selected_tables', 'sake_glass', 'sake_tokuri']) {
+      assert.equal(serialized.includes(forbidden), false, `customer response leaked ${forbidden}`);
+    }
   });
 });
 

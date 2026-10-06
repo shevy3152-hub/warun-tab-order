@@ -853,6 +853,107 @@ test('admin menu ordering mode round-trips and rejects invalid values', async ()
   });
 });
 
+test('table visibility modes round-trip, filter assigned customer tables, and remove empty categories', async () => {
+  await withCatalogFixture(({ authenticator, catalog, database }) => {
+    const admin = authenticate(authenticator, ADMIN_TOKEN);
+    database.prepare(`
+      INSERT INTO menu_item_variants (variant_id, menu_item_id, name, volume_label, price_yen, sort_order, created_at_ms, updated_at_ms)
+      VALUES ('alpha-secret-variant', 'alpha-item', '限定盛り', '大', 900, 1, 6000, 6000)
+    `).run();
+    database.prepare(`
+      INSERT INTO menu_item_serving_options (serving_option_id, menu_item_id, name, sort_order, created_at_ms, updated_at_ms)
+      VALUES ('alpha-secret-serving', 'alpha-item', '特別提供', 1, 6000, 6000)
+    `).run();
+    const item = catalog.getMenuForPrincipal(admin).items.find(({ menuItemId }) => menuItemId === 'alpha-item');
+    assert.equal(item.tableVisibilityMode, 'all_tables');
+    assert.deepEqual(item.tableVisibilityTableIds, []);
+    const write = (expectedVersion, tableVisibilityMode, tableVisibilityTableIds) => catalog.writeMenuItem(admin, {
+      expectedVersion,
+      menuItemId: item.menuItemId,
+      categoryId: item.categoryId,
+      formalName: item.formalName,
+      kitchenAlias: item.kitchenAlias,
+      description: item.description,
+      priceYen: item.priceYen,
+      isSoldOut: item.isSoldOut,
+      isActive: item.isActive,
+      orderingMode: item.orderingMode,
+      customerVisibilityMode: item.customerVisibilityMode,
+      tableVisibilityMode,
+      tableVisibilityTableIds,
+      sortOrder: item.sortOrder,
+      imageUri: item.imageUri,
+      sectionKey: item.sectionKey,
+      detail: item.detail,
+      variants: item.variants,
+      servingOptions: item.servingOptions,
+    });
+
+    const selected = write(item.version, 'selected_tables', [2]);
+    let adminItem = catalog.getMenuForPrincipal(admin).items.find(({ menuItemId }) => menuItemId === item.menuItemId);
+    assert.equal(adminItem.tableVisibilityMode, 'selected_tables');
+    assert.deepEqual(adminItem.tableVisibilityTableIds, [2]);
+    const tableOne = catalog.getMenuForPrincipal(authenticate(authenticator, CUSTOMER_TOKEN));
+    const tableTwo = catalog.getMenuForPrincipal(authenticate(authenticator, SECOND_CUSTOMER_TOKEN));
+    assert.equal(itemIds(tableOne).includes('alpha-item'), false);
+    assert.equal(tableOne.categories.some(({ categoryId }) => categoryId === 'alpha'), false);
+    assert.equal(JSON.stringify(tableOne).includes('alpha-secret-variant'), false);
+    assert.equal(JSON.stringify(tableOne).includes('alpha-secret-serving'), false);
+    assert.equal(itemIds(tableTwo).includes('alpha-item'), true);
+    assert.equal(tableTwo.items.find(({ menuItemId }) => menuItemId === 'alpha-item').variants.some(({ variantId }) => variantId === 'alpha-secret-variant'), true);
+    assert.equal(tableTwo.items.find(({ menuItemId }) => menuItemId === 'alpha-item').servingOptions.some(({ servingOptionId }) => servingOptionId === 'alpha-secret-serving'), true);
+    for (const customerMenu of [tableOne, tableTwo]) {
+      const serialized = JSON.stringify(customerMenu);
+      assert.equal(serialized.includes('tableVisibilityMode'), false);
+      assert.equal(serialized.includes('tableVisibilityTableIds'), false);
+      assert.equal(serialized.includes('selected_tables'), false);
+    }
+
+    const excluded = write(selected.version, 'except_selected_tables', [2]);
+    assert.equal(itemIds(catalog.getMenuForPrincipal(authenticate(authenticator, CUSTOMER_TOKEN))).includes('alpha-item'), true);
+    assert.equal(itemIds(catalog.getMenuForPrincipal(authenticate(authenticator, SECOND_CUSTOMER_TOKEN))).includes('alpha-item'), false);
+
+    const all = write(excluded.version, 'all_tables', []);
+    adminItem = catalog.getMenuForPrincipal(admin).items.find(({ menuItemId }) => menuItemId === item.menuItemId);
+    assert.equal(all.version, item.version + 3);
+    assert.equal(adminItem.tableVisibilityMode, 'all_tables');
+    assert.deepEqual(adminItem.tableVisibilityTableIds, []);
+    assert.equal(database.prepare('SELECT COUNT(*) AS count FROM menu_item_table_visibility WHERE menu_item_id = ?').get(item.menuItemId).count, 0);
+    assert.equal(itemIds(catalog.getMenuForPrincipal(authenticate(authenticator, CUSTOMER_TOKEN))).includes('alpha-item'), true);
+    assert.equal(itemIds(catalog.getMenuForPrincipal(authenticate(authenticator, SECOND_CUSTOMER_TOKEN))).includes('alpha-item'), true);
+  });
+});
+
+test('table visibility rejects empty or unknown selections and stale versions without partial writes', async () => {
+  await withCatalogFixture(({ authenticator, catalog, database }) => {
+    const admin = authenticate(authenticator, ADMIN_TOKEN);
+    const item = catalog.getMenuForPrincipal(admin).items.find(({ menuItemId }) => menuItemId === 'alpha-item');
+    const body = {
+      expectedVersion: item.version,
+      menuItemId: item.menuItemId,
+      categoryId: item.categoryId,
+      formalName: item.formalName,
+      kitchenAlias: item.kitchenAlias,
+      description: item.description,
+      priceYen: item.priceYen,
+      isSoldOut: item.isSoldOut,
+      isActive: item.isActive,
+      customerVisibilityMode: item.customerVisibilityMode,
+      tableVisibilityMode: 'selected_tables',
+      tableVisibilityTableIds: [],
+      sortOrder: item.sortOrder,
+      detail: item.detail,
+      variants: item.variants,
+      servingOptions: item.servingOptions,
+    };
+    assertCatalogError(() => catalog.writeMenuItem(admin, body), CATALOG_ERROR_CODES.INVALID_WRITE_REQUEST);
+    assertCatalogError(() => catalog.writeMenuItem(admin, { ...body, tableVisibilityTableIds: [999] }), CATALOG_ERROR_CODES.INVALID_WRITE_REQUEST);
+    assertCatalogError(() => catalog.writeMenuItem(admin, { ...body, expectedVersion: item.version - 1, tableVisibilityTableIds: [2] }), CATALOG_ERROR_CODES.VERSION_CONFLICT);
+    assert.equal(database.prepare('SELECT version FROM menu_items WHERE menu_item_id = ?').get(item.menuItemId).version, item.version);
+    assert.equal(database.prepare('SELECT COUNT(*) AS count FROM menu_item_table_visibility WHERE menu_item_id = ?').get(item.menuItemId).count, 0);
+  });
+});
+
 test('admin menu contains no token or pairing secret', async () => {
   await withCatalogFixture(({ authenticator, catalog }) => {
     const menu = catalog.getMenuForPrincipal(authenticate(authenticator, ADMIN_TOKEN));

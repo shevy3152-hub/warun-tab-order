@@ -187,19 +187,19 @@ function createV14Database(databasePath) {
   return database;
 }
 
-test('new database creates its parent directory and applies schema v18', async () => {
+test('new database creates its parent directory and applies schema v19', async () => {
   await withTemporaryDatabase(({ databasePath }) => {
     const connection = initializeDatabase({ databasePath });
     assert.equal(existsSync(databasePath), true);
-    assert.equal(connection.schemaVersion, 18);
+    assert.equal(connection.schemaVersion, 19);
     connection.close();
   });
 });
 
-test('new database records PRAGMA user_version = 18', async () => {
+test('new database records PRAGMA user_version = 19', async () => {
   await withTemporaryDatabase(({ databasePath }) => {
     const connection = initializeDatabase({ databasePath });
-    assert.equal(pragmaValue(connection.database, 'user_version'), 18);
+    assert.equal(pragmaValue(connection.database, 'user_version'), 19);
     assert.equal(connection.database.prepare('SELECT COUNT(*) AS count FROM customer_theme_variants').get().count, 2);
     assert.equal(connection.database.prepare("SELECT prompt_text LIKE '%文字%' AS has_prompt FROM customer_theme_variants WHERE theme_key = 'camellia'").get().has_prompt, 1);
     connection.close();
@@ -223,8 +223,8 @@ test('schema v14 migrates to v17 without changing order-time snapshots or existi
 
     const connection = initializeDatabase({ databasePath });
     const database = connection.database;
-    assert.equal(connection.schemaVersion, 18);
-    assert.equal(pragmaValue(database, 'user_version'), 18);
+    assert.equal(connection.schemaVersion, 19);
+    assert.equal(pragmaValue(database, 'user_version'), 19);
     assert.equal(database.prepare('SELECT schema_version FROM system_state').get().schema_version, 16);
     assert.deepEqual({ ...database.prepare('SELECT unit_price_yen_snapshot, line_total_yen, is_cancelled FROM order_items WHERE order_id = ?').get(ORDER_ID) }, {
       unit_price_yen_snapshot: 380,
@@ -278,20 +278,63 @@ test('schema v17 migration adds theme objects without rebuilding event infrastru
       eventLog: connection.database.prepare('SELECT COUNT(*) AS count FROM event_log').get().count,
       systemState: connection.database.prepare('SELECT COUNT(*) AS count FROM system_state').get().count,
     }, beforeCounts);
-    assert.equal(pragmaValue(connection.database, 'user_version'), 18);
+    assert.equal(pragmaValue(connection.database, 'user_version'), 19);
     assert.equal(connection.database.prepare('SELECT schema_version FROM system_state').get().schema_version, 16);
     assert.equal(connection.database.prepare('SELECT COUNT(*) AS count FROM customer_theme_variants').get().count, 2);
     connection.close();
   });
 });
 
-test('schema v18 migration preserves existing rows, indexes, and triggers while defaulting items to all tables', async () => {
+test('schema v18 to v19 migration is additive and preserves rows, indexes, and triggers', async () => {
   await withTemporaryDatabase(({ databasePath }) => {
-    const v17 = createV14Database(databasePath);
-    for (const file of ['schema-v15-migration.sql', 'schema-v16-migration.sql', 'schema-v17-migration.sql']) {
+    let v17;
+    try {
+    v17 = createV14Database(databasePath);
+    for (const file of ['schema-v15-migration.sql', 'schema-v16-migration.sql', 'schema-v17-migration.sql', 'schema-v18-migration.sql']) {
       v17.exec(readFileSync(new URL(`../../docs/${file}`, import.meta.url), 'utf8'));
     }
     seedOrderParents(v17);
+    const sessionId = '88888888-8888-4888-8888-888888888888';
+    v17.prepare(`
+      INSERT INTO table_sessions (
+        session_id, table_id, opened_at_ms, version, created_at_ms, updated_at_ms
+      ) VALUES (?, 1, 2000, 1, 2000, 2000)
+    `).run(sessionId);
+    v17.prepare(`
+      INSERT INTO orders (
+        order_id, client_order_id, request_fingerprint, canonical_request_json,
+        customer_device_id, table_id, table_number_snapshot, status,
+        total_amount_yen, accepted_at_ms, session_id
+      ) VALUES (?, ?, ?, ?, ?, 1, 1, 'new', 380, 3000, ?)
+    `).run(ORDER_ID, CLIENT_ORDER_ID, HASH_B, '{"items":[{"id":"edamame","quantity":1}]}', CUSTOMER_DEVICE_ID, sessionId);
+    v17.prepare(`
+      INSERT INTO order_items (
+        order_id, line_index, menu_item_id, formal_name_snapshot, kitchen_alias_snapshot,
+        unit_price_yen_snapshot, quantity, line_total_yen, created_at_ms, updated_at_ms
+      ) VALUES (?, 0, 'edamame', '枝豆（塩ゆで）', '枝豆', 380, 1, 380, 3000, 3000)
+    `).run(ORDER_ID);
+    const checkoutRequestId = '44444444-4444-4444-8444-444444444444';
+    const paymentRecordId = '55555555-5555-4555-8555-555555555555';
+    v17.prepare(`
+      INSERT INTO checkout_requests (
+        checkout_request_id, table_session_id, status, receipt_requested,
+        ordered_items_total_yen, adjustments_total_yen, grand_total_yen,
+        version, requested_at_ms, ready_at_ms, updated_at_ms
+      ) VALUES (?, ?, 'ready', 0, 380, 0, 380, 1, 3000, 4000, 4000)
+    `).run(checkoutRequestId, sessionId);
+    v17.prepare(`
+      INSERT INTO payment_records (
+        payment_record_id, checkout_request_id, table_session_id, table_id,
+        payment_method, confirmed_total_yen, paid_at_ms, status,
+        version, created_at_ms, updated_at_ms
+      ) VALUES (?, ?, ?, 1, 'cash', 380, 5000, 'paid', 1, 5000, 5000)
+    `).run(paymentRecordId, checkoutRequestId, sessionId);
+    v17.prepare(`
+      INSERT INTO payment_order_items (
+        payment_record_id, order_id, order_item_id, formal_name_snapshot,
+        unit_price_yen_snapshot, quantity, line_total_yen, sort_order
+      ) VALUES (?, ?, ?, '枝豆（塩ゆで）', 380, 1, 380, 0)
+    `).run(paymentRecordId, ORDER_ID, v17.prepare('SELECT order_item_id FROM order_items WHERE order_id = ?').get(ORDER_ID).order_item_id);
     v17.exec(`
       CREATE INDEX idx_v18_review_preserve ON menu_items (formal_name);
       CREATE TRIGGER trg_v18_review_preserve
@@ -304,22 +347,39 @@ test('schema v18 migration preserves existing rows, indexes, and triggers while 
     const beforeTriggers = v17.prepare("SELECT name, sql FROM sqlite_schema WHERE type = 'trigger' ORDER BY name").all();
     const beforeItem = v17.prepare('SELECT menu_item_id, formal_name, price_yen, version FROM menu_items WHERE menu_item_id = ?').get('edamame');
     const beforeCategoryCount = v17.prepare('SELECT COUNT(*) AS count FROM categories').get().count;
-    assert.equal(pragmaValue(v17, 'user_version'), 17);
+    const beforeHistory = Object.fromEntries(['table_sessions', 'orders', 'order_items', 'checkout_requests', 'payment_records', 'payment_order_items'].map((table) => [
+      table,
+      v17.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all().map((row) => ({ ...row })),
+    ]));
+    assert.equal(pragmaValue(v17, 'user_version'), 18);
     v17.close();
+    v17 = null;
 
     const connection = initializeDatabase({ databasePath });
+    try {
     const { database } = connection;
-    const afterIndexes = database.prepare("SELECT name, sql FROM sqlite_schema WHERE type = 'index' AND name NOT LIKE 'sqlite_autoindex_%' AND name <> 'idx_session_menu_item_grants_item_session' ORDER BY name").all();
+    const afterIndexes = database.prepare("SELECT name, sql FROM sqlite_schema WHERE type = 'index' AND name NOT LIKE 'sqlite_autoindex_%' AND name != 'idx_menu_item_table_visibility_table_menu_item' ORDER BY name").all();
     const afterTriggers = database.prepare("SELECT name, sql FROM sqlite_schema WHERE type = 'trigger' ORDER BY name").all();
     assert.deepEqual(afterIndexes, beforeIndexes);
     assert.deepEqual(afterTriggers, beforeTriggers);
     assert.deepEqual(database.prepare('SELECT menu_item_id, formal_name, price_yen, version FROM menu_items WHERE menu_item_id = ?').get('edamame'), beforeItem);
     assert.equal(database.prepare('SELECT customer_visibility_mode FROM menu_items WHERE menu_item_id = ?').get('edamame').customer_visibility_mode, 'all_tables');
+    assert.equal(database.prepare('SELECT table_visibility_mode FROM menu_items WHERE menu_item_id = ?').get('edamame').table_visibility_mode, 'all_tables');
+    assert.equal(database.prepare('SELECT COUNT(*) AS count FROM menu_item_table_visibility').get().count, 0);
     assert.equal(database.prepare('SELECT COUNT(*) AS count FROM categories').get().count, beforeCategoryCount);
-    assert.equal(pragmaValue(database, 'user_version'), 18);
+    assert.deepEqual(Object.fromEntries(Object.keys(beforeHistory).map((table) => [
+      table,
+      database.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all().map((row) => ({ ...row })),
+    ])), beforeHistory);
+    assert.equal(pragmaValue(database, 'user_version'), 19);
     assert.equal(database.prepare('PRAGMA integrity_check').get().integrity_check, 'ok');
     assert.deepEqual(database.prepare('PRAGMA foreign_key_check').all(), []);
-    connection.close();
+    } finally {
+      connection.close();
+    }
+    } finally {
+      try { v17?.close(); } catch {}
+    }
   });
 });
 
@@ -382,8 +442,8 @@ test('schema v7 migrates to v8 with every existing menu item in normal mode', as
     raw.close();
 
     const connection = initializeDatabase({ databasePath });
-    assert.equal(connection.schemaVersion, 18);
-    assert.equal(pragmaValue(connection.database, 'user_version'), 18);
+    assert.equal(connection.schemaVersion, 19);
+    assert.equal(pragmaValue(connection.database, 'user_version'), 19);
     assert.equal(connection.database.prepare('SELECT schema_version FROM system_state').get().schema_version, 16);
     assert.equal(connection.database.prepare("SELECT COUNT(*) AS count FROM menu_items WHERE ordering_mode = 'normal'").get().count, 1);
     assert.equal(connection.database.prepare('SELECT COUNT(*) AS count FROM menu_items').get().count, 1);
@@ -446,8 +506,8 @@ test('schema v9 clone migrates through v10, v11, and v12 with notice defaults an
     raw.close();
 
     const connection = initializeDatabase({ databasePath });
-    assert.equal(connection.schemaVersion, 18);
-    assert.equal(pragmaValue(connection.database, 'user_version'), 18);
+    assert.equal(connection.schemaVersion, 19);
+    assert.equal(pragmaValue(connection.database, 'user_version'), 19);
     const noticeDefaults = connection.database.prepare('SELECT notice_text, notice_enabled FROM business_hours').get();
     assert.equal(noticeDefaults.notice_text, '');
     assert.equal(noticeDefaults.notice_enabled, 0);
@@ -493,7 +553,7 @@ test('a valid schema v17 database can be closed and reopened', async () => {
   await withTemporaryDatabase(({ databasePath }) => {
     initializeDatabase({ databasePath }).close();
     const reopened = initializeDatabase({ databasePath });
-    assert.equal(reopened.schemaVersion, 18);
+    assert.equal(reopened.schemaVersion, 19);
     assert.equal(reopened.database.prepare('SELECT COUNT(*) AS count FROM customer_theme_settings').get().count, 0);
     reopened.close();
   });
@@ -630,8 +690,8 @@ test('legacy schema v1 migrates through schema v10 and assigns existing orders t
       WHERE order_id = ?
     `).get(ORDER_ID);
 
-    assert.equal(connection.schemaVersion, 18);
-    assert.equal(pragmaValue(connection.database, 'user_version'), 18);
+    assert.equal(connection.schemaVersion, 19);
+    assert.equal(pragmaValue(connection.database, 'user_version'), 19);
     assert.equal(connection.database.prepare('SELECT schema_version FROM system_state').get().schema_version, 16);
     assert.deepEqual({
       orders: connection.database.prepare('SELECT COUNT(*) AS count FROM orders').get().count,
@@ -704,8 +764,8 @@ test('schema v4 fixture migrates through the formal v7 path while preserving cat
 
     const connection = initializeDatabase({ databasePath: v4Path });
     const database = connection.database;
-    assert.equal(connection.schemaVersion, 18);
-    assert.equal(pragmaValue(database, 'user_version'), 18);
+    assert.equal(connection.schemaVersion, 19);
+    assert.equal(pragmaValue(database, 'user_version'), 19);
     assert.equal(database.prepare('PRAGMA integrity_check').get().integrity_check, 'ok');
     assert.deepEqual({
       orders: database.prepare('SELECT COUNT(*) AS count FROM orders').get().count,
@@ -782,11 +842,11 @@ test('invalid item quantities are rejected by CHECK constraints', async () => {
   });
 });
 
-test('schema versions newer than v18 are rejected without migration', async () => {
+test('schema versions newer than v19 are rejected without migration', async () => {
   await withTemporaryDatabase(({ directory }) => {
     const databasePath = join(directory, 'version-5.sqlite3');
     const raw = new DatabaseSync(databasePath);
-    raw.exec('PRAGMA user_version = 19;');
+    raw.exec('PRAGMA user_version = 20;');
     raw.close();
 
     assert.throws(

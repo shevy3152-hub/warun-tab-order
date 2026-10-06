@@ -132,3 +132,23 @@ visual result: passed — exact 1280×800 and 1637×602 CSS viewports, DPR 1; si
 - DB・API・schema・safe-copy・既存の別worktree／PNGは変更なし。注文・会計操作、commit、pushなし。
 
 visual result: passed — simultaneous per-table call indicators, single-call resolution, re-call visibility, and collapsed-rail list access at exact 1280×800 and 1637×602 CSS viewports; unmodified DPR 1 captures.
+
+## 商品のテーブル別表示設定 UI 2026-10-06
+
+- 管理画面の商品編集欄で「全テーブルに表示」「指定テーブルだけに表示」「指定テーブルだけで非表示」の3方式と複数テーブル選択を確認。文字・checkbox・配置の重なりや切れは見られなかった。demo画面のみで、保存やAPI接続は行っていない。
+- browser viewport APIがdevice pixel寸法の整数指定のみを受け付け、環境DPRは0.5。1280×800 CSS viewportは640×400 device pixelsで確認。1637×602は1638×603 CSS viewport（819×301 device pixels）での近似確認となった。fullPage=false。
+- 指定のDPR 1および厳密な1637×602 viewportでのスクリーンショットは取得できず、画面受入は未達。キャプチャ画像はセッション内表示のみでファイル保存していない。
+
+visual result: partial — controls and clipping inspected in demo at 1280×800 and approximate 1638×603 CSS viewports; DPR 1 and exact 1637×602 capture requirements remain unmet.
+
+## 商品のテーブル別表示・来店許可 利用者手動機能QA 2026-10-06
+
+- 対象: 隔離worktree `codex/table-menu-visibility`、HEAD `f03fd0eea407b9be511b1c61fa532df6701abb19`、schema v19の使い捨てQA DB。下記は利用者による手動機能確認の報告で、画面viewport受入とは別記録。
+- PASS: 指定テーブルだけに表示／指定テーブルだけで非表示。保存後に編集を開き直しても方式と対象テーブルが維持される。
+- PASS: カート追加後に商品を非表示へ変更してもカート行を保持し、案内を表示して注文確定を停止。全テーブル表示へ戻すと、カート1点を保持したまま確定操作が再有効化される。
+- PASS: 来店許可なしでは両客席に非表示。客席1へ来店許可すると客席1だけに表示。許可済みでもテーブル別非表示が適用され、テーブル別表示を戻すと客席1だけに再表示され、来店許可は維持される。
+- 残件: 指定viewport 1280×800／1637×602、DPR 1、`fullPage=false`の画面QAは未達。客席2ではAPIの空カテゴリ応答とは別に、クライアントが静的な飲み物・お食事カテゴリーを表示する挙動があり、その扱いは未判定。いずれも本手動機能QAのPASSには含めず、全受入完了とはしない。
+- 自動検証（実装時）: 関連serverテスト215/215、outbox 44/44、Sites 4/4、Vite build PASS、`git diff --check` PASS。
+- QA runtime停止前の照合: health ready、schema 19、DB target other、runtime PIDとAPI/Web listener PID一致。runtime停止後は別途最終報告に停止確認を記録する。
+
+functional result: passed — user-confirmed table visibility modes, cart blocking/recovery, and independent session-grant interaction; viewport acceptance and empty-category presentation remain open.

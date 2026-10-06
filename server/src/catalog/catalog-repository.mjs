@@ -127,6 +127,16 @@ export function normalizeCatalogWriteRequest(request) {
   }
   const customerVisibilityMode = request.customerVisibilityMode ?? 'all_tables';
   if (!['all_tables', 'per_session'].includes(customerVisibilityMode)) throw invalidWrite('customerVisibilityMode is invalid.');
+  const tableVisibilityMode = request.tableVisibilityMode ?? 'all_tables';
+  if (!['all_tables', 'selected_tables', 'except_selected_tables'].includes(tableVisibilityMode)) throw invalidWrite('tableVisibilityMode is invalid.');
+  const rawTableIds = request.tableVisibilityTableIds ?? [];
+  if (!Array.isArray(rawTableIds) || rawTableIds.length > 500 || rawTableIds.some((id) => !Number.isSafeInteger(id) || id < 1)) {
+    throw invalidWrite('tableVisibilityTableIds must contain valid table ids.');
+  }
+  const uniqueTableVisibilityTableIds = [...new Set(rawTableIds)].sort((left, right) => left - right);
+  if (uniqueTableVisibilityTableIds.length !== rawTableIds.length) throw invalidWrite('tableVisibilityTableIds must not contain duplicates.');
+  const tableVisibilityTableIds = tableVisibilityMode === 'all_tables' ? [] : uniqueTableVisibilityTableIds;
+  if (tableVisibilityMode !== 'all_tables' && tableVisibilityTableIds.length === 0) throw invalidWrite('A selected table is required for this table visibility mode.');
   const sortOrder = normalizeNonNegativeInteger(request.sortOrder ?? 0, 'sortOrder');
   const imageUri = normalizeOptionalImage(request.imageUri, 'imageUri');
   const sectionKey = request.sectionKey === undefined || request.sectionKey === null || request.sectionKey === ''
@@ -203,6 +213,8 @@ export function normalizeCatalogWriteRequest(request) {
     isActive,
     orderingMode,
     customerVisibilityMode,
+    tableVisibilityMode,
+    tableVisibilityTableIds,
     sortOrder,
     imageUri,
     sectionKey,
@@ -366,6 +378,11 @@ function mapKitchenMenuItem(row) {
 }
 
 function mapAdminMenuItem(row) {
+  let tableVisibilityTableIds = [];
+  try {
+    const parsed = JSON.parse(row.table_visibility_table_ids ?? '[]');
+    if (Array.isArray(parsed) && parsed.every((id) => Number.isSafeInteger(id))) tableVisibilityTableIds = parsed;
+  } catch { /* Keep malformed legacy projections on the safe all-tables default. */ }
   const item = optionalImage({
     menuItemId: row.menu_item_id,
     categoryId: row.category_id,
@@ -376,6 +393,8 @@ function mapAdminMenuItem(row) {
     isSoldOut: row.is_sold_out === 1,
     orderingMode: row.ordering_mode ?? 'normal',
     customerVisibilityMode: row.customer_visibility_mode ?? 'all_tables',
+    tableVisibilityMode: row.table_visibility_mode ?? 'all_tables',
+    tableVisibilityTableIds,
     isActive: row.is_active === 1,
     sortOrder: row.sort_order,
     version: row.version,
@@ -465,10 +484,15 @@ export function createCatalogRepository({ database, now = Date.now } = {}) {
       updateCategoryVersion: database.prepare('UPDATE categories SET version = version + 1, updated_at_ms = ? WHERE category_id = ? AND version = ?'),
       deleteItemGrants: database.prepare('DELETE FROM session_menu_item_grants WHERE menu_item_id = ?'),
       findWriteMenuItem: database.prepare(`
-        SELECT menu_item_id, version
+        SELECT menu_item_id, version, table_visibility_mode
         FROM menu_items
         WHERE menu_item_id = ?
       `),
+      findValidVisibilityTables: database.prepare(`
+        SELECT table_id FROM tables WHERE table_id IN (SELECT value FROM json_each(?))
+      `),
+      deleteItemTableVisibility: database.prepare('DELETE FROM menu_item_table_visibility WHERE menu_item_id = ?'),
+      insertItemTableVisibility: database.prepare('INSERT INTO menu_item_table_visibility (menu_item_id, table_id) VALUES (?, ?)'),
       findWriteDetail: database.prepare(`
         SELECT version
         FROM menu_item_details
@@ -497,15 +521,15 @@ export function createCatalogRepository({ database, now = Date.now } = {}) {
       insertMenuItem: database.prepare(`
         INSERT INTO menu_items (
           menu_item_id, category_id, formal_name, kitchen_alias, description,
-          price_yen, is_sold_out, is_active, sort_order, image_uri, ordering_mode, customer_visibility_mode, version,
+          price_yen, is_sold_out, is_active, sort_order, image_uri, ordering_mode, customer_visibility_mode, table_visibility_mode, version,
           created_at_ms, updated_at_ms, section_key
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)
       `),
       updateMenuItem: database.prepare(`
         UPDATE menu_items
         SET category_id = ?, formal_name = ?, kitchen_alias = ?, description = ?,
             price_yen = ?, is_sold_out = ?, is_active = ?, sort_order = ?,
-            image_uri = ?, ordering_mode = ?, customer_visibility_mode = ?, version = version + 1, updated_at_ms = ?, section_key = ?
+            image_uri = ?, ordering_mode = ?, customer_visibility_mode = ?, table_visibility_mode = ?, version = version + 1, updated_at_ms = ?, section_key = ?
         WHERE menu_item_id = ? AND version = ?
       `),
       insertDetail: database.prepare(`
@@ -576,6 +600,15 @@ export function createCatalogRepository({ database, now = Date.now } = {}) {
             SELECT 1
             FROM menu_items AS m
             WHERE m.category_id = c.category_id AND m.is_active = 1
+              AND (
+                m.table_visibility_mode = 'all_tables'
+                OR (m.table_visibility_mode = 'selected_tables' AND EXISTS (
+                  SELECT 1 FROM menu_item_table_visibility AS v WHERE v.menu_item_id = m.menu_item_id AND v.table_id = ?
+                ))
+                OR (m.table_visibility_mode = 'except_selected_tables' AND ? IS NOT NULL AND NOT EXISTS (
+                  SELECT 1 FROM menu_item_table_visibility AS v WHERE v.menu_item_id = m.menu_item_id AND v.table_id = ?
+                ))
+              )
               AND (m.customer_visibility_mode = 'all_tables' OR EXISTS (
                 SELECT 1 FROM session_menu_item_grants AS g
                 WHERE ? IS NOT NULL AND g.session_id = ? AND g.menu_item_id = m.menu_item_id
@@ -634,6 +667,15 @@ export function createCatalogRepository({ database, now = Date.now } = {}) {
           ON d.menu_item_id = m.menu_item_id
         WHERE c.is_visible = 1
           AND m.is_active = 1
+          AND (
+            m.table_visibility_mode = 'all_tables'
+            OR (m.table_visibility_mode = 'selected_tables' AND EXISTS (
+              SELECT 1 FROM menu_item_table_visibility AS v WHERE v.menu_item_id = m.menu_item_id AND v.table_id = ?
+            ))
+            OR (m.table_visibility_mode = 'except_selected_tables' AND ? IS NOT NULL AND NOT EXISTS (
+              SELECT 1 FROM menu_item_table_visibility AS v WHERE v.menu_item_id = m.menu_item_id AND v.table_id = ?
+            ))
+          )
           AND (m.customer_visibility_mode = 'all_tables' OR EXISTS (
             SELECT 1 FROM session_menu_item_grants AS g
             WHERE ? IS NOT NULL AND g.session_id = ? AND g.menu_item_id = m.menu_item_id
@@ -667,6 +709,7 @@ export function createCatalogRepository({ database, now = Date.now } = {}) {
           m.is_sold_out,
           m.ordering_mode,
           m.customer_visibility_mode,
+          m.table_visibility_mode,
           m.is_active,
           m.sort_order,
           m.image_uri,
@@ -687,6 +730,7 @@ export function createCatalogRepository({ database, now = Date.now } = {}) {
           ,d.recommendation
           ,d.detail_description
           ,(SELECT json_group_object(usage, json_object('scale', scale, 'positionX', position_x, 'positionY', position_y, 'rotation', rotation, 'fit', fit)) FROM menu_item_image_layouts l WHERE l.menu_item_id = m.menu_item_id) AS image_layouts
+          ,COALESCE((SELECT json_group_array(v.table_id) FROM menu_item_table_visibility v WHERE v.menu_item_id = m.menu_item_id), '[]') AS table_visibility_table_ids
         FROM menu_items AS m
         JOIN categories AS c
           ON c.category_id = m.category_id
@@ -946,6 +990,7 @@ export function createCatalogRepository({ database, now = Date.now } = {}) {
           normalized.imageUri,
           normalized.orderingMode,
           normalized.customerVisibilityMode,
+          normalized.tableVisibilityMode,
           timestamp,
           timestamp,
           normalized.sectionKey,
@@ -963,6 +1008,7 @@ export function createCatalogRepository({ database, now = Date.now } = {}) {
           normalized.imageUri,
           normalized.orderingMode,
           normalized.customerVisibilityMode,
+          normalized.tableVisibilityMode,
           timestamp,
           normalized.sectionKey,
           normalized.menuItemId,
@@ -974,6 +1020,18 @@ export function createCatalogRepository({ database, now = Date.now } = {}) {
             'The catalog item has changed since it was read.',
           );
         }
+      }
+
+      if (normalized.tableVisibilityTableIds.length > 0) {
+        const selectedTables = statements.findValidVisibilityTables.all(JSON.stringify(normalized.tableVisibilityTableIds));
+        if (selectedTables.length !== normalized.tableVisibilityTableIds.length) {
+          throw repositoryError(CATALOG_ERROR_CODES.INVALID_WRITE_REQUEST, 'One or more selected tables do not exist.');
+        }
+      }
+
+      statements.deleteItemTableVisibility.run(normalized.menuItemId);
+      for (const tableId of normalized.tableVisibilityTableIds) {
+        statements.insertItemTableVisibility.run(normalized.menuItemId, tableId);
       }
 
       if (normalized.customerVisibilityMode === 'all_tables') statements.deleteItemGrants.run(normalized.menuItemId);
@@ -1251,8 +1309,8 @@ export function createCatalogRepository({ database, now = Date.now } = {}) {
         const sessionId = tableId === null
           ? null
           : (statements.findOpenTableSession.get(tableId)?.session_id ?? null);
-        categoryRows = statements.findCustomerCategories.all(sessionId, sessionId);
-        itemRows = statements.findCustomerMenuItems.all(sessionId, sessionId);
+        categoryRows = statements.findCustomerCategories.all(tableId, tableId, tableId, sessionId, sessionId);
+        itemRows = statements.findCustomerMenuItems.all(tableId, tableId, tableId, sessionId, sessionId);
         mapCategory = mapPublicCategory;
         mapItem = mapCustomerMenuItem;
       } else if (device.role === 'kitchen') {

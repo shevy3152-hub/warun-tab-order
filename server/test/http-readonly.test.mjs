@@ -265,7 +265,7 @@ test('01 health is public and returns 200', async () => {
     assert.equal(response.statusCode, 200);
     assert.equal(response.json.status, 'ready');
     assert.equal(response.json.db, 'ready');
-  assert.equal(response.json.schemaVersion, 18);
+  assert.equal(response.json.schemaVersion, 19);
   }, { now: () => 1_786_300_000_000 });
 });
 
@@ -765,6 +765,7 @@ test('50 response DTOs exactly match the role-scoped OpenAPI schemas', async () 
     const adminItem = [
       'menuItemId', 'categoryId', 'formalName', 'kitchenAlias', 'description', 'priceYen',
       'isSoldOut', 'orderingMode', 'isActive', 'sortOrder', 'version', 'updatedAtMs', 'detail',
+      'customerVisibilityMode', 'tableVisibilityMode', 'tableVisibilityTableIds',
       'variants', 'servingOptions',
     ];
     for (const [token, role] of [[CUSTOMER_TOKEN, 'customer'], [KITCHEN_TOKEN, 'kitchen'], [ADMIN_TOKEN, 'admin']]) {

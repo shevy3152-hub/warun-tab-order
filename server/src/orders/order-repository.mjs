@@ -764,7 +764,8 @@ export function createOrderRepository({ database, now = Date.now, idFactory = ra
           is_sold_out,
           ordering_mode,
           is_active,
-          customer_visibility_mode
+          customer_visibility_mode,
+          table_visibility_mode
         FROM menu_items
         WHERE menu_item_id = ?
       `),
@@ -772,6 +773,9 @@ export function createOrderRepository({ database, now = Date.now, idFactory = ra
         SELECT 1
         FROM session_menu_item_grants
         WHERE session_id = ? AND menu_item_id = ?
+      `),
+      findMenuItemTableVisibility: database.prepare(`
+        SELECT 1 FROM menu_item_table_visibility WHERE menu_item_id = ? AND table_id = ?
       `),
       findVariant: database.prepare(`
         SELECT variant_id, menu_item_id, name, volume_label, price_yen, is_active, temperature_options_json
@@ -1007,9 +1011,14 @@ export function createOrderRepository({ database, now = Date.now, idFactory = ra
       let totalAmountYen = 0;
       const snapshots = normalized.items.map((item, lineIndex) => {
         const menuItem = statements.findMenuItem.get(item.menuItemId);
+        const tableVisibilityRow = menuItem
+          ? statements.findMenuItemTableVisibility.get(item.menuItemId, table.table_id)
+          : null;
         if (
           !menuItem
           || menuItem.is_active !== 1
+          || (menuItem.table_visibility_mode === 'selected_tables' && !tableVisibilityRow)
+          || (menuItem.table_visibility_mode === 'except_selected_tables' && tableVisibilityRow)
           || (
             menuItem.customer_visibility_mode === 'per_session'
             && !statements.findSessionMenuItemGrant.get(session.session_id, item.menuItemId)
