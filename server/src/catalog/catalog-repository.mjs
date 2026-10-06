@@ -375,6 +375,7 @@ function mapAdminMenuItem(row) {
     priceYen: row.price_yen,
     isSoldOut: row.is_sold_out === 1,
     orderingMode: row.ordering_mode ?? 'normal',
+    customerVisibilityMode: row.customer_visibility_mode ?? 'all_tables',
     isActive: row.is_active === 1,
     sortOrder: row.sort_order,
     version: row.version,

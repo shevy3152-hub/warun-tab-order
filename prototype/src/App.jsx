@@ -30,6 +30,7 @@ import { AdminPairingError, configuredAdminToken, createAdminRideGuidanceContact
 import { adjustKitchenItemUnitPrice, adjustKitchenOrderItemQuantity as adjustKitchenItemQuantityRequest, cancelKitchenCheckout, cancelKitchenOrderItem, closeKitchenTableSession, createKitchenOrder, fetchKitchenCheckoutRequests, fetchKitchenOrderHistory, fetchKitchenPaymentHistory, fetchKitchenSnapshot, kitchenAdditionRequestItem, kitchenApiConfigured, KitchenApiError, markKitchenItemServed, payKitchenCheckout, readyKitchenCheckout, restoreKitchenOrderItem, saveKitchenCheckoutAdjustments, subscribeKitchenInvalidations, voidKitchenPayment } from "./kitchen-api.js";
 import { buildKitchenTableGroups } from "./kitchen-order-board.js";
 import { bootstrapCustomerOrderClient } from "./customer-bootstrap.js";
+import { addCustomerCartSelection, customerCartRows, removeCustomerCartSelection } from "./customer-cart.js";
 import { taxExcludedYen } from "./pricing.js";
 import { pairingCodeQrSvg } from "./qr-code.js";
 import { CUSTOMER_TEST_THEME, normalizeCustomerTheme } from "./customer-theme.js";
@@ -780,7 +781,7 @@ function CustomerCheckoutModal({ checkoutState, receiptRequested, onReceiptChang
   </Modal>;
 }
 
-function CustomerScreen({ state, updateState, deviceId, orderClient, customerDeviceConfig, theme = CUSTOMER_TEST_THEME }) {
+function CustomerScreen({ state, updateState, deviceId, orderClient, customerDeviceConfig, onCustomerDeviceConfigChange, theme = CUSTOMER_TEST_THEME }) {
   const fallbackCustomerTheme = normalizeCustomerTheme(theme);
   const fallbackCustomerThemeConfig = normalizeCustomerThemeConfig({ theme: fallbackCustomerTheme }, fallbackCustomerTheme);
   const localDevice = state.devices.find((item) => item.deviceId === deviceId) ?? state.devices[0];
@@ -885,6 +886,7 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
   const cartContextCaptureRef = useRef(null);
   const [cartContextLoading, setCartContextLoading] = useState(false);
   const [cartContextStale, setCartContextStale] = useState(false);
+  const [cartAuthorizationRequired, setCartAuthorizationRequired] = useState(false);
   const [modal, setModal] = useState(null);
   const [rideGuidanceType, setRideGuidanceType] = useState(null);
   const [rideGuidanceState, setRideGuidanceState] = useState({ loading: true, error: false, data: null });
@@ -923,12 +925,9 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
   const isFood = currentMajorCategory.id === "food";
   const isShochu = currentCategory?.id === "shochu";
   const isSake = currentCategory?.id === "sake";
-  const cartRows = Object.entries(cart).map(([key, selection]) => ({
-    key,
-    ...selection,
-    item: menuItems.find((menu) => menu.id === selection.menuItemId),
-  })).filter((row) => row.item && row.quantity > 0);
+  const cartRows = customerCartRows(cart, menuItems);
   const cartCount = cartRows.reduce((sum, row) => sum + row.quantity, 0);
+  const hasUnavailableCartRows = cartRows.some((row) => row.unavailable);
   const customerHistory = (apiMode ? apiOrders : state.orders)
     .filter((order) => apiMode || order.tableId === device.tableId)
     .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
@@ -938,6 +937,16 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
   const currentItems = currentCategory?.id === "recommended"
     ? recentDrinkItemIds.map((itemId) => menuItems.find((item) => item.id === itemId)).filter(Boolean)
     : expandCustomerMenuItems(menuItems.filter((item) => currentCategory?.categoryIds.includes(item.categoryId))).sort(compareMenuItems);
+  const blockCartAfterAuthenticationFailure = () => {
+    if (!Object.keys(cartRef.current).length) {
+      setNotice({ kind: "error", message: "端末の接続を確認できません。送信待ちの注文は保持されています。スタッフへ確認してください。" });
+      return;
+    }
+    setCartContextStale(true);
+    setCartAuthorizationRequired(true);
+    setModal(null);
+    setNotice({ kind: "error", message: "端末の接続を確認できません。カート内容は保持しています。注文を停止しています。スタッフへ確認してください。" });
+  };
 
   useEffect(() => {
     if (!apiMode) return undefined;
@@ -989,12 +998,48 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
 
   useEffect(() => {
     if (!apiMode || typeof orderClient.subscribeInvalidations !== "function") return undefined;
-    return orderClient.subscribeInvalidations((event) => {
-      if (event?.payload?.resource === "menu") setMenuRefreshKey((current) => current + 1);
-      if (event?.payload?.resource === "orders") setHistoryRefreshKey((current) => current + 1);
-      if (event?.payload?.resource === "checkout" || event?.resource === "checkout" || String(event?.payload?.type || event?.type || "").startsWith("checkout.")) setCheckoutRefreshKey((current) => current + 1);
-    });
-  }, [apiMode, orderClient]);
+    let cancelled = false;
+    const refreshVisitState = async () => {
+      setMenuRefreshKey((current) => current + 1);
+      if (typeof orderClient.getDeviceConfig !== "function") return;
+      let currentConfig;
+      try {
+        currentConfig = await orderClient.getDeviceConfig();
+      } catch (error) {
+        if (error?.status === 401 || error?.code === "HTTP_401") blockCartAfterAuthenticationFailure();
+        return;
+      }
+      if (cancelled) return;
+      if (currentConfig?.status === "unauthorized" || currentConfig?.errorCode === "HTTP_401") {
+        blockCartAfterAuthenticationFailure();
+        return;
+      }
+      if (!currentConfig) return;
+      onCustomerDeviceConfigChange?.(currentConfig);
+      const pinnedVisitContextId = cartVisitContextIdRef.current;
+      if (
+        Object.keys(cartRef.current).length > 0
+        && pinnedVisitContextId
+        && currentConfig.visitContextId !== pinnedVisitContextId
+      ) {
+        setCartContextStale(true);
+        setCartAuthorizationRequired(false);
+        setModal(null);
+        setNotice({ kind: "error", message: "来店または端末の割当が変わりました。カートの内容は保持しています。確認後、破棄してください。" });
+      }
+    };
+    const unsubscribe = orderClient.subscribeInvalidations((event) => {
+      const resource = event?.payload?.resource ?? event?.resource;
+      if (resource === "menu") setMenuRefreshKey((current) => current + 1);
+      if (resource === "deviceConfig") void refreshVisitState();
+      if (resource === "orders") setHistoryRefreshKey((current) => current + 1);
+      if (resource === "checkout" || String(event?.payload?.type || event?.type || "").startsWith("checkout.")) setCheckoutRefreshKey((current) => current + 1);
+    }, { onReconnect: refreshVisitState, onAuthorizationFailure: blockCartAfterAuthenticationFailure });
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
+  }, [apiMode, orderClient, onCustomerDeviceConfigChange]);
 
   useEffect(() => {
     if (!apiMode || !orderClient?.getCheckout || (modal !== "checkout" && checkoutRefreshKey === 0)) return undefined;
@@ -1079,6 +1124,7 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
     cartContextCaptureRef.current = null;
     setCartContextLoading(false);
     setCartContextStale(false);
+    setCartAuthorizationRequired(false);
   };
   const captureCartVisitContext = () => {
     if (!apiMode || cartContextCapturedRef.current) return cartContextCaptureRef.current || Promise.resolve(cartVisitContextIdRef.current);
@@ -1101,19 +1147,7 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
     return capture;
   };
   const addSelectionNow = (item, selection, normalizedQuantity) => {
-    const menuItemId = item.menuItemId ?? item.id;
-    const key = `${menuItemId}::${selection.variant?.variantId ?? ""}::${selection.servingOption?.servingOptionId ?? ""}::${selection.temperature ?? ""}`;
-    const current = cartRef.current;
-    replaceCart({
-      ...current,
-      [key]: {
-        menuItemId,
-        variant: selection.variant,
-        temperature: selection.temperature,
-        servingOption: selection.servingOption,
-        quantity: (current[key]?.quantity ?? 0) + normalizedQuantity,
-      },
-    });
+    replaceCart(addCustomerCartSelection(cartRef.current, item, selection, normalizedQuantity));
   };
   const addSelection = (item, selection = {}, quantity = 1) => {
     if (!item || item.isSoldOut || submitLock.current) return;
@@ -1139,9 +1173,14 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
     replaceCart(next);
     if (Object.keys(next).length === 0) clearCart();
   };
+  const removeCartRow = (key) => {
+    const next = removeCustomerCartSelection(cartRef.current, key);
+    replaceCart(next);
+    if (Object.keys(next).length === 0) clearCart();
+  };
 
   const submitOrder = async () => {
-    if (!cartRows.length || submitLock.current) return;
+    if (!cartRows.length || hasUnavailableCartRows || cartContextStale || submitLock.current) return;
     submitLock.current = true;
     setSubmitting(true);
     const now = new Date().toISOString();
@@ -1166,8 +1205,13 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
         const pinnedVisitContextId = cartVisitContextIdRef.current;
         if (typeof orderClient.checkVisitContext === "function" && pinnedVisitContextId) {
           const contextCheck = await orderClient.checkVisitContext(pinnedVisitContextId);
+          if (contextCheck?.status === "unauthorized" || ["HTTP_401", "HTTP_403", "AUTHENTICATION_FAILED", "AUTHORIZATION_FAILED"].includes(contextCheck?.errorCode)) {
+            blockCartAfterAuthenticationFailure();
+            return;
+          }
           if (contextCheck?.status === "stale") {
             setCartContextStale(true);
+            setCartAuthorizationRequired(false);
             setModal(null);
             setNotice({ kind: "error", message: "来店または端末の割当が変わりました。カートの内容は保持しています。確認後、破棄してください。" });
             return;
@@ -1481,17 +1525,18 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
           <aside className="cart-panel">
             <header><Receipt size={36} weight="bold" /><div><h2>ご注文内容</h2><span>ORDER SUMMARY</span></div></header>
             <div className="cart-list">
-              {cartRows.length ? cartRows.map((row, index) => <div className="cart-row" key={row.key}><span className="cart-row__index">{index + 1}</span><b>{selectionDisplayName(row.item, row)}</b><span>{row.quantity}点</span><button onClick={() => decrementCartRow(row.key)} aria-label={`${selectionDisplayName(row.item, row)}を1点取り消す`}><X size={18} /></button></div>) : <div className="cart-empty"><Receipt size={54} weight="thin" /><p>商品を追加すると<br />ここに表示されます。</p></div>}
+              {cartRows.length ? cartRows.map((row, index) => <div className={`cart-row${row.unavailable ? " cart-row--unavailable" : ""}`} key={row.key}><span className="cart-row__index">{index + 1}</span><b>{selectionDisplayName(row.item, row)}</b><span>{row.quantity}点</span><button onClick={() => row.unavailable ? removeCartRow(row.key) : decrementCartRow(row.key)} aria-label={`${selectionDisplayName(row.item, row)}${row.unavailable ? "をカートから削除" : "を1点取り消す"}`}><X size={18} /></button></div>) : <div className="cart-empty"><Receipt size={54} weight="thin" /><p>商品を追加すると<br />ここに表示されます。</p></div>}
             </div>
+            {hasUnavailableCartRows ? <p className="cart-context-warning" role="alert">現在注文できない商品があります。内容をご確認ください</p> : null}
             {apiMode && cartRows.length && cartContextLoading ? <p className="cart-context-status" role="status">来店情報を確認しています…</p> : null}
-            {apiMode && cartRows.length && cartContextStale ? <div className="cart-context-warning" role="alert"><p>来店または端末の割当が変わりました。注文は送信されません。カート内容を確認して破棄してください。</p><button type="button" onClick={discardStaleCart} disabled={submitting}>このカートを破棄</button></div> : null}
-            <button className="confirm-button" disabled={!cartCount || cartContextLoading || cartContextStale} onClick={() => setModal("confirm")}>注文を確定する <ArrowRight size={28} weight="bold" /></button>
+            {apiMode && Object.keys(cart).length > 0 && cartContextStale ? <div className="cart-context-warning" role="alert"><p>{cartAuthorizationRequired ? "端末の接続を確認できません。カート内容は保持しています。注文は送信されません。スタッフへ確認してください。" : "来店または端末の割当が変わりました。注文は送信されません。カート内容を確認して破棄してください。"}</p><button type="button" onClick={discardStaleCart} disabled={submitting}>このカートを破棄</button></div> : null}
+            <button className="confirm-button" disabled={!cartCount || hasUnavailableCartRows || cartContextLoading || cartContextStale} onClick={() => setModal("confirm")}>注文を確定する <ArrowRight size={28} weight="bold" /></button>
           </aside>
         </div>
         <footer className="customer-footer"><b>INFORMATION</b>{CUSTOMER_FOOTER_INFORMATION ? <span>{CUSTOMER_FOOTER_INFORMATION}</span> : null}<strong>全席喫煙可能</strong></footer>
       </section>
 
-      {modal === "confirm" ? <Modal title="注文内容の確認" onClose={() => { if (!submitting) setModal(null); }}><div className="confirm-list">{cartRows.map((row) => <div key={row.key}><b>{selectionDisplayName(row.item, row)}</b><span>{row.quantity}点</span></div>)}</div><p className="price-hidden-note">内容をご確認のうえ、注文を送信してください。</p><div className="modal-actions"><button className="button button--quiet" onClick={() => setModal(null)} disabled={submitting}>戻る</button><button className="button button--primary button--large" onClick={submitOrder} disabled={submitting}>{submitting ? "送信中" : online ? "注文を送信" : "送信待ちに保存"}</button></div></Modal> : null}
+      {modal === "confirm" ? <Modal title="注文内容の確認" onClose={() => { if (!submitting) setModal(null); }}><div className="confirm-list">{cartRows.map((row) => <div key={row.key}><b>{selectionDisplayName(row.item, row)}</b><span>{row.quantity}点</span></div>)}</div>{hasUnavailableCartRows ? <p className="cart-context-warning" role="alert">現在注文できない商品があります。内容をご確認ください</p> : <p className="price-hidden-note">内容をご確認のうえ、注文を送信してください。</p>}<div className="modal-actions"><button className="button button--quiet" onClick={() => setModal(null)} disabled={submitting}>戻る</button><button className="button button--primary button--large" onClick={submitOrder} disabled={submitting || hasUnavailableCartRows || cartContextStale}>{submitting ? "送信中" : online ? "注文を送信" : "送信待ちに保存"}</button></div></Modal> : null}
       {shochuSelection && shochuSelectionItem ? <Modal title={shochuSelectionItem.name} onClose={() => setShochuSelection(null)} className="modal--shochu">
         <div className="shochu-selection-modal">
           <p className="modal-lead">飲み方と数量を選択してください。</p>
@@ -3759,8 +3804,8 @@ export function App() {
   const content = useMemo(() => {
     const isCustomerRoute = route === "/" || route.startsWith("/customer/");
     if (isCustomerRoute && !orderClient) return <PairingScreen onClaim={claim} error={pairingError} />;
-    if (route === "/") return <CustomerScreen state={state} updateState={updateState} deviceId="customer-03" orderClient={orderClient} customerDeviceConfig={customerDeviceConfig} />;
-    if (route.startsWith("/customer/")) return <CustomerScreen state={state} updateState={updateState} deviceId={route.split("/")[2]} orderClient={orderClient} customerDeviceConfig={customerDeviceConfig} />;
+    if (route === "/") return <CustomerScreen state={state} updateState={updateState} deviceId="customer-03" orderClient={orderClient} customerDeviceConfig={customerDeviceConfig} onCustomerDeviceConfigChange={setCustomerDeviceConfig} />;
+    if (route.startsWith("/customer/")) return <CustomerScreen state={state} updateState={updateState} deviceId={route.split("/")[2]} orderClient={orderClient} customerDeviceConfig={customerDeviceConfig} onCustomerDeviceConfigChange={setCustomerDeviceConfig} />;
     if (route === "/kitchen") return <KitchenScreen state={state} updateState={updateState} apiState={kitchenApiState} checkoutState={kitchenCheckoutState} onServe={serveKitchenItem} onSaveItemPrice={saveKitchenItemPrice} onAdjustItemQuantity={adjustKitchenItemQuantity} onChangeItemCancellation={changeKitchenOrderItemCancellation} onRefreshCheckouts={refreshKitchenCheckouts} onSaveCheckout={saveCheckout} onReadyCheckout={readyCheckout} onCancelCheckout={cancelCheckout} onPayCheckout={payCheckout} />;
     if (route === "/history") {
       const explicitDemo = window.WARUN_ORDER_MODE === "demo" || new URLSearchParams(window.location.search).get("demo") === "1";
@@ -3779,7 +3824,7 @@ export function App() {
     }
     if (route.startsWith("/admin/")) return <AdminScreen state={state} updateState={updateState} section={route.split("/")[2] || "menu"} />;
     if (route === "/devices") return <Launcher state={state} updateState={updateState} />;
-    return <CustomerScreen state={state} updateState={updateState} deviceId="customer-03" orderClient={orderClient} customerDeviceConfig={customerDeviceConfig} />;
+    return <CustomerScreen state={state} updateState={updateState} deviceId="customer-03" orderClient={orderClient} customerDeviceConfig={customerDeviceConfig} onCustomerDeviceConfigChange={setCustomerDeviceConfig} />;
   }, [route, state, orderClient, customerDeviceConfig, kitchenApiState, pairingError, kitchenCheckoutState]);
 
   return content;

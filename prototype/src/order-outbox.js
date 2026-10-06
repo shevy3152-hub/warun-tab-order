@@ -321,11 +321,11 @@ export function createApiOrderTransport({
     enabled: Boolean(config?.enabled),
     unavailableCode: safeErrorCode(config?.reason, "API_UNCONFIGURED"),
     canAttempt,
-    async send(payload) {
+    async send(payload, { connectivityRestored = false } = {}) {
       if (!config?.enabled || !endpoint || typeof fetchImpl !== "function") {
         return { kind: "retry", errorCode: safeErrorCode(config?.reason, "API_UNCONFIGURED") };
       }
-      if (env?.navigator?.onLine === false) return { kind: "retry", errorCode: "OFFLINE" };
+      if (!connectivityRestored && env?.navigator?.onLine === false) return { kind: "retry", errorCode: "OFFLINE" };
       const controller = typeof AbortController === "function" ? new AbortController() : null;
       let timeoutHandle;
       if (controller && typeof setTimeoutImpl === "function") {
@@ -535,6 +535,7 @@ export function subscribeCustomerInvalidations({
   fetchImpl = env.fetch,
   onEvent,
   onReconnect,
+  onAuthorizationFailure,
 } = {}) {
   if (!config?.enabled || !config.baseUrl || typeof fetchImpl !== "function" || typeof onEvent !== "function") {
     return () => {};
@@ -615,6 +616,9 @@ export function subscribeCustomerInvalidations({
         eventEpoch = null;
         lastEventId = 0;
         onReconnect?.("epoch-reset");
+      } else if (response.status === 401) {
+        stopped = true;
+        await onAuthorizationFailure?.("HTTP_401");
       } else if (response.ok) {
         const responseEpoch = response.headers?.get?.("X-Event-Epoch");
         if (responseEpoch) eventEpoch = responseEpoch;
@@ -667,8 +671,12 @@ export function createOrderOutbox({
   const listeners = new Set();
   let flushPromise = null;
   let retryTimer = null;
+  let retryConnectivityRestored = false;
+  let deferredRetryAttempt = 0;
+  let pendingRecoveryFlush = false;
   let started = false;
   let stopped = false;
+  let authorizationRevoked = false;
   let lastOnlineFlushAt = 0;
 
   const emit = (record, extra = {}) => {
@@ -686,14 +694,32 @@ export function createOrderOutbox({
     return event;
   };
 
-  const scheduleRetry = (record) => {
-    if (!autoRetry || stopped || retryTimer || typeof setTimeoutImpl !== "function") return;
-    const delay = retryDelayForAttempt(record.attemptCount, retryBaseMs, retryMaxMs);
+  const clearRetryTimer = () => {
+    if (retryTimer !== null && typeof clearTimeoutImpl === "function") clearTimeoutImpl(retryTimer);
+    retryTimer = null;
+    retryConnectivityRestored = false;
+  };
+
+  const scheduleRetry = (record, { connectivityRestored = false, attemptCount = record.attemptCount } = {}) => {
+    if (!autoRetry || stopped || typeof setTimeoutImpl !== "function") return;
+    if (retryTimer !== null) {
+      retryConnectivityRestored ||= connectivityRestored;
+      return;
+    }
+    retryConnectivityRestored = connectivityRestored;
+    const delay = retryDelayForAttempt(attemptCount, retryBaseMs, retryMaxMs);
     retryTimer = setTimeoutImpl(() => {
       retryTimer = null;
-      void flush();
+      const retryOptions = { connectivityRestored: retryConnectivityRestored };
+      retryConnectivityRestored = false;
+      void flush(retryOptions);
     }, delay);
     if (typeof retryTimer?.unref === "function") retryTimer.unref();
+  };
+
+  const scheduleDeferredRetry = (record, options = {}) => {
+    deferredRetryAttempt = Math.max(deferredRetryAttempt + 1, Number(record.attemptCount) || 0);
+    scheduleRetry(record, { ...options, attemptCount: deferredRetryAttempt });
   };
 
   const recordsForFlush = async (clientOrderId) => {
@@ -704,15 +730,25 @@ export function createOrderOutbox({
     return store.list();
   };
 
-  const flushInternal = async ({ clientOrderId = null, force = false } = {}) => {
+  const flushInternal = async ({ clientOrderId = null, force = false, connectivityRestored = false } = {}) => {
     if (stopped) return { state: "stopped", clientOrderId };
+    if (authorizationRevoked) {
+      const heldRecord = (await recordsForFlush(clientOrderId)).find((record) => [OUTBOX_STATES.PENDING, OUTBOX_STATES.SENDING, OUTBOX_STATES.REVIEW_REQUIRED].includes(record.state));
+      return heldRecord
+        ? { state: OUTBOX_STATES.REVIEW_REQUIRED, clientOrderId: heldRecord.clientOrderId, errorCode: heldRecord.lastErrorCode || "HTTP_401" }
+        : { state: "not_found", clientOrderId };
+    }
+    if (connectivityRestored) {
+      clearRetryTimer();
+    }
     const records = await recordsForFlush(clientOrderId);
     if (!records.length) return { state: "not_found", clientOrderId };
     const reviewRequired = records.find((record) => record.state === OUTBOX_STATES.REVIEW_REQUIRED);
     if (reviewRequired) return { state: OUTBOX_STATES.REVIEW_REQUIRED, clientOrderId: reviewRequired.clientOrderId, errorCode: reviewRequired.lastErrorCode };
-    if (typeof transport.canAttempt === "function" && !transport.canAttempt()) {
+    if (!connectivityRestored && typeof transport.canAttempt === "function" && !transport.canAttempt()) {
       const result = { state: OUTBOX_STATES.PENDING, clientOrderId: records[0].clientOrderId, errorCode: transport.unavailableCode || "OFFLINE" };
       emit({ ...records[0], lastErrorCode: result.errorCode }, { result: "not_attempted" });
+      scheduleDeferredRetry(records[0]);
       return result;
     }
 
@@ -723,7 +759,7 @@ export function createOrderOutbox({
       if (record.payload?.visitContextId && typeof transport.checkVisitContext === "function") {
         let contextCheck;
         try {
-          contextCheck = await transport.checkVisitContext(record.payload.visitContextId);
+          contextCheck = await transport.checkVisitContext(record.payload.visitContextId, { connectivityRestored });
         } catch {
           contextCheck = { status: "unavailable", errorCode: "VISIT_CONTEXT_CHECK_FAILED" };
         }
@@ -737,23 +773,34 @@ export function createOrderOutbox({
           lastResult = { state: review.state, clientOrderId: record.clientOrderId, errorCode: review.lastErrorCode };
           continue;
         }
+        if (contextCheck?.status === "unauthorized" || ["HTTP_401", "HTTP_403", "AUTHENTICATION_FAILED", "AUTHORIZATION_FAILED"].includes(contextCheck?.errorCode)) {
+          const errorCode = safeErrorCode(contextCheck.errorCode, "HTTP_401");
+          const review = await store.update(record.clientOrderId, {
+            state: OUTBOX_STATES.REVIEW_REQUIRED,
+            lastErrorCode: errorCode,
+          });
+          emit(review, { displayState: "review_required" });
+          lastResult = { state: review.state, clientOrderId: record.clientOrderId, errorCode: review.lastErrorCode };
+          continue;
+        }
         if (contextCheck?.status === "unavailable" && !mayNeedAcceptedReplay) {
           const errorCode = safeErrorCode(contextCheck.errorCode, "VISIT_CONTEXT_CHECK_FAILED");
           emit(record, { displayState: "pending", result: "context_not_verified", errorCode });
-          scheduleRetry(record);
+          scheduleDeferredRetry(record, { connectivityRestored });
           lastResult = { state: OUTBOX_STATES.PENDING, clientOrderId: record.clientOrderId, errorCode };
           continue;
         }
         // A previously attempted order may have been accepted even if its response was lost.
         // Let the server's replay-first idempotency lookup decide before its current-context check.
       }
+      deferredRetryAttempt = 0;
       const claimed = await store.claim(record.clientOrderId, now());
       if (!claimed) continue;
       const retrying = claimed.attemptCount > 1;
       emit(claimed, { displayState: retrying ? "retrying" : "sending" });
       let result;
       try {
-        result = await transport.send(claimed.payload);
+        result = await transport.send(claimed.payload, { connectivityRestored });
       } catch {
         result = { kind: "retry", errorCode: "NETWORK_ERROR" };
       }
@@ -766,20 +813,27 @@ export function createOrderOutbox({
         lastResult = { state: OUTBOX_STATES.SYNCED, clientOrderId: record.clientOrderId, idempotencyResult: result.idempotencyResult };
       } else if (result?.kind === "rejected") {
         const errorCode = safeErrorCode(result.errorCode, "BUSINESS_ERROR");
-        const requiresReview = ["VISIT_CONTEXT_STALE", "DEVICE_NOT_ASSIGNED", "TABLE_INACTIVE"].includes(errorCode);
+        const requiresReview = ["VISIT_CONTEXT_STALE", "DEVICE_NOT_ASSIGNED", "TABLE_INACTIVE", "HTTP_401", "HTTP_403", "AUTHENTICATION_FAILED", "AUTHORIZATION_FAILED"].includes(errorCode);
         const rejected = await store.update(record.clientOrderId, {
           state: requiresReview ? OUTBOX_STATES.REVIEW_REQUIRED : OUTBOX_STATES.REJECTED,
           lastErrorCode: errorCode,
         });
         emit(rejected, { displayState: requiresReview ? "review_required" : "business_error" });
         lastResult = { state: rejected.state, clientOrderId: record.clientOrderId, errorCode: rejected.lastErrorCode };
+      } else if (authorizationRevoked) {
+        const review = await store.update(record.clientOrderId, {
+          state: OUTBOX_STATES.REVIEW_REQUIRED,
+          lastErrorCode: "HTTP_401",
+        });
+        emit(review, { displayState: "review_required" });
+        lastResult = { state: review.state, clientOrderId: record.clientOrderId, errorCode: review.lastErrorCode };
       } else {
         const pending = await store.update(record.clientOrderId, {
           state: OUTBOX_STATES.PENDING,
           lastErrorCode: safeErrorCode(result?.errorCode, "NETWORK_ERROR"),
         });
         emit(pending, { displayState: "failed" });
-        scheduleRetry(pending);
+        scheduleRetry(pending, { connectivityRestored });
         lastResult = { state: OUTBOX_STATES.PENDING, clientOrderId: record.clientOrderId, errorCode: pending.lastErrorCode };
       }
     }
@@ -787,8 +841,26 @@ export function createOrderOutbox({
   };
 
   const flush = (options = {}) => {
-    if (flushPromise) return flushPromise;
-    flushPromise = flushInternal(options).finally(() => { flushPromise = null; });
+    if (flushPromise) {
+      if (options.connectivityRestored) pendingRecoveryFlush = true;
+      return flushPromise;
+    }
+    flushPromise = (async () => {
+      let nextOptions = options;
+      let result;
+      do {
+        result = await flushInternal(nextOptions);
+        nextOptions = null;
+        if (pendingRecoveryFlush && !stopped) {
+          pendingRecoveryFlush = false;
+          nextOptions = { force: true, connectivityRestored: true };
+        }
+      } while (nextOptions);
+      return result;
+    })().finally(() => {
+      flushPromise = null;
+      pendingRecoveryFlush = false;
+    });
     return flushPromise;
   };
 
@@ -796,10 +868,27 @@ export function createOrderOutbox({
     const currentTime = Date.now();
     if (currentTime - lastOnlineFlushAt < ONLINE_FLUSH_DEBOUNCE_MS) return;
     lastOnlineFlushAt = currentTime;
-    void flush({ force: true });
+    void flush({ force: true, connectivityRestored: true });
   };
 
   return {
+    async holdPendingForReview(errorCode = "HTTP_401") {
+      authorizationRevoked = true;
+      clearRetryTimer();
+      const safeCode = safeErrorCode(errorCode, "HTTP_401");
+      let heldCount = 0;
+      for (const record of await store.list()) {
+        if (![OUTBOX_STATES.PENDING, OUTBOX_STATES.SENDING].includes(record.state)) continue;
+        const review = await store.update(record.clientOrderId, {
+          state: OUTBOX_STATES.REVIEW_REQUIRED,
+          lastErrorCode: safeCode,
+        });
+        if (!review) continue;
+        emit(review, { displayState: "review_required" });
+        heldCount += 1;
+      }
+      return heldCount;
+    },
     async enqueue({ items, visitContextId, holdForReview = false }) {
       const clientOrderId = idFactory();
       const payload = createOrderPayload({ clientOrderId, items, visitContextId });
@@ -825,8 +914,8 @@ export function createOrderOutbox({
       stopped = true;
       started = false;
       if (typeof eventTarget?.removeEventListener === "function") eventTarget.removeEventListener("online", onOnline);
-      if (retryTimer !== null && typeof clearTimeoutImpl === "function") clearTimeoutImpl(retryTimer);
-      retryTimer = null;
+      clearRetryTimer();
+      pendingRecoveryFlush = false;
       await store.close?.();
     },
     subscribe(listener) {
@@ -881,17 +970,20 @@ export function createCustomerOrderClient({
   const usableStore = store || (indexedDbApi ? createIndexedDbOutbox({ indexedDB: indexedDbApi }) : createMemoryOutbox());
   const hasDurableStore = Boolean(store || indexedDbApi);
   let visitContextId = global.WARUN_VISIT_CONTEXT_ID;
-  const readCurrentVisitContext = async () => {
+  const readCurrentVisitContext = async ({ connectivityRestored = false } = {}) => {
     const fetchImpl = options.fetchImpl || global.fetch;
     if (!config.enabled || typeof fetchImpl !== "function") {
       return { status: "unavailable", errorCode: config.reason || "API_UNAVAILABLE" };
     }
-    if (global.navigator?.onLine === false) return { status: "unavailable", errorCode: "OFFLINE" };
+    if (!connectivityRestored && global.navigator?.onLine === false) return { status: "unavailable", errorCode: "OFFLINE" };
     try {
-      const response = await fetchImpl(`${config.baseUrl}/device/config`, {
+    const response = await fetchImpl(`${config.baseUrl}/device/config`, {
         headers: { Accept: "application/json", Authorization: `Bearer ${config.token}` },
       });
-      if (!response.ok) return { status: "unavailable", errorCode: `HTTP_${response.status}` };
+      if (!response.ok) {
+        if (response.status === 401 || response.status === 403) return { status: "unauthorized", errorCode: `HTTP_${response.status}` };
+        return { status: "unavailable", errorCode: `HTTP_${response.status}` };
+      }
       const body = await response.json();
       if (body?.role !== "customer" || !/^v1_[0-9a-f]{64}$/.test(body.visitContextId || "")) {
         return { status: "unavailable", errorCode: "INVALID_VISIT_CONTEXT_RESPONSE" };
@@ -908,8 +1000,8 @@ export function createCustomerOrderClient({
     eventTarget,
     ...options,
   });
-  transport.checkVisitContext = async (expectedVisitContextId) => {
-    const current = await readCurrentVisitContext();
+  transport.checkVisitContext = async (expectedVisitContextId, options = {}) => {
+    const current = await readCurrentVisitContext(options);
     if (current.status !== "available") return current;
     return { status: current.visitContextId === expectedVisitContextId ? "match" : "stale" };
   };
@@ -919,6 +1011,24 @@ export function createCustomerOrderClient({
     async getVisitContextId() {
       const current = await readCurrentVisitContext();
       return current.status === "available" ? current.visitContextId : visitContextId || null;
+    },
+    async getDeviceConfig() {
+      const fetchImpl = options.fetchImpl || global.fetch;
+      if (!config.enabled || typeof fetchImpl !== "function" || global.navigator?.onLine === false) return null;
+      try {
+        const response = await fetchImpl(config.baseUrl + "/device/config", {
+          headers: { Accept: "application/json", Authorization: "Bearer " + config.token },
+        });
+        if (!response.ok) return response.status === 401 || response.status === 403
+          ? { status: "unauthorized", errorCode: `HTTP_${response.status}` }
+          : null;
+        const body = await response.json();
+        if (body?.role !== "customer" || !/^v1_[0-9a-f]{64}$/.test(body.visitContextId || "")) return null;
+        visitContextId = body.visitContextId;
+        return body;
+      } catch {
+        return null;
+      }
     },
     async checkVisitContext(expectedVisitContextId) {
       return transport.checkVisitContext(expectedVisitContextId);
@@ -966,13 +1076,19 @@ export function createCustomerOrderClient({
     requestCheckout({ checkoutRequestId, receiptRequested }) {
       return requestCustomerCheckout({ config, checkoutRequestId, receiptRequested, fetchImpl: options.fetchImpl || global.fetch });
     },
-    subscribeInvalidations(listener, { onReconnect } = {}) {
+    subscribeInvalidations(listener, { onReconnect, onAuthorizationFailure } = {}) {
       return subscribeCustomerInvalidations({
         config,
         env: global,
         fetchImpl: options.fetchImpl || global.fetch,
         onEvent: listener,
-        onReconnect,
+        onReconnect(reason) {
+          void service.flush({ force: true, connectivityRestored: true });
+          onReconnect?.(reason);
+        },
+        onAuthorizationFailure(errorCode) {
+          return service.holdPendingForReview(errorCode).finally(() => onAuthorizationFailure?.(errorCode));
+        },
       });
     },
   };

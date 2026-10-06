@@ -265,6 +265,43 @@ test("online recovery flushes pending orders", async () => {
   assert.equal(calls[0].clientOrderId, record.clientOrderId);
 });
 
+test("offline deferral schedules bounded retries even if no online event is delivered", async () => {
+  const timers = [];
+  const calls = [];
+  let available = false;
+  const store = createMemoryOutbox();
+  const service = createOrderOutbox({
+    store,
+    transport: { ...successfulTransport("created", calls), canAttempt: () => available },
+    idFactory: () => uuid(47),
+    setTimeoutImpl(callback, delay) { const timer = { callback, delay }; timers.push(timer); return timer; },
+    clearTimeoutImpl() {},
+  });
+  const visitContextId = `v1_${"a".repeat(64)}`;
+  const record = await service.enqueue({ items: [{ menuItemId: ITEM_ID, quantity: 1 }], visitContextId });
+
+  assert.equal((await service.flush({ clientOrderId: record.clientOrderId })).state, "pending");
+  assert.equal((await store.get(record.clientOrderId)).attemptCount, 0);
+  assert.equal(calls.length, 0);
+  assert.equal(timers[0].delay, 1_000);
+
+  timers[0].callback();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(calls.length, 0);
+  assert.equal(timers[1].delay, 2_000);
+  assert.equal((await store.get(record.clientOrderId)).payload.visitContextId, visitContextId);
+
+  available = true;
+  timers[1].callback();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(calls.length, 1);
+  const saved = await store.get(record.clientOrderId);
+  assert.equal(saved.state, "synced");
+  assert.equal(saved.attemptCount, 1);
+  assert.equal(saved.payload.visitContextId, visitContextId);
+  await service.stop();
+});
+
 test("outbox success events map to a customer sent notice after recovery", () => {
   assert.deepEqual(customerOrderNoticeFromOutboxEvent({ clientOrderId: uuid(40), state: "synced", displayState: "synced" }), {
     kind: "success",
@@ -282,6 +319,10 @@ test("outbox success events map to a customer sent notice after recovery", () =>
   assert.deepEqual(customerOrderNoticeFromOutboxEvent({ clientOrderId: uuid(44), state: "review_required", displayState: "review_required" }), {
     kind: "error",
     message: "来店または端末の割当が変わりました。注文内容を保持しています。スタッフへ確認してください。",
+  });
+  assert.deepEqual(customerOrderNoticeFromOutboxEvent({ clientOrderId: uuid(45), state: "review_required", displayState: "review_required", lastErrorCode: "HTTP_401" }), {
+    kind: "error",
+    message: "端末の接続を確認できません。注文内容を保持しています。スタッフへ確認してください。",
   });
 });
 
@@ -301,6 +342,93 @@ test("stale outbox submissions are retained in a non-retrying staff-review state
   assert.equal(saved.payload.items[0].menuItemId, ITEM_ID);
   assert.equal((await service.flush({ clientOrderId: record.clientOrderId })).state, "review_required");
   assert.equal(calls.length, 1);
+});
+
+test("a 401 order response holds the existing payload for review instead of rejecting or retrying it", async () => {
+  const visitContextId = `v1_${"f".repeat(64)}`;
+  const calls = [];
+  const service = createOrderOutbox({
+    store: createMemoryOutbox(),
+    transport: {
+      enabled: true,
+      canAttempt: () => true,
+      async send() { calls.push("send"); return { kind: "rejected", errorCode: "HTTP_401" }; },
+    },
+    idFactory: () => uuid(56),
+    autoRetry: false,
+  });
+  const record = await service.enqueue({ visitContextId, items: [{ menuItemId: ITEM_ID, quantity: 1 }] });
+  const result = await service.flush({ clientOrderId: record.clientOrderId });
+  const retained = await service.get(record.clientOrderId);
+
+  assert.equal(result.state, "review_required");
+  assert.equal(retained.state, "review_required");
+  assert.equal(retained.lastErrorCode, "HTTP_401");
+  assert.equal(retained.payload.visitContextId, visitContextId);
+  assert.deepEqual(retained.payload.items, [{ menuItemId: ITEM_ID, quantity: 1 }]);
+  assert.equal((await service.flush({ clientOrderId: record.clientOrderId, force: true })).state, "review_required");
+  assert.deepEqual(calls, ["send"]);
+});
+
+test("an SSE authorization failure keeps an in-flight timeout from becoming retryable under new credentials", async () => {
+  let sendStarted;
+  let completeSend;
+  const started = new Promise((resolve) => { sendStarted = resolve; });
+  const sendResult = new Promise((resolve) => { completeSend = resolve; });
+  const store = createMemoryOutbox();
+  const service = createOrderOutbox({
+    store,
+    transport: {
+      enabled: true,
+      canAttempt: () => true,
+      async send() { sendStarted(); return sendResult; },
+    },
+    idFactory: () => uuid(59),
+    autoRetry: false,
+  });
+  const record = await service.enqueue({ visitContextId: `v1_${"a".repeat(64)}`, items: [{ menuItemId: ITEM_ID, quantity: 1 }] });
+  const flush = service.flush({ clientOrderId: record.clientOrderId });
+  await started;
+  await service.holdPendingForReview("HTTP_401");
+  completeSend({ kind: "retry", errorCode: "NETWORK_ERROR" });
+  await flush;
+
+  const retained = await service.get(record.clientOrderId);
+  assert.equal(retained.state, "review_required");
+  assert.equal(retained.lastErrorCode, "HTTP_401");
+  assert.equal(retained.payload.items[0].menuItemId, ITEM_ID);
+  assert.equal((await service.flush({ clientOrderId: record.clientOrderId, force: true })).state, "review_required");
+});
+
+test("connectivity confirmation does not bypass stale visit-context rejection", async () => {
+  const calls = [];
+  const visitContextId = `v1_${"d".repeat(64)}`;
+  const store = createMemoryOutbox();
+  const service = createOrderOutbox({
+    store,
+    transport: {
+      enabled: true,
+      canAttempt: () => false,
+      async checkVisitContext(_expectedContext, options) {
+        assert.equal(options.connectivityRestored, true);
+        return { status: "stale" };
+      },
+      async send(payload) { calls.push(payload); return { kind: "success", idempotencyResult: "created" }; },
+    },
+    idFactory: () => uuid(50),
+    autoRetry: false,
+  });
+  const record = await service.enqueue({ items: [{ menuItemId: ITEM_ID, quantity: 1 }], visitContextId });
+
+  const result = await service.flush({ clientOrderId: record.clientOrderId, force: true, connectivityRestored: true });
+  const saved = await store.get(record.clientOrderId);
+  assert.equal(result.state, "review_required");
+  assert.equal(saved.state, "review_required");
+  assert.equal(saved.lastErrorCode, "VISIT_CONTEXT_STALE");
+  assert.equal(saved.attemptCount, 0);
+  assert.equal(saved.payload.visitContextId, visitContextId);
+  assert.equal(calls.length, 0);
+  await service.stop();
 });
 
 test("legacy outbox payloads remain contextless until the server either replays or requires staff review", async () => {
@@ -607,6 +735,121 @@ test("customer invalidation subscription requests a refresh after an epoch reset
   unsubscribe();
 });
 
+test("SSE 401 holds pending orders for review and stops retrying the revoked credential", async () => {
+  const visitContextId = `v1_${"e".repeat(64)}`;
+  const timers = [];
+  const requests = [];
+  const authFailures = [];
+  const env = {
+    WARUN_ORDER_MODE: "api",
+    WARUN_API_BASE: "https://api.example.test/v1",
+    WARUN_API_TOKEN: "revoked-sse-token",
+    WARUN_VISIT_CONTEXT_ID: visitContextId,
+    location: { origin: "https://tablet.example.test" },
+    navigator: { onLine: true },
+    setTimeout(callback, delay) { timers.push({ callback, delay }); return timers.length; },
+    clearTimeout() {},
+  };
+  const client = createCustomerOrderClient({
+    global: env,
+    store: createMemoryOutbox(),
+    idFactory: () => uuid(57),
+    autoRetry: false,
+    fetchImpl: async (url) => {
+      requests.push(url);
+      return { ok: false, status: 401 };
+    },
+  });
+  const record = await client.enqueue({ visitContextId, items: [{ menuItemId: ITEM_ID, quantity: 1 }] });
+  const unsubscribe = client.subscribeInvalidations(() => {}, { onAuthorizationFailure: (code) => authFailures.push(code) });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  const retained = await client.get(record.clientOrderId);
+  assert.deepEqual(authFailures, ["HTTP_401"]);
+  assert.deepEqual(requests, ["https://api.example.test/v1/events"]);
+  assert.equal(timers.length, 0);
+  assert.equal(retained.state, "review_required");
+  assert.equal(retained.lastErrorCode, "HTTP_401");
+  assert.equal(retained.payload.visitContextId, visitContextId);
+  assert.deepEqual(retained.payload.items, [{ menuItemId: ITEM_ID, quantity: 1 }]);
+  assert.equal((await client.flush({ clientOrderId: record.clientOrderId, force: true })).state, "review_required");
+  assert.equal(requests.length, 1);
+  unsubscribe();
+  await client.stop();
+});
+
+test("SSE reconnect flushes a pending order after the online event was missed", async () => {
+  const eventEpoch = uuid(34);
+  const visitContextId = `v1_${"b".repeat(64)}`;
+  const timers = [];
+  const calls = [];
+  const eventTargetApi = eventTarget();
+  let eventRequests = 0;
+  let contextRequests = 0;
+  const env = {
+    WARUN_ORDER_MODE: "api",
+    WARUN_API_BASE: "https://api.example.test/v1",
+    WARUN_API_TOKEN: "reconnect-test-token",
+    WARUN_VISIT_CONTEXT_ID: visitContextId,
+    location: { origin: "https://tablet.example.test" },
+    navigator: { onLine: false },
+    setTimeout(callback, delay) { const timer = { callback, delay }; timers.push(timer); return timer; },
+    clearTimeout() {},
+  };
+  const client = createCustomerOrderClient({
+    global: env,
+    store: createMemoryOutbox(),
+    eventTarget: eventTargetApi,
+    idFactory: () => uuid(48),
+    autoRetry: false,
+    fetchImpl: async (url, options = {}) => {
+      calls.push({ url, options });
+      if (url.endsWith("/events")) {
+        eventRequests += 1;
+        return {
+          ok: true,
+          status: 200,
+          headers: { get(name) { return name === "X-Event-Epoch" ? eventEpoch : null; } },
+          body: { getReader() { return { async read() { return { done: true }; } }; } },
+        };
+      }
+      if (url.endsWith("/device/config")) {
+        contextRequests += 1;
+        return { ok: true, status: 200, async json() { return { role: "customer", visitContextId }; } };
+      }
+      if (url.endsWith("/orders")) {
+        return { status: 201, headers: { get(name) { return name === "Idempotency-Result" ? "created" : null; } } };
+      }
+      throw new Error("Unexpected request.");
+    },
+  });
+
+  await client.start();
+  const reconnectReasons = [];
+  const unsubscribe = client.subscribeInvalidations(() => {}, { onReconnect: (reason) => reconnectReasons.push(reason) });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(eventRequests, 1);
+
+  const record = await client.enqueue({ items: [{ menuItemId: ITEM_ID, quantity: 1 }], visitContextId });
+  assert.equal((await client.flush({ clientOrderId: record.clientOrderId })).state, "pending");
+  assert.equal(calls.some(({ url }) => url.endsWith("/orders")), false);
+  assert.equal(timers[0].delay, 3_000);
+
+  timers[0].callback();
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(eventRequests, 2);
+  assert.deepEqual(reconnectReasons, ["reconnect"]);
+  assert.equal(contextRequests, 1);
+  const orderRequest = calls.find(({ url }) => url.endsWith("/orders"));
+  assert.ok(orderRequest);
+  assert.equal(JSON.parse(orderRequest.options.body).visitContextId, visitContextId);
+  assert.equal((await client.get(record.clientOrderId)).state, "synced");
+  unsubscribe();
+  await client.stop();
+});
+
 test("API mode without runtime configuration is safe and does not use demo transport", async () => {
   const client = createCustomerOrderClient({
     global: { WARUN_ORDER_MODE: "api", location: { origin: "https://tablet.example.test" }, navigator: { onLine: true } },
@@ -620,6 +863,102 @@ test("API mode without runtime configuration is safe and does not use demo trans
   const result = await client.flush({ clientOrderId: record.clientOrderId });
   assert.equal(record.state, "review_required");
   assert.equal(result.state, "review_required");
+});
+
+test("device config refresh updates the cached visit context for live assignment changes", async () => {
+  const originalContext = "v1_" + "a".repeat(64);
+  const refreshedContext = "v1_" + "b".repeat(64);
+  const calls = [];
+  const env = {
+    WARUN_ORDER_MODE: "api",
+    WARUN_API_BASE: "https://api.example.test/v1",
+    WARUN_API_TOKEN: "customer-token",
+    WARUN_VISIT_CONTEXT_ID: originalContext,
+    location: { origin: "https://tablet.example.test" },
+    navigator: { onLine: true },
+  };
+  const client = createCustomerOrderClient({
+    global: env,
+    store: createMemoryOutbox(),
+    autoRetry: false,
+    fetchImpl: async (url, options) => {
+      calls.push({ url, options });
+      return {
+        ok: true,
+        status: 200,
+        async json() {
+          return { role: "customer", tableId: 2, tableLabel: "テーブル2", visitContextId: refreshedContext };
+        },
+      };
+    },
+  });
+
+  const deviceConfig = await client.getDeviceConfig();
+  assert.deepEqual(deviceConfig, {
+    role: "customer",
+    tableId: 2,
+    tableLabel: "テーブル2",
+    visitContextId: refreshedContext,
+  });
+  assert.equal(calls[0].url, "https://api.example.test/v1/device/config");
+  assert.equal(calls[0].options.headers.Authorization, "Bearer customer-token");
+  assert.equal((await client.checkVisitContext(originalContext)).status, "stale");
+});
+
+test("a temporary pre-send visit-context lookup failure retries without changing the pinned context", async () => {
+  const visitContextId = `v1_${"c".repeat(64)}`;
+  const timers = [];
+  const calls = [];
+  let contextRequests = 0;
+  const env = {
+    WARUN_ORDER_MODE: "api",
+    WARUN_API_BASE: "https://api.example.test/v1",
+    WARUN_API_TOKEN: "context-retry-test-token",
+    WARUN_VISIT_CONTEXT_ID: visitContextId,
+    location: { origin: "https://tablet.example.test" },
+    navigator: { onLine: true },
+  };
+  const client = createCustomerOrderClient({
+    global: env,
+    store: createMemoryOutbox(),
+    idFactory: () => uuid(49),
+    setTimeoutImpl(callback, delay) { const timer = { callback, delay }; timers.push(timer); return timer; },
+    clearTimeoutImpl() {},
+    fetchImpl: async (url, options = {}) => {
+      calls.push({ url, options });
+      if (url.endsWith("/device/config")) {
+        contextRequests += 1;
+        if (contextRequests === 1) return { ok: false, status: 503 };
+        return { ok: true, status: 200, async json() { return { role: "customer", visitContextId }; } };
+      }
+      if (url.endsWith("/orders")) {
+        return { status: 201, headers: { get(name) { return name === "Idempotency-Result" ? "created" : null; } } };
+      }
+      throw new Error("Unexpected request.");
+    },
+  });
+  const record = await client.enqueue({ items: [{ menuItemId: ITEM_ID, quantity: 1 }], visitContextId });
+
+  assert.equal((await client.flush({ clientOrderId: record.clientOrderId })).state, "pending");
+  assert.equal(calls.some(({ url }) => url.endsWith("/orders")), false);
+  const waiting = await client.get(record.clientOrderId);
+  assert.equal(waiting.state, "pending");
+  assert.equal(waiting.attemptCount, 0);
+  assert.equal(waiting.payload.visitContextId, visitContextId);
+  assert.equal(timers[0].delay, 1_000);
+
+  timers[0].callback();
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+
+  const orderRequest = calls.find(({ url }) => url.endsWith("/orders"));
+  assert.equal(contextRequests, 2);
+  assert.ok(orderRequest);
+  assert.equal(JSON.parse(orderRequest.options.body).visitContextId, visitContextId);
+  const synced = await client.get(record.clientOrderId);
+  assert.equal(synced.state, "synced");
+  assert.equal(synced.payload.visitContextId, visitContextId);
+  await client.stop();
 });
 
 test("cart-pinned visit context is preserved and a never-attempted stale order is held for review", async () => {
@@ -655,6 +994,40 @@ test("cart-pinned visit context is preserved and a never-attempted stale order i
   const retained = await client.get(record.clientOrderId);
   assert.equal(retained.payload.visitContextId, pinned);
   assert.equal(retained.payload.items[0].menuItemId, ITEM_ID);
+});
+
+test("an unauthorized visit-context lookup holds the existing outbox payload for review", async () => {
+  const visitContextId = `v1_${"d".repeat(64)}`;
+  const calls = [];
+  const env = {
+    WARUN_ORDER_MODE: "api",
+    WARUN_API_BASE: "https://api.example.test/v1",
+    WARUN_API_TOKEN: "revoked-context-token",
+    WARUN_VISIT_CONTEXT_ID: visitContextId,
+    location: { origin: "https://tablet.example.test" },
+    navigator: { onLine: true },
+  };
+  const client = createCustomerOrderClient({
+    global: env,
+    store: createMemoryOutbox(),
+    idFactory: () => uuid(58),
+    autoRetry: false,
+    fetchImpl: async (url) => {
+      calls.push(url);
+      return { ok: false, status: 401 };
+    },
+  });
+  const record = await client.enqueue({ visitContextId, items: [{ menuItemId: ITEM_ID, quantity: 2 }] });
+
+  const result = await client.flush({ clientOrderId: record.clientOrderId, force: true });
+  const retained = await client.get(record.clientOrderId);
+  assert.equal(result.state, "review_required");
+  assert.equal(result.errorCode, "HTTP_401");
+  assert.deepEqual(calls, ["https://api.example.test/v1/device/config"]);
+  assert.equal(retained.payload.visitContextId, visitContextId);
+  assert.deepEqual(retained.payload.items, [{ menuItemId: ITEM_ID, quantity: 2 }]);
+  assert.equal((await client.getDeviceConfig()).status, "unauthorized");
+  await client.stop();
 });
 
 test("offline queued order keeps its captured visit context through same-visit recovery", async () => {

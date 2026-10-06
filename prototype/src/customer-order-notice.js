@@ -10,6 +10,7 @@ const NOTICE_MESSAGES = Object.freeze({
   failed: "送信に失敗しました。通信が戻るまで送信待ちです。",
   pending: "送信待ちです。通信が戻ると自動で再送します。",
   review: "来店または端末の割当が変わりました。注文内容を保持しています。スタッフへ確認してください。",
+  authReview: "端末の接続を確認できません。注文内容を保持しています。スタッフへ確認してください。",
 });
 
 const AUTH_ERROR_CODES = new Set(["AUTHENTICATION_FAILED", "AUTHORIZATION_FAILED", "HTTP_401", "HTTP_403"]);
@@ -48,6 +49,7 @@ export function customerOrderNoticeFromOutboxEvent(event) {
   if (!event?.clientOrderId) return null;
   const displayState = event.displayState || event.state;
   if (displayState === "review_required" || event.state === "review_required") {
+    if (AUTH_ERROR_CODES.has(normalizedErrorCode(event.lastErrorCode))) return { kind: "error", message: NOTICE_MESSAGES.authReview };
     return { kind: "error", message: NOTICE_MESSAGES.review };
   }
   if (displayState === "synced" || event.state === "synced") {

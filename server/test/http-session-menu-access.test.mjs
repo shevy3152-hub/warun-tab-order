@@ -121,6 +121,15 @@ test('session menu grant API is admin-only, optimistic, scoped to one open visit
     assert.equal(database.prepare('SELECT COUNT(*) AS count FROM table_sessions').get().count, 0, 'changing display mode does not start a visit');
     assert.equal(database.prepare('SELECT COUNT(*) AS count FROM session_menu_item_grants').get().count, 0, 'display mode and visit grant are separate');
 
+    const savedAdminMenu = await request({ port, token: ADMIN_TOKEN, path: menuPath });
+    assert.equal(savedAdminMenu.statusCode, 200);
+    assert.equal(savedAdminMenu.json.audience, 'admin');
+    const savedRestrictedItem = savedAdminMenu.json.items.find((item) => item.menuItemId === 'secret-snack');
+    assert.equal(savedRestrictedItem.customerVisibilityMode, 'per_session', 'admin menu DTO preserves the saved display mode');
+    assert.equal(savedRestrictedItem.version, modeResponse.json.version);
+    assert.ok(savedAdminMenu.json.items.filter((item) => item.customerVisibilityMode === 'per_session').some((item) => item.menuItemId === 'secret-snack'), 'the saved item is eligible for the session grant UI');
+    assert.doesNotMatch(JSON.stringify(savedAdminMenu.json), /sessionId|tableId|menuItemIds/);
+
     const noSession = await request({ port, token: ADMIN_TOKEN, path: accessPath });
     assert.equal(noSession.statusCode, 200);
     assert.equal(noSession.json.tables.length, 2);

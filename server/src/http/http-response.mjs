@@ -255,6 +255,7 @@ function mapAdminMenuItem(item) {
     priceYen: requireInteger(item.priceYen),
     isSoldOut: requireBoolean(item.isSoldOut),
     orderingMode: requireOneOf(item.orderingMode ?? 'normal', new Set(['normal', 'reservation_only'])),
+    customerVisibilityMode: requireOneOf(item.customerVisibilityMode ?? 'all_tables', new Set(['all_tables', 'per_session'])),
     isActive: requireBoolean(item.isActive),
     sortOrder: requireInteger(item.sortOrder),
     version: requireInteger(item.version, 1),

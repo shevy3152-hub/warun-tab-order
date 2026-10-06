@@ -210,7 +210,7 @@ test("customer footer keeps information replaceable and shows smoking availabili
 
 test("cart cancel buttons decrement one quantity at a time", () => {
   assert.match(customerScreen, /const decrementCartRow = \(key\) => \{[\s\S]*if \(row\.quantity <= 1\)[\s\S]*row\.quantity - 1/);
-  assert.match(customerScreen, /onClick=\{\(\) => decrementCartRow\(row\.key\)\}/);
+  assert.match(customerScreen, /row\.unavailable \? removeCartRow\(row\.key\) : decrementCartRow\(row\.key\)/);
   assert.match(customerScreen, /を1点取り消す/);
 });
 
@@ -224,8 +224,47 @@ test("API cart pins the first visit context and keeps stale cart contents availa
   assert.match(customerScreen, /setCartContextStale\(true\)[\s\S]*setModal\(null\)/);
   assert.match(customerScreen, /カート内容を確認して破棄してください/);
   assert.match(customerScreen, /onClick=\{discardStaleCart\}/);
-  assert.match(customerScreen, /disabled=\{!cartCount \|\| cartContextLoading \|\| cartContextStale\}/);
+  assert.match(customerScreen, /apiMode && Object\.keys\(cart\)\.length > 0 && cartContextStale/);
+  assert.match(customerScreen, /const discardStaleCart = \(\) => \{[\s\S]*clearCart\(\)/);
+  assert.match(customerScreen, /disabled=\{!cartCount \|\| hasUnavailableCartRows \|\| cartContextLoading \|\| cartContextStale\}/);
   assert.match(styles, /\.cart-context-warning \{[^}]*border: 2px solid var\(--red\)/);
+});
+
+test("customer refreshes menu and device context after session invalidations and reconnect", () => {
+  assert.match(customerScreen, /resource === "deviceConfig"\) void refreshVisitState\(\)/);
+  assert.match(customerScreen, /onReconnect: refreshVisitState/);
+  assert.match(customerScreen, /orderClient\.getDeviceConfig\(\)/);
+  assert.match(customerScreen, /onCustomerDeviceConfigChange\?\.\(currentConfig\)/);
+  assert.match(customerScreen, /currentConfig\.visitContextId !== pinnedVisitContextId/);
+  assert.match(customerScreen, /setCartContextStale\(true\)/);
+  assert.match(customerScreen, /setMenuRefreshKey\(\(current\) => current \+ 1\)/);
+});
+
+test("revoked customer authorization keeps the cart visible and blocks enqueue until discard", () => {
+  assert.match(customerScreen, /onAuthorizationFailure: blockCartAfterAuthenticationFailure/);
+  assert.match(customerScreen, /currentConfig\?\.status === "unauthorized"/);
+  assert.match(customerScreen, /contextCheck\?\.status === "unauthorized"/);
+  assert.match(customerScreen, /setCartAuthorizationRequired\(true\)/);
+  assert.match(customerScreen, /端末の接続を確認できません。カート内容は保持しています。注文を停止しています。スタッフへ確認してください。/);
+  assert.match(customerScreen, /cartAuthorizationRequired \? "端末の接続を確認できません。カート内容は保持しています。注文は送信されません。スタッフへ確認してください。"/);
+  const submitOrder = customerScreen.slice(customerScreen.indexOf("const submitOrder"), customerScreen.indexOf("const callStaff", customerScreen.indexOf("const submitOrder")));
+  assert.ok(submitOrder.indexOf("blockCartAfterAuthenticationFailure();") < submitOrder.indexOf("orderClient.enqueue"));
+  assert.match(submitOrder, /blockCartAfterAuthenticationFailure\(\);\s*return;/);
+});
+
+test("cart retains display snapshots for unavailable menu items and blocks the complete order", () => {
+  assert.match(customerScreen, /const cartRows = customerCartRows\(cart, menuItems\)/);
+  assert.match(customerScreen, /const hasUnavailableCartRows = cartRows\.some\(\(row\) => row\.unavailable\)/);
+  assert.match(customerScreen, /replaceCart\(addCustomerCartSelection\(cartRef\.current, item, selection, normalizedQuantity\)\)/);
+  assert.match(customerScreen, /現在注文できない商品があります。内容をご確認ください/);
+  assert.match(customerScreen, /if \(!cartRows\.length \|\| hasUnavailableCartRows \|\| cartContextStale \|\| submitLock\.current\) return/);
+  assert.match(customerScreen, /disabled=\{!cartCount \|\| hasUnavailableCartRows \|\| cartContextLoading \|\| cartContextStale\}/);
+  assert.match(customerScreen, /row\.unavailable \? removeCartRow\(row\.key\) : decrementCartRow\(row\.key\)/);
+  assert.match(customerScreen, /items: cartRows\.map\(\(row\) => \(\{[\s\S]*menuItemId: row\.item\.menuItemId \?\? row\.item\.id,[\s\S]*quantity: row\.quantity,[\s\S]*variantId: row\.variant\.variantId/);
+  const enqueueBlockStart = customerScreen.indexOf("const outboxRecord = await orderClient.enqueue");
+  const enqueueBlock = customerScreen.slice(enqueueBlockStart, customerScreen.indexOf("const order = {", enqueueBlockStart));
+  assert.doesNotMatch(enqueueBlock, /displaySnapshot/);
+  assert.match(styles, /\.cart-row--unavailable \{ color: #5a2118; background: #fff0e8; \}/);
 });
 test("A90 landscape keeps product information readable beside a compact cart", () => {
   const a90Styles = styles.slice(styles.indexOf("@media (max-width: 1350px)"), styles.indexOf("@media (orientation: landscape) and (max-height: 700px)"));
