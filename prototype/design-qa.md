@@ -173,3 +173,16 @@ visual result: incomplete — the empty-category fallback was corrected and auto
 - QA DB・bundle・起動資材・登録情報を上記QA資材ディレクトリに保持。追加QA・テスト・build・実装・commit・pushは行っていない。
 
 functional result: passed — user-confirmed empty subcategories are hidden while major categories and the fixed “おかわり！” action remain; exact viewport/DPR screen QA remains incomplete.
+
+## 空session終了UI 利用者手動機能QA 2026-10-07
+
+- 対象: 隔離worktree `codex/empty-session-close-ui`。この記録は利用者による管理画面の手動機能確認であり、画面viewportの受入記録とは分けて扱う。
+- PASS: 「注文のない来店を終了」の確認ダイアログでキャンセルすると、来店と許可商品が残る。
+- PASS: 同じ操作を確認すると終了成功が表示され、open sessionなし・許可商品なしへ画面が更新される。
+- 確認は管理画面の上記2操作のみ。客席登録・注文・会計は操作していない。注文・会計記録は0件の架空QAデータを使用。
+- 指定CSS viewport 1280×800／1637×602、DPR 1、`fullPage=false`の画面QAおよびPNG取得は未実施。この手動機能PASSをviewport／DPRの画面QA PASSとして扱わない。
+- QA runtime停止前にhealth ready、schema v19、DB絶対パスとdatabase identity一致、runtime PID 17472、API listener 43721、Web listener 43722を照合。DB上もopen session 0・許可0、注文0・会計依頼0・会計記録0を確認した。
+- 起動launcher `server/src/run-server.mjs` のSIGINT正常停止経路を、照合済みPID 17472だけに送り停止。停止後にPID終了とAPI／Web両listener消失を確認。使い捨てQA DB・bundle・起動／照合資材は `C:\Users\user\AppData\Local\Temp\warun-empty-session-close-ui-20261007-193536` に保持。
+- 今回はQA記録の追記のみ。追加QA・実装・テスト・build・commit・pushは実施していない。safe-copy・実DB・A90・実注文・会計は操作していない。
+
+functional result: passed — user-confirmed cancellation preserves the open visit and grant; confirmation closes the empty visit, clears the grant, and refreshes management state. Viewport/DPR screen QA remains unverified.

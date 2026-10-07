@@ -799,7 +799,11 @@ test('session limited menu administration separates item mode from current visit
   assert.match(appSource, /来店ごとに許可/);
   assert.match(appSource, /SessionMenuAccessPanel/);
   assert.match(appSource, /来店開始・許可/);
+  assert.match(appSource, /注文のない来店を終了/);
+  assert.match(appSource, /canCloseEmptySession/);
+  assert.match(appSource, /現在の来店・開始/);
   assert.match(appSource, /期待|現在の来店に許可/);
   assert.match(appSource, /expectedMenuItemIds: table\.openSession\.menuItemIds/);
   assert.match(adminApi, /admin\/session-menu-access\/grants/);
+  assert.match(adminApi, /confirmAndCloseAdminEmptySession/);
 });

@@ -35,6 +35,9 @@ export function createSessionMenuAccessRepository({ database, now = Date.now, se
     findTable: database.prepare('SELECT table_id, label, is_active FROM tables WHERE table_id = ?'),
     findTables: database.prepare('SELECT table_id, label, is_active FROM tables ORDER BY table_id'),
     findGrants: database.prepare('SELECT menu_item_id FROM session_menu_item_grants WHERE session_id = ? ORDER BY menu_item_id'),
+    countSessionOrders: database.prepare('SELECT COUNT(*) AS count FROM orders WHERE session_id = ?'),
+    countSessionCheckouts: database.prepare('SELECT COUNT(*) AS count FROM checkout_requests WHERE table_session_id = ?'),
+    countSessionPayments: database.prepare('SELECT COUNT(*) AS count FROM payment_records WHERE table_session_id = ?'),
     insertSession: database.prepare('INSERT INTO table_sessions (session_id, table_id, opened_at_ms, version, created_at_ms, updated_at_ms) VALUES (?, ?, ?, 1, ?, ?)'),
     insertGrant: database.prepare(`INSERT INTO session_menu_item_grants (session_id, menu_item_id, granted_at_ms) VALUES (?, ?, ?) ON CONFLICT(session_id, menu_item_id) DO NOTHING`),
     deleteGrant: database.prepare('DELETE FROM session_menu_item_grants WHERE session_id = ? AND menu_item_id = ?'),
@@ -74,7 +77,15 @@ export function createSessionMenuAccessRepository({ database, now = Date.now, se
       return {
         tableId: table.table_id,
         label: table.label,
-        openSession: open ? { sessionId: open.session_id, openedAtMs: open.opened_at_ms, version: open.version, menuItemIds: statements.findGrants.all(open.session_id).map((row) => row.menu_item_id) } : null,
+        openSession: open ? {
+          sessionId: open.session_id,
+          openedAtMs: open.opened_at_ms,
+          version: open.version,
+          menuItemIds: statements.findGrants.all(open.session_id).map((row) => row.menu_item_id),
+          canCloseEmptySession: Number(statements.countSessionOrders.get(open.session_id).count) === 0
+            && Number(statements.countSessionCheckouts.get(open.session_id).count) === 0
+            && Number(statements.countSessionPayments.get(open.session_id).count) === 0,
+        } : null,
       };
     });
     return { tables };

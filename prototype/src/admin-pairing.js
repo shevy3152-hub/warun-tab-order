@@ -611,3 +611,38 @@ export async function allowAdminSessionMenuItem({ env = globalThis, tableId, men
 export async function revokeAdminSessionMenuItem({ env = globalThis, tableId, menuItemId, expectedSessionId, expectedMenuItemIds = [], fetchImpl = env.fetch } = {}) {
   return mutateAdminSessionMenuAccess({ env, method: 'PUT', body: { tableId, menuItemId, expectedSessionId, expectedMenuItemIds }, fetchImpl });
 }
+
+export async function confirmAndCloseAdminEmptySession({ env = globalThis, tableId, tableLabel, sessionId, actionLock, onConfirmed, fetchImpl = env.fetch } = {}) {
+  if (!Number.isSafeInteger(tableId) || tableId < 1 || typeof sessionId !== 'string' || !sessionId.trim()) {
+    throw new AdminPairingError('対象の来店を確認できません。状態を再読込してください。', { status: 409, code: 'SESSION_MENU_ACCESS_CONFLICT' });
+  }
+  if (!actionLock || typeof actionLock !== 'object' || typeof actionLock.current !== 'boolean') {
+    throw new AdminPairingError('来店終了操作を開始できません。', { status: 503, code: 'API_UNAVAILABLE' });
+  }
+  if (actionLock.current) return { cancelled: true, duplicate: true };
+  if (typeof env?.confirm !== 'function') {
+    throw new AdminPairingError('確認ダイアログを表示できません。', { status: 503, code: 'API_UNAVAILABLE' });
+  }
+  const label = typeof tableLabel === 'string' && tableLabel.trim() ? tableLabel.trim() : `テーブル${tableId}`;
+  if (!env.confirm(`${label}の現在の来店を終了します。\nこの来店の商品許可も解除されます。\n続けますか？`)) return { cancelled: true, duplicate: false };
+  if (actionLock.current) return { cancelled: true, duplicate: true };
+
+  actionLock.current = true;
+  try {
+    onConfirmed?.();
+    const { token, base, fetchImpl: request } = assertAdminTransport({ env, fetchImpl });
+    const response = await request(`${base}/admin/session-menu-access/close-empty-session`, {
+      method: 'POST',
+      headers: { Accept: 'application/json', 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ tableId, sessionId }),
+    });
+    if (!response.ok) await responseError(response, '注文のない来店を終了できません。最新の来店状態を確認してください。', 'SESSION_MENU_ACCESS_REQUEST_FAILED');
+    const result = await response.json();
+    if (result?.tableId !== tableId || result?.sessionId !== sessionId || !Number.isSafeInteger(result?.closedAtMs)) {
+      throw new AdminPairingError('来店終了の応答が不正です。状態を再読込してください。', { status: 503, code: 'API_UNAVAILABLE' });
+    }
+    return { cancelled: false, result };
+  } finally {
+    actionLock.current = false;
+  }
+}

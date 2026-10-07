@@ -738,6 +738,10 @@ export function createOrderRepository({ database, now = Date.now, idFactory = ra
         WHERE session_id = ? AND status IN ('new', 'active')
           AND EXISTS (SELECT 1 FROM order_items WHERE order_items.order_id = orders.order_id AND is_cancelled = 0 AND quantity_reduced < quantity)
       `),
+      countSessionOrders: database.prepare('SELECT COUNT(*) AS count FROM orders WHERE session_id = ?'),
+      countSessionCheckouts: database.prepare('SELECT COUNT(*) AS count FROM checkout_requests WHERE table_session_id = ?'),
+      countSessionPayments: database.prepare('SELECT COUNT(*) AS count FROM payment_records WHERE table_session_id = ?'),
+      findOpenSessionForTable: database.prepare('SELECT session_id FROM table_sessions WHERE table_id = ? AND closed_at_ms IS NULL'),
       deleteSessionMenuGrants: database.prepare('DELETE FROM session_menu_item_grants WHERE session_id = ?'),
       closeSession: database.prepare(`
         UPDATE table_sessions
@@ -1391,7 +1395,7 @@ export function createOrderRepository({ database, now = Date.now, idFactory = ra
     }
   }
 
-  function closeTableSession({ principal, tableId, sessionId } = {}) {
+  function closeSessionTransaction({ principal, tableId, sessionId } = {}, { requireEmpty = false } = {}) {
     if (closed) {
       throw repositoryError(ORDER_ERROR_CODES.DATABASE_FAILURE, 'The order repository is closed.');
     }
@@ -1410,7 +1414,10 @@ export function createOrderRepository({ database, now = Date.now, idFactory = ra
       if (session.table_id !== normalizedTableId) {
         throw repositoryError(ORDER_ERROR_CODES.SESSION_CONFLICT, 'The table session does not belong to this table.');
       }
-      if (session.closed_at_ms !== null) {
+      if (requireEmpty && session.closed_at_ms !== null) {
+        throw repositoryError(ORDER_ERROR_CODES.SESSION_CONFLICT, 'Only the current open empty session can be closed by this operation.');
+      }
+      if (!requireEmpty && session.closed_at_ms !== null) {
         database.exec('COMMIT;');
         transactionOpen = false;
         return {
@@ -1422,12 +1429,22 @@ export function createOrderRepository({ database, now = Date.now, idFactory = ra
         };
       }
 
-      const activeOrderCount = Number(statements.countSessionActiveOrders.get(normalizedSessionId).count);
-      if (activeOrderCount > 0) {
-        throw repositoryError(
-          ORDER_ERROR_CODES.SESSION_HAS_ACTIVE_ORDERS,
-          'The table session still has non-terminal orders.',
-        );
+      if (requireEmpty) {
+        const openSession = statements.findOpenSessionForTable.get(normalizedTableId);
+        const orderCount = Number(statements.countSessionOrders.get(normalizedSessionId).count);
+        const checkoutCount = Number(statements.countSessionCheckouts.get(normalizedSessionId).count);
+        const paymentCount = Number(statements.countSessionPayments.get(normalizedSessionId).count);
+        if (openSession?.session_id !== normalizedSessionId || orderCount > 0 || checkoutCount > 0 || paymentCount > 0) {
+          throw repositoryError(ORDER_ERROR_CODES.SESSION_CONFLICT, 'Only the current open session with no orders or checkout records can be closed by this operation.');
+        }
+      } else {
+        const activeOrderCount = Number(statements.countSessionActiveOrders.get(normalizedSessionId).count);
+        if (activeOrderCount > 0) {
+          throw repositoryError(
+            ORDER_ERROR_CODES.SESSION_HAS_ACTIVE_ORDERS,
+            'The table session still has non-terminal orders.',
+          );
+        }
       }
 
       const closedAtMs = now();
@@ -1491,6 +1508,14 @@ export function createOrderRepository({ database, now = Date.now, idFactory = ra
         { cause: error },
       );
     }
+  }
+
+  function closeTableSession(args = {}) {
+    return closeSessionTransaction(args);
+  }
+
+  function closeEmptyTableSession(args = {}) {
+    return closeSessionTransaction(args, { requireEmpty: true });
   }
 
   function markItemServed({ principal, orderId, orderItemId } = {}) {
@@ -1890,6 +1915,7 @@ export function createOrderRepository({ database, now = Date.now, idFactory = ra
     getCustomerHistory,
     getHistory,
     closeTableSession,
+    closeEmptyTableSession,
     markItemServed,
     cancelOrderItem,
     restoreOrderItemCancellation,

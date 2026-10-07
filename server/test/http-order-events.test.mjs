@@ -282,6 +282,16 @@ function closeSession(port, token, body) {
   });
 }
 
+function closeEmptySession(port, token, body) {
+  return request({
+    port,
+    path: '/v1/admin/session-menu-access/close-empty-session',
+    method: 'POST',
+    headers: { ...bearer(token), ...JSON_HEADERS },
+    body: JSON.stringify(body),
+  });
+}
+
 function changeOrderItemCancellation(port, token, operation, body) {
   return request({
     port,
@@ -868,6 +878,36 @@ test('session close rejects a session belonging to another table without changin
     const historyB = await request({ port, path: '/v1/customer/order-history', headers: bearer(CUSTOMER_B_TOKEN) });
     assert.deepEqual(historyA.json.orders.map((order) => order.clientOrderId), [uuid(1_105)]);
     assert.deepEqual(historyB.json.orders.map((order) => order.clientOrderId), [uuid(1_106)]);
+  });
+});
+
+test('empty-session close and a concurrent first order cannot both succeed', async () => {
+  await withFixture(async ({ port, database }) => {
+    const sessionId = uuid(1_180);
+    const openedAtMs = 1_800_000_000_000;
+    database.prepare('INSERT INTO table_sessions (session_id, table_id, opened_at_ms, version, created_at_ms, updated_at_ms) VALUES (?, 1, ?, 1, ?, ?)').run(sessionId, openedAtMs, openedAtMs, openedAtMs);
+
+    const [closed, ordered] = await Promise.all([
+      closeEmptySession(port, ADMIN_TOKEN, { tableId: 1, sessionId }),
+      postOrder(port, CUSTOMER_A_TOKEN, orderBody(uuid(1_181))),
+    ]);
+    assert.ok([200, 409].includes(closed.statusCode), JSON.stringify(closed.json));
+    assert.ok([201, 409].includes(ordered.statusCode), JSON.stringify(ordered.json));
+    assert.notEqual(closed.statusCode === 200 && ordered.statusCode === 201, true, 'close and order must not both be accepted');
+
+    const session = database.prepare('SELECT closed_at_ms FROM table_sessions WHERE session_id = ?').get(sessionId);
+    const orderCount = database.prepare('SELECT COUNT(*) AS count FROM orders WHERE session_id = ?').get(sessionId).count;
+    if (closed.statusCode === 200) {
+      assert.equal(ordered.statusCode, 409);
+      assert.notEqual(session.closed_at_ms, null);
+      assert.equal(orderCount, 0);
+      assert.equal(closed.json.sessionId, sessionId);
+    } else {
+      assert.equal(closed.statusCode, 409);
+      assert.equal(ordered.statusCode, 201);
+      assert.equal(session.closed_at_ms, null);
+      assert.equal(orderCount, 1);
+    }
   });
 });
 

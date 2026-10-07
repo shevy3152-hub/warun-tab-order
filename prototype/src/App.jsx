@@ -26,7 +26,7 @@ import * as React from "react";
 import { createClientOrderId, createCustomerOrderClient, CustomerCheckoutError, resolveOrderApiConfig } from "./order-outbox.js";
 import { claimCustomerDevice, createIndexedDbCredentialStore, loadOrCreateCustomerDevice, pairingClaimErrorMessage, runtimeForCustomerCredentials } from "./device-credentials.js";
 import { customerOrderErrorCategory, customerOrderNoticeFromOutboxEvent } from "./customer-order-notice.js";
-import { AdminPairingError, configuredAdminToken, createAdminRideGuidanceContact, deleteAdminRideGuidanceContact, fetchAdminBusinessHours, fetchAdminCheckoutRequests, fetchAdminCustomerThemeConfig, fetchAdminDiagnostics, fetchAdminMenu, fetchAdminSessionMenuAccess, allowAdminSessionMenuItem, revokeAdminSessionMenuItem, fetchAdminOrderHistory, fetchAdminPaymentHistory, fetchAdminPairingPreflight, fetchAdminRideGuidance, issueCustomerPairingCode, revokeAdminDevice, saveAdminBusinessHours, saveAdminCustomerThemeConfig, saveAdminImageLayouts, saveAdminCategory, saveAdminMenuItem, saveAdminMenuOrdering, saveAdminRideGuidanceOrdering, saveAdminRideGuidancePickup, updateAdminRideGuidanceContact, voidAdminPayment } from "./admin-pairing.js";
+import { AdminPairingError, configuredAdminToken, createAdminRideGuidanceContact, deleteAdminRideGuidanceContact, fetchAdminBusinessHours, fetchAdminCheckoutRequests, fetchAdminCustomerThemeConfig, fetchAdminDiagnostics, fetchAdminMenu, fetchAdminSessionMenuAccess, allowAdminSessionMenuItem, confirmAndCloseAdminEmptySession, revokeAdminSessionMenuItem, fetchAdminOrderHistory, fetchAdminPaymentHistory, fetchAdminPairingPreflight, fetchAdminRideGuidance, issueCustomerPairingCode, revokeAdminDevice, saveAdminBusinessHours, saveAdminCustomerThemeConfig, saveAdminImageLayouts, saveAdminCategory, saveAdminMenuItem, saveAdminMenuOrdering, saveAdminRideGuidanceOrdering, saveAdminRideGuidancePickup, updateAdminRideGuidanceContact, voidAdminPayment } from "./admin-pairing.js";
 import { adjustKitchenItemUnitPrice, adjustKitchenOrderItemQuantity as adjustKitchenItemQuantityRequest, cancelKitchenCheckout, cancelKitchenOrderItem, closeKitchenTableSession, createKitchenOrder, fetchKitchenCheckoutRequests, fetchKitchenOrderHistory, fetchKitchenPaymentHistory, fetchKitchenSnapshot, kitchenAdditionRequestItem, kitchenApiConfigured, KitchenApiError, markKitchenItemServed, payKitchenCheckout, readyKitchenCheckout, restoreKitchenOrderItem, saveKitchenCheckoutAdjustments, subscribeKitchenInvalidations, voidKitchenPayment } from "./kitchen-api.js";
 import { buildKitchenTableGroups } from "./kitchen-order-board.js";
 import { bootstrapCustomerOrderClient } from "./customer-bootstrap.js";
@@ -2834,6 +2834,7 @@ function SessionMenuAccessPanel({ adminApiMode, menuItems }) {
   const [data, setData] = useState({ loading: Boolean(adminApiMode), saving: false, error: "", message: "", tables: [] });
   const [tableId, setTableId] = useState("");
   const [menuItemId, setMenuItemId] = useState("");
+  const actionLockRef = useRef(false);
   const load = async () => {
     if (!adminApiMode) return;
     setData((current) => ({ ...current, loading: true, error: "" }));
@@ -2852,7 +2853,8 @@ function SessionMenuAccessPanel({ adminApiMode, menuItems }) {
   const availableItems = restrictedItems.filter((item) => !grantedIds.has(item.id));
   useEffect(() => { if (availableItems.length && !availableItems.some((item) => item.id === menuItemId)) setMenuItemId(availableItems[0].id); }, [tableId, menuItems, data.tables]);
   const mutate = async (action, itemId) => {
-    if (!table || data.saving) return;
+    if (!table || data.saving || actionLockRef.current) return;
+    actionLockRef.current = true;
     setData((current) => ({ ...current, saving: true, error: "", message: "" }));
     try {
       if (action === "grant") await allowAdminSessionMenuItem({ env: window, tableId: table.tableId, menuItemId: itemId, expectedSessionId: table.openSession?.sessionId ?? null, expectedMenuItemIds: table.openSession?.menuItemIds ?? [], startIfMissing: !table.openSession });
@@ -2863,6 +2865,38 @@ function SessionMenuAccessPanel({ adminApiMode, menuItems }) {
       const message = error?.status === 409 ? "来店状態が更新されています。最新状態を読み直してください。" : error?.status === 401 ? "401：管理者tokenを確認してください。" : "変更を保存できませんでした。";
       setData((current) => ({ ...current, saving: false, error: message }));
       if (error?.status === 409) await load();
+    } finally {
+      actionLockRef.current = false;
+    }
+  };
+  const closeEmptySession = async () => {
+    const selectedTable = table;
+    const session = selectedTable?.openSession;
+    if (!adminApiMode || !selectedTable || !session?.canCloseEmptySession || data.saving || actionLockRef.current) return;
+    try {
+      const outcome = await confirmAndCloseAdminEmptySession({
+        env: window,
+        tableId: selectedTable.tableId,
+        tableLabel: selectedTable.label,
+        sessionId: session.sessionId,
+        actionLock: actionLockRef,
+        onConfirmed: () => setData((current) => ({ ...current, saving: true, error: "", message: "" })),
+      });
+      if (outcome.cancelled) return;
+      const refreshed = await fetchAdminSessionMenuAccess({ env: window });
+      setData((current) => ({ ...current, loading: false, saving: false, tables: refreshed.tables, error: "", message: `${selectedTable.label}の注文のない来店を終了し、来店許可を解除しました。` }));
+    } catch (error) {
+      const message = error?.status === 409
+        ? "来店状態が変わったか、注文または会計記録があるため終了できません。最新状態を再読込してください。"
+        : error?.status === 401
+          ? "401：管理者tokenを確認してください。"
+          : "注文のない来店を終了できませんでした。状態を再読込してください。";
+      try {
+        const refreshed = await fetchAdminSessionMenuAccess({ env: window });
+        setData((current) => ({ ...current, loading: false, saving: false, tables: refreshed.tables, error: message }));
+      } catch {
+        setData((current) => ({ ...current, loading: false, saving: false, error: message }));
+      }
     }
   };
   return <section className="session-menu-access" aria-label="来店限定商品の許可管理">
@@ -2873,7 +2907,7 @@ function SessionMenuAccessPanel({ adminApiMode, menuItems }) {
     {data.message ? <p className="session-menu-access__message" role="status">{data.message}</p> : null}
     {adminApiMode && !data.loading ? <>
       <div className="session-menu-access__controls"><label>テーブル<select value={tableId} onChange={(event) => setTableId(event.target.value)}>{data.tables.map((entry) => <option key={entry.tableId} value={entry.tableId}>{entry.label}</option>)}</select></label><label>来店限定商品<select value={menuItemId} onChange={(event) => setMenuItemId(event.target.value)} disabled={!availableItems.length}>{availableItems.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><button type="button" className="button button--primary" disabled={!table || !menuItemId || data.saving || !restrictedItems.length} onClick={() => void mutate("grant", menuItemId)}>{data.saving ? "保存中" : table?.openSession ? "現在の来店に許可" : "来店開始・許可"}</button></div>
-      {table ? <div className="session-menu-access__status"><b>テーブル {table.tableId}</b>{table.openSession ? <span>来店中・開始 {formatDateTime(table.openSession.openedAtMs)}</span> : <span>open sessionなし。許可操作で来店を開始します。</span>}</div> : <p>テーブルがありません。</p>}
+      {table ? <div className="session-menu-access__status"><b>テーブル {table.tableId}・{table.label}</b>{table.openSession ? <span>現在の来店・開始 {formatDateTime(table.openSession.openedAtMs)}</span> : <span>open sessionなし。許可操作で来店を開始します。</span>}{table.openSession?.canCloseEmptySession ? <button type="button" className="button button--danger" disabled={data.saving} onClick={() => void closeEmptySession()}>{data.saving ? "終了中…" : "注文のない来店を終了"}</button> : null}</div> : <p>テーブルがありません。</p>}
       <h3>現在許可されている商品</h3>
       {table?.openSession && table.openSession.menuItemIds.length ? <ul>{table.openSession.menuItemIds.map((id) => { const item = menuItems.find((entry) => entry.id === id); return <li key={id}><span>{item?.name ?? "登録商品"}</span><button type="button" className="button button--quiet" disabled={data.saving} onClick={() => void mutate("revoke", id)}>許可を解除</button></li>; })}</ul> : <p className="session-menu-access__empty">この来店で許可された商品はありません。</p>}
       {!restrictedItems.length ? <p className="session-menu-access__empty">商品編集で「来店ごとに許可」にした商品がありません。</p> : null}

@@ -120,6 +120,7 @@ const ROUTE_METHODS = new Map([
   ['/v1/admin/devices/revoke', 'POST'],
   ['/v1/admin/session-menu-access', 'GET'],
   ['/v1/admin/session-menu-access/grants', new Set(['POST', 'PUT'])],
+  ['/v1/admin/session-menu-access/close-empty-session', 'POST'],
   ['/v1/admin/catalog/menu-item', 'PUT'],
   ['/v1/admin/catalog/menu-item/image-layouts', 'PUT'],
   ['/v1/admin/catalog/category', 'PUT'],
@@ -1369,6 +1370,25 @@ function createConfiguredHttpServer({
         const orders = requireService(orderRepository, 'closeTableSession');
         const body = await readJsonBody(request);
         const result = orders.closeTableSession({
+          principal,
+          tableId: body?.tableId,
+          sessionId: body?.sessionId,
+        });
+        await notifyCommittedSafely(sseHub, result);
+        if (response.destroyed) return;
+        writeJsonResponse(response, {
+          statusCode: 200,
+          body: mapTableSessionCloseResponse(result),
+          requestId,
+        });
+        return;
+      }
+
+      if (target.path === '/v1/admin/session-menu-access/close-empty-session') {
+        authorizeDeviceRole(principal, ['admin']);
+        const body = await readJsonBody(request);
+        const orders = requireService(orderRepository, 'closeEmptyTableSession');
+        const result = orders.closeEmptyTableSession({
           principal,
           tableId: body?.tableId,
           sessionId: body?.sessionId,

@@ -106,6 +106,15 @@ function modeWrite() {
 const accessPath = '/v1/admin/session-menu-access';
 const grantsPath = `${accessPath}/grants`;
 const menuPath = '/v1/menu';
+const emptyClosePath = `${accessPath}/close-empty-session`;
+
+async function startVisit({ port, tableId = 1 }) {
+  const mode = await request({ port, token: ADMIN_TOKEN, method: 'PUT', path: '/v1/admin/catalog/menu-item', body: modeWrite() });
+  assert.equal(mode.statusCode, 200, JSON.stringify(mode.json));
+  const started = await request({ port, token: ADMIN_TOKEN, method: 'POST', path: grantsPath, body: { tableId, menuItemId: 'secret-snack', expectedSessionId: null, expectedMenuItemIds: [], startIfMissing: true } });
+  assert.equal(started.statusCode, 200, JSON.stringify(started.json));
+  return started.json.sessionId;
+}
 
 test('session menu grant API is admin-only, optimistic, scoped to one open visit, and opaque to other customers', async () => {
   await withFixture(async ({ database, port, authenticator, events, catalog }) => {
@@ -184,5 +193,92 @@ test('session menu grant API is admin-only, optimistic, scoped to one open visit
     const afterClose = await request({ port, token: ADMIN_TOKEN, method: 'POST', path: grantsPath, body: { tableId: 1, menuItemId: 'secret-snack', expectedSessionId: sessionId, expectedMenuItemIds: ['secret-snack'], startIfMissing: false } });
     assert.equal(afterClose.statusCode, 409);
     assert.equal((await request({ port, token: CUSTOMER_ONE_TOKEN, path: menuPath })).json.items.some((item) => item.menuItemId === 'secret-snack'), false);
+  });
+});
+
+test('admin closes only the current empty visit, removes its grants, and preserves table policy and device credentials', async () => {
+  await withFixture(async ({ database, port }) => {
+    assert.equal((await request({ port, method: 'POST', path: emptyClosePath, body: { tableId: 1, sessionId: uuid(7777) } })).statusCode, 401);
+    assert.equal((await request({ port, token: CUSTOMER_ONE_TOKEN, method: 'POST', path: emptyClosePath, body: { tableId: 1, sessionId: uuid(7777) } })).statusCode, 403);
+
+    const sessionId = await startVisit({ port });
+    assert.equal(sessionId, uuid(7777));
+    const before = await request({ port, token: ADMIN_TOKEN, path: accessPath });
+    assert.equal(before.json.tables[0].openSession.canCloseEmptySession, true);
+    database.prepare("UPDATE menu_items SET table_visibility_mode = 'selected_tables' WHERE menu_item_id = 'normal-snack'").run();
+    database.prepare('INSERT INTO menu_item_table_visibility (menu_item_id, table_id) VALUES (?, ?)').run('normal-snack', 2);
+    const devicesBefore = database.prepare('SELECT device_id, role, token_hash, status, app_version FROM devices ORDER BY device_id').all();
+    const assignmentBefore = database.prepare('SELECT table_id, assigned_customer_device_id, version FROM tables ORDER BY table_id').all();
+
+    const closed = await request({ port, token: ADMIN_TOKEN, method: 'POST', path: emptyClosePath, body: { tableId: 1, sessionId } });
+    assert.equal(closed.statusCode, 200, JSON.stringify(closed.json));
+    assert.equal(closed.json.idempotencyResult, 'created');
+    assert.equal(database.prepare('SELECT closed_at_ms FROM table_sessions WHERE session_id = ?').get(sessionId).closed_at_ms, closed.json.closedAtMs);
+    assert.equal(database.prepare('SELECT COUNT(*) AS count FROM session_menu_item_grants WHERE session_id = ?').get(sessionId).count, 0);
+    assert.deepEqual(database.prepare('SELECT menu_item_id, table_id FROM menu_item_table_visibility ORDER BY menu_item_id, table_id').all().map((row) => ({ ...row })), [{ menu_item_id: 'normal-snack', table_id: 2 }]);
+    assert.equal(database.prepare("SELECT table_visibility_mode FROM menu_items WHERE menu_item_id = 'normal-snack'").get().table_visibility_mode, 'selected_tables');
+    assert.deepEqual(database.prepare('SELECT device_id, role, token_hash, status, app_version FROM devices ORDER BY device_id').all(), devicesBefore);
+    assert.deepEqual(database.prepare('SELECT table_id, assigned_customer_device_id, version FROM tables ORDER BY table_id').all(), assignmentBefore);
+    const event = database.prepare("SELECT event_type, aggregate_type, aggregate_id, payload_json FROM event_log ORDER BY event_id DESC LIMIT 1").get();
+    assert.equal(event.event_type, 'table.assignment_updated');
+    assert.equal(event.aggregate_type, 'table');
+    assert.equal(event.aggregate_id, '1');
+    assert.deepEqual(JSON.parse(event.payload_json), { tableId: 1, sessionId, closedAtMs: closed.json.closedAtMs });
+    assert.equal((await request({ port, token: ADMIN_TOKEN, path: accessPath })).json.tables[0].openSession, null);
+  });
+});
+
+test('empty-session close rejects terminal orders and leaves the session and grants untouched', async () => {
+  await withFixture(async ({ database, port }) => {
+    const sessionId = await startVisit({ port });
+    const orderId = uuid(7101);
+    database.prepare(`
+      INSERT INTO orders (order_id, client_order_id, request_fingerprint, canonical_request_json, customer_device_id, table_id, session_id, table_number_snapshot, status, total_amount_yen, accepted_at_ms, completed_at_ms, version)
+      VALUES (?, ?, ?, '{}', ?, 1, ?, 1, 'completed', 500, 1800000100001, 1800000100002, 1)
+    `).run(orderId, uuid(7102), 'a'.repeat(64), CUSTOMER_ONE_ID, sessionId);
+
+    const blocked = await request({ port, token: ADMIN_TOKEN, method: 'POST', path: emptyClosePath, body: { tableId: 1, sessionId } });
+    assert.equal(blocked.statusCode, 409, JSON.stringify(blocked.json));
+    assert.equal(blocked.json.error.code, 'SESSION_CONFLICT');
+    assert.equal(database.prepare('SELECT closed_at_ms FROM table_sessions WHERE session_id = ?').get(sessionId).closed_at_ms, null);
+    assert.equal(database.prepare('SELECT COUNT(*) AS count FROM session_menu_item_grants WHERE session_id = ?').get(sessionId).count, 1);
+    assert.equal((await request({ port, token: ADMIN_TOKEN, path: accessPath })).json.tables[0].openSession.canCloseEmptySession, false);
+  });
+});
+
+test('empty-session close rejects retained checkout and payment records even after checkout cancellation', async () => {
+  await withFixture(async ({ database, port }) => {
+    const sessionId = await startVisit({ port });
+    const checkoutId = uuid(7201);
+    const paidAt = 1_800_000_100_010;
+    database.prepare(`INSERT INTO checkout_requests (checkout_request_id, table_session_id, status, receipt_requested, ordered_items_total_yen, adjustments_total_yen, grand_total_yen, version, requested_at_ms, ready_at_ms, updated_at_ms) VALUES (?, ?, 'cancelled', 0, 0, 0, NULL, 1, ?, NULL, ?)`).run(checkoutId, sessionId, paidAt, paidAt);
+    database.prepare(`INSERT INTO payment_records (payment_record_id, checkout_request_id, table_session_id, table_id, payment_method, confirmed_total_yen, paid_at_ms, status, voided_at_ms, void_reason, version, created_at_ms, updated_at_ms) VALUES (?, ?, ?, 1, 'cash', 0, ?, 'voided', ?, '架空QA記録', 1, ?, ?)`).run(uuid(7202), checkoutId, sessionId, paidAt, paidAt + 1, paidAt, paidAt + 1);
+
+    const blocked = await request({ port, token: ADMIN_TOKEN, method: 'POST', path: emptyClosePath, body: { tableId: 1, sessionId } });
+    assert.equal(blocked.statusCode, 409, JSON.stringify(blocked.json));
+    assert.equal(blocked.json.error.code, 'SESSION_CONFLICT');
+    assert.equal(database.prepare('SELECT closed_at_ms FROM table_sessions WHERE session_id = ?').get(sessionId).closed_at_ms, null);
+    assert.equal(database.prepare('SELECT COUNT(*) AS count FROM session_menu_item_grants WHERE session_id = ?').get(sessionId).count, 1);
+    assert.equal(database.prepare('SELECT COUNT(*) AS count FROM checkout_requests WHERE table_session_id = ?').get(sessionId).count, 1);
+    assert.equal(database.prepare('SELECT COUNT(*) AS count FROM payment_records WHERE table_session_id = ?').get(sessionId).count, 1);
+    assert.equal((await request({ port, token: ADMIN_TOKEN, path: accessPath })).json.tables[0].openSession.canCloseEmptySession, false);
+  });
+});
+
+test('empty-session close rejects closed and replaced session ids without closing the new visit', async () => {
+  await withFixture(async ({ database, port }) => {
+    const oldSessionId = await startVisit({ port });
+    const oldClosed = await request({ port, token: ADMIN_TOKEN, method: 'POST', path: '/v1/tables/sessions/close', body: { tableId: 1, sessionId: oldSessionId } });
+    assert.equal(oldClosed.statusCode, 200);
+    const newSessionId = uuid(7778);
+    const openedAt = oldClosed.json.closedAtMs + 1;
+    database.prepare('INSERT INTO table_sessions (session_id, table_id, opened_at_ms, version, created_at_ms, updated_at_ms) VALUES (?, 1, ?, 1, ?, ?)').run(newSessionId, openedAt, openedAt, openedAt);
+
+    const stale = await request({ port, token: ADMIN_TOKEN, method: 'POST', path: emptyClosePath, body: { tableId: 1, sessionId: oldSessionId } });
+    assert.equal(stale.statusCode, 409);
+    assert.equal(stale.json.error.code, 'SESSION_CONFLICT');
+    assert.equal(database.prepare('SELECT closed_at_ms FROM table_sessions WHERE session_id = ?').get(oldSessionId).closed_at_ms, oldClosed.json.closedAtMs);
+    assert.equal(database.prepare('SELECT closed_at_ms FROM table_sessions WHERE session_id = ?').get(newSessionId).closed_at_ms, null);
+    assert.equal((await request({ port, token: ADMIN_TOKEN, path: accessPath })).json.tables[0].openSession.sessionId, newSessionId);
   });
 });

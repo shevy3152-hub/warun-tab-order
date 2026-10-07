@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { createAdminRideGuidanceContact, deleteAdminRideGuidanceContact, fetchAdminCheckoutRequests, fetchAdminCustomerTheme, fetchAdminCustomerThemeConfig, fetchAdminRideGuidance, saveAdminCustomerTheme, saveAdminCustomerThemeConfig, saveAdminRideGuidanceOrdering, saveAdminRideGuidancePickup, updateAdminRideGuidanceContact, fetchAdminBusinessHours, saveAdminBusinessHours, saveAdminCategory, saveAdminMenuItem, saveAdminMenuOrdering, fetchAdminSessionMenuAccess, allowAdminSessionMenuItem, revokeAdminSessionMenuItem } from '../src/admin-pairing.js';
+import { confirmAndCloseAdminEmptySession, createAdminRideGuidanceContact, deleteAdminRideGuidanceContact, fetchAdminCheckoutRequests, fetchAdminCustomerTheme, fetchAdminCustomerThemeConfig, fetchAdminRideGuidance, saveAdminCustomerTheme, saveAdminCustomerThemeConfig, saveAdminRideGuidanceOrdering, saveAdminRideGuidancePickup, updateAdminRideGuidanceContact, fetchAdminBusinessHours, saveAdminBusinessHours, saveAdminCategory, saveAdminMenuItem, saveAdminMenuOrdering, fetchAdminSessionMenuAccess, allowAdminSessionMenuItem, revokeAdminSessionMenuItem } from '../src/admin-pairing.js';
 
 const env = {
   WARUN_ADMIN_API_TOKEN: 'admin-token-for-test',
@@ -271,4 +271,53 @@ test('admin visit grant clients use the authenticated admin API and carry a stal
   } });
   assert.equal(captured.options.method, 'PUT');
   assert.deepEqual(JSON.parse(captured.options.body).expectedMenuItemIds, ['regulars']);
+});
+
+test('empty visit close cancellation does not mutate and confirmation names the table and grant revocation', async () => {
+  const lock = { current: false };
+  let requestCount = 0;
+  let started = 0;
+  let confirmationMessage = '';
+  const outcome = await confirmAndCloseAdminEmptySession({
+    env: { ...env, confirm: (message) => { confirmationMessage = message; return false; } },
+    tableId: 2,
+    tableLabel: '個室2',
+    sessionId: '00000000-0000-4000-8000-000000000009',
+    actionLock: lock,
+    onConfirmed: () => { started += 1; },
+    fetchImpl: async () => { requestCount += 1; throw new Error('must not request when cancelled'); },
+  });
+  assert.deepEqual(outcome, { cancelled: true, duplicate: false });
+  assert.match(confirmationMessage, /個室2/);
+  assert.match(confirmationMessage, /この来店の商品許可も解除されます/);
+  assert.equal(requestCount, 0);
+  assert.equal(started, 0);
+  assert.equal(lock.current, false);
+});
+
+test('empty visit close serializes duplicate confirmation attempts and posts the selected current session', async () => {
+  const lock = { current: false };
+  const sessionId = '00000000-0000-4000-8000-000000000009';
+  let resolveRequest;
+  let captured;
+  let started = 0;
+  const first = confirmAndCloseAdminEmptySession({
+    env: { ...env, confirm: () => true }, tableId: 2, tableLabel: '個室2', sessionId, actionLock: lock,
+    onConfirmed: () => { started += 1; },
+    fetchImpl: (url, options) => { captured = { url, options }; return new Promise((resolve) => { resolveRequest = resolve; }); },
+  });
+  const duplicate = await confirmAndCloseAdminEmptySession({
+    env: { ...env, confirm: () => { throw new Error('duplicate action must not prompt again'); } },
+    tableId: 2, tableLabel: '個室2', sessionId, actionLock: lock, fetchImpl: async () => { throw new Error('duplicate request'); },
+  });
+  assert.deepEqual(duplicate, { cancelled: true, duplicate: true });
+  assert.equal(lock.current, true);
+  assert.equal(started, 1);
+  assert.equal(captured.url, `${env.WARUN_API_BASE}/admin/session-menu-access/close-empty-session`);
+  assert.equal(captured.options.method, 'POST');
+  assert.equal(captured.options.headers.Authorization, 'Bearer admin-token-for-test');
+  assert.deepEqual(JSON.parse(captured.options.body), { tableId: 2, sessionId });
+  resolveRequest({ ok: true, json: async () => ({ tableId: 2, sessionId, closedAtMs: 123 }) });
+  assert.deepEqual(await first, { cancelled: false, result: { tableId: 2, sessionId, closedAtMs: 123 } });
+  assert.equal(lock.current, false);
 });
