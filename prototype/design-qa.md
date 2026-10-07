@@ -162,3 +162,14 @@ functional result: passed — user-confirmed table visibility modes, cart blocki
 - 画面QA用の新規使い捨てruntimeはhealth/db ready、schema v19、environment `table-menu-qa`、database target `other`。DB: `C:\Users\user\AppData\Local\Temp\warun-table-menu-visibility-screen-20261006-16a81a048e8a4f2882ffb4470ea5dd8a\database\qa.sqlite3`。runtime PID 8956、API listener 52537、Web listener 52538はいずれも同一PIDとして照合した。照合後に起動wrapperのCtrl+C／SIGINT経路で今回のQAだけへ停止を送り、対象PIDの終了および両listener消失を確認した。停止後の終了コード表示は取得できなかった。QA DB・bundle・起動資材・登録リンクは保持。
 
 visual result: incomplete — the empty-category fallback was corrected and automated checks passed, but neither exact viewport/DPR screen QA nor PNG capture was completed.
+
+## 空カテゴリ修正後の利用者手動確認 2026-10-07
+
+- 対象: `codex/table-menu-visibility`、HEAD `be43b5adae145190f33bc53d569ffc63583bce22`。下記は利用者による手動機能確認の報告。
+- PASS: 「飲み物・お食事」の空の下位カテゴリは表示されない。
+- PASS: 大分類と固定操作「おかわり！」は維持される。
+- このPASSは上記2点の利用者手動確認のみ。指定CSS viewport 1280×800／1637×602、DPR 1、`fullPage=false`の画面QAおよびPNG取得は未実施のまま。利用可能なComputer Useのブラウザー画面ではviewport／DPRを指定できず、今回も画面QAは行っていない。
+- 終了したQA runtime: schema v19、環境 `table-menu-qa`、DB target `other`。DB `C:\Users\user\AppData\Local\Temp\warun-table-menu-visibility-empty-category-20261007-a02\database\qa.sqlite3`、PID 12292、API listener 57355、Web listener 57356。起動launcher端末へCtrl+C（SIGINT）を送り、停止後にPID終了と両listener消失を確認した。launcherの停止完了markerは出力されなかったが、`run-server.mjs`のSIGINT処理はWeb/APIをcloseする実装であり、両listenerの終了を確認済み。
+- QA DB・bundle・起動資材・登録情報を上記QA資材ディレクトリに保持。追加QA・テスト・build・実装・commit・pushは行っていない。
+
+functional result: passed — user-confirmed empty subcategories are hidden while major categories and the fixed “おかわり！” action remain; exact viewport/DPR screen QA remains incomplete.
