@@ -186,3 +186,12 @@ functional result: passed — user-confirmed empty subcategories are hidden whil
 - 今回はQA記録の追記のみ。追加QA・実装・テスト・build・commit・pushは実施していない。safe-copy・実DB・A90・実注文・会計は操作していない。
 
 functional result: passed — user-confirmed cancellation preserves the open visit and grant; confirmation closes the empty visit, clears the grant, and refreshes management state. Viewport/DPR screen QA remains unverified.
+
+## 別テーブル再割当QAの受付照合・未検証記録 2026-10-07
+
+- 利用者報告: 客席端末のテーブル1への登録は成功。
+- QA DBの読み取り確認: 注文1件が2026-10-07 20:53:21 JSTに受付済み。テーブル1、`new`、注文明細1行・数量1点で、open sessionに紐づく。
+- 利用者が送信待ちを保存した20:50〜20:51頃より受付時刻は後。保持ログ（runtime stdout/stderr）に`POST /v1/orders`の記録はなく、この注文が送信待ち操作と同一かは確認できない。今回の操作による受付かどうかは未確定。
+- この記録では接続解除・再登録・コード発行を行っていない。未受付outboxが別テーブルへの再割当・再登録後に転送されないこと、元の内容とcontextを保ってスタッフ確認状態になることは未検証。今回をPASS扱いせず、過去の手動PASS記録は変更しない。
+- QA資材: `C:\Users\user\AppData\Local\Temp\warun-table-reassign-qa-20261007-200411`。使い捨てDB、bundle、登録情報、起動資材は保持。
+- 終了処理: health ready／schema v19、上記QA DB絶対パスとruntime PID 7828を再照合し、API 43861・Web 43862のlistener所有PIDも7828で一致。起動した`server/src/run-server.mjs`だけへ通常SIGINTを送り、PID終了と両listener消失を確認した。QA DB・bundle・登録情報・起動資材は保持。
