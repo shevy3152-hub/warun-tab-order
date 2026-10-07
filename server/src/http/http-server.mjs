@@ -15,6 +15,7 @@ import {
   CUSTOMER_THEME_ERROR_CODES,
   isCustomerThemeRepositoryError,
 } from '../customer-theme/customer-theme-errors.mjs';
+import { CUSTOMER_ORDER_NOTICE_ERROR_CODES, isCustomerOrderNoticeRepositoryError } from '../customer-order-notice-errors.mjs';
 import {
   RIDE_GUIDANCE_ERROR_CODES,
   isRideGuidanceRepositoryError,
@@ -58,6 +59,7 @@ import {
   mapBusinessHoursResponse,
   mapCustomerThemeResponse,
   mapCustomerThemeConfigResponse,
+  mapCustomerOrderStartNoticeResponse,
   mapRideGuidanceResponse,
   mapRideGuidanceWriteResponse,
   mapCategoryWriteResponse,
@@ -90,6 +92,7 @@ const ROUTE_METHODS = new Map([
   ['/v1/business-hours', 'GET'],
   ['/v1/customer/theme', 'GET'],
   ['/v1/customer/theme-config', 'GET'],
+  ['/v1/customer/order-start-notice', 'GET'],
   ['/v1/ride-guidance', 'GET'],
   ['/v1/device/config', 'GET'],
   ['/v1/menu', 'GET'],
@@ -128,6 +131,7 @@ const ROUTE_METHODS = new Map([
   ['/v1/admin/business-hours', new Set(['GET', 'PUT'])],
   ['/v1/admin/customer-theme', new Set(['GET', 'PUT'])],
   ['/v1/admin/customer-theme-config', new Set(['GET', 'PUT'])],
+  ['/v1/admin/customer-order-start-notice', new Set(['GET', 'PUT'])],
   ['/v1/admin/ride-guidance', 'GET'],
   ['/v1/admin/ride-guidance/pickup', 'PUT'],
   ['/v1/admin/ride-guidance/contacts', 'POST'],
@@ -605,6 +609,13 @@ function mapApplicationError(error) {
     return createHttpError(HTTP_ERROR_CODES.INTERNAL_ERROR);
   }
 
+  if (isCustomerOrderNoticeRepositoryError(error)) {
+    if (error.code === CUSTOMER_ORDER_NOTICE_ERROR_CODES.INVALID_WRITE_REQUEST) return createHttpError(HTTP_ERROR_CODES.BAD_REQUEST);
+    if (error.code === CUSTOMER_ORDER_NOTICE_ERROR_CODES.VERSION_CONFLICT) return createHttpError(HTTP_ERROR_CODES.CUSTOMER_ORDER_NOTICE_CONFLICT);
+    if (error.code === CUSTOMER_ORDER_NOTICE_ERROR_CODES.DATABASE_FAILURE && hasBusyCause(error)) return createHttpError(HTTP_ERROR_CODES.SERVICE_UNAVAILABLE);
+    return createHttpError(HTTP_ERROR_CODES.INTERNAL_ERROR);
+  }
+
   if (isRideGuidanceRepositoryError(error)) {
     if (error.code === RIDE_GUIDANCE_ERROR_CODES.INVALID_WRITE_REQUEST) return createHttpError(HTTP_ERROR_CODES.BAD_REQUEST);
     if (error.code === RIDE_GUIDANCE_ERROR_CODES.VERSION_CONFLICT) return createHttpError(HTTP_ERROR_CODES.RIDE_GUIDANCE_CONFLICT);
@@ -809,6 +820,16 @@ async function notifyCommittedSafely(sseHub, result) {
   }
 }
 
+async function notifyTransientSafely(sseHub, result) {
+  const notification = result?.sseNotification;
+  if (!notification || !sseHub || typeof sseHub.notifyTransient !== 'function') return;
+  try {
+    await Promise.resolve(sseHub.notifyTransient(notification));
+  } catch {
+    // The saved settings are authoritative; clients can retrieve them on reconnect.
+  }
+}
+
 function responseHeadersForError(httpError, allow) {
   const headers = {};
   if (httpError.statusCode === 401) headers['WWW-Authenticate'] = 'Bearer';
@@ -883,6 +904,7 @@ function createConfiguredHttpServer({
   menuDiagnosticRecorder = undefined,
   businessHours = undefined,
   customerTheme = undefined,
+  customerOrderNotice = undefined,
   rideGuidance = undefined,
   checkout = undefined,
   sessionMenuAccess = undefined,
@@ -1091,6 +1113,18 @@ function createConfiguredHttpServer({
         return;
       }
 
+      if (target.path === '/v1/customer/order-start-notice') {
+        authorizeDeviceRole(principal, ['customer']);
+        drainRequest(request);
+        const repository = requireService(customerOrderNotice, 'getPublicSettings');
+        writeJsonResponse(response, {
+          statusCode: 200,
+          body: mapCustomerOrderStartNoticeResponse(repository.getPublicSettings(principal)),
+          requestId,
+        });
+        return;
+      }
+
       if (target.path === '/v1/admin/pairing-preflight') {
         authorizeDeviceRole(principal, ['admin']);
         if (diagnosticContext) diagnosticContext.stage = 'retrieved';
@@ -1179,6 +1213,28 @@ function createConfiguredHttpServer({
         writeJsonResponse(response, {
           statusCode: 200,
           body: mapCustomerThemeConfigResponse(result, { includeVersion: true }),
+          requestId,
+        });
+        return;
+      }
+
+      if (target.path === '/v1/admin/customer-order-start-notice') {
+        authorizeDeviceRole(principal, ['admin']);
+        const repository = requireService(customerOrderNotice, request.method === 'GET' ? 'getAdminSettings' : 'writeSettings');
+        if (request.method === 'GET') {
+          drainRequest(request);
+          writeJsonResponse(response, {
+            statusCode: 200,
+            body: mapCustomerOrderStartNoticeResponse(repository.getAdminSettings(principal), { includeVersion: true }),
+            requestId,
+          });
+          return;
+        }
+        const result = repository.writeSettings(principal, await readJsonBody(request));
+        await notifyTransientSafely(sseHub, result);
+        writeJsonResponse(response, {
+          statusCode: 200,
+          body: mapCustomerOrderStartNoticeResponse(result, { includeVersion: true }),
           requestId,
         });
         return;

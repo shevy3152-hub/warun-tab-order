@@ -26,7 +26,7 @@ import * as React from "react";
 import { createClientOrderId, createCustomerOrderClient, CustomerCheckoutError, resolveOrderApiConfig } from "./order-outbox.js";
 import { claimCustomerDevice, createIndexedDbCredentialStore, loadOrCreateCustomerDevice, pairingClaimErrorMessage, runtimeForCustomerCredentials } from "./device-credentials.js";
 import { customerOrderErrorCategory, customerOrderNoticeFromOutboxEvent } from "./customer-order-notice.js";
-import { AdminPairingError, configuredAdminToken, createAdminRideGuidanceContact, deleteAdminRideGuidanceContact, fetchAdminBusinessHours, fetchAdminCheckoutRequests, fetchAdminCustomerThemeConfig, fetchAdminDiagnostics, fetchAdminMenu, fetchAdminSessionMenuAccess, allowAdminSessionMenuItem, confirmAndCloseAdminEmptySession, revokeAdminSessionMenuItem, fetchAdminOrderHistory, fetchAdminPaymentHistory, fetchAdminPairingPreflight, fetchAdminRideGuidance, issueCustomerPairingCode, revokeAdminDevice, saveAdminBusinessHours, saveAdminCustomerThemeConfig, saveAdminImageLayouts, saveAdminCategory, saveAdminMenuItem, saveAdminMenuOrdering, saveAdminRideGuidanceOrdering, saveAdminRideGuidancePickup, updateAdminRideGuidanceContact, voidAdminPayment } from "./admin-pairing.js";
+import { AdminPairingError, configuredAdminToken, createAdminRideGuidanceContact, deleteAdminRideGuidanceContact, fetchAdminBusinessHours, fetchAdminCheckoutRequests, fetchAdminCustomerOrderStartNotice, fetchAdminCustomerThemeConfig, fetchAdminDiagnostics, fetchAdminMenu, fetchAdminSessionMenuAccess, allowAdminSessionMenuItem, confirmAndCloseAdminEmptySession, revokeAdminSessionMenuItem, fetchAdminOrderHistory, fetchAdminPaymentHistory, fetchAdminPairingPreflight, fetchAdminRideGuidance, issueCustomerPairingCode, revokeAdminDevice, saveAdminBusinessHours, saveAdminCustomerOrderStartNotice, saveAdminCustomerThemeConfig, saveAdminImageLayouts, saveAdminCategory, saveAdminMenuItem, saveAdminMenuOrdering, saveAdminRideGuidanceOrdering, saveAdminRideGuidancePickup, updateAdminRideGuidanceContact, voidAdminPayment } from "./admin-pairing.js";
 import { adjustKitchenItemUnitPrice, adjustKitchenOrderItemQuantity as adjustKitchenItemQuantityRequest, cancelKitchenCheckout, cancelKitchenOrderItem, closeKitchenTableSession, createKitchenOrder, fetchKitchenCheckoutRequests, fetchKitchenOrderHistory, fetchKitchenPaymentHistory, fetchKitchenSnapshot, kitchenAdditionRequestItem, kitchenApiConfigured, KitchenApiError, markKitchenItemServed, payKitchenCheckout, readyKitchenCheckout, restoreKitchenOrderItem, saveKitchenCheckoutAdjustments, subscribeKitchenInvalidations, voidKitchenPayment } from "./kitchen-api.js";
 import { buildKitchenTableGroups } from "./kitchen-order-board.js";
 import { bootstrapCustomerOrderClient } from "./customer-bootstrap.js";
@@ -38,6 +38,7 @@ import { DEFAULT_BUSINESS_HOURS, businessHoursDisplay, businessHoursHourLabel, c
 import { DEFAULT_BUSINESS_HOURS_NOTICE, withBusinessHoursNotice } from "./business-hours-notice.js";
 import { CHECKOUT_ADJUSTMENT_TYPES, checkoutAdjustmentTotal, normalizeCheckoutAdjustments, parseFixedAdjustment } from "./checkout-adjustments.js";
 import { buildCustomerMajorCategories } from "./customer-category-navigation.js";
+import { acknowledgeCustomerOrderStartNotice, clearCustomerOrderStartNoticeAcknowledgements, createCustomerOrderStartNoticeScopeKey, DEFAULT_CUSTOMER_ORDER_START_NOTICE, hasCustomerOrderStartNoticeAcknowledgement } from "./customer-order-start-notice.js";
 
 const STORAGE_KEY = "izakaya-order-prototype-v3";
 
@@ -756,6 +757,20 @@ function CustomerCheckoutModal({ checkoutState, receiptRequested, onReceiptChang
   </Modal>;
 }
 
+function CustomerOrderStartNotice({ ready, settings, loading, error, onContinue, onRetry }) {
+  return <main className="customer-order-start-notice">
+    <section className="customer-order-start-notice__card" aria-labelledby="customer-order-start-notice-title">
+      <p className="customer-order-start-notice__eyebrow">店舗の利用ルール</p>
+      <h1 id="customer-order-start-notice-title">{settings?.heading || "注文前の確認"}</h1>
+      {settings ? <p className="customer-order-start-notice__body">{settings.body}</p> : null}
+      {loading ? <p className="customer-order-start-notice__status" role="status">注意事項を読み込んでいます。</p> : null}
+      {error ? <div className="customer-order-start-notice__error" role="alert"><p>注意事項を取得できません。通信状態を確認してください。</p><button type="button" className="button button--outline" onClick={onRetry}>再取得</button></div> : null}
+      {!ready && !loading && !error ? <p className="customer-order-start-notice__status" role="status">来店情報を確認しています。</p> : null}
+      <button className="customer-order-start-notice__continue" type="button" disabled={!ready} onClick={onContinue}>確認して注文を開始する</button>
+    </section>
+  </main>;
+}
+
 function CustomerScreen({ state, updateState, deviceId, orderClient, customerDeviceConfig, onCustomerDeviceConfigChange, theme = CUSTOMER_TEST_THEME }) {
   const fallbackCustomerTheme = normalizeCustomerTheme(theme);
   const fallbackCustomerThemeConfig = normalizeCustomerThemeConfig({ theme: fallbackCustomerTheme }, fallbackCustomerTheme);
@@ -769,6 +784,9 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
   const customerThemeRefreshPendingRef = useRef(false);
   const customerThemeRefreshRef = useRef(null);
   const [customerThemeImageFailed, setCustomerThemeImageFailed] = useState(false);
+  const [acknowledgedOrderStartNoticeScope, setAcknowledgedOrderStartNoticeScope] = useState(null);
+  const [orderStartNoticeRefreshKey, setOrderStartNoticeRefreshKey] = useState(0);
+  const [orderStartNoticeState, setOrderStartNoticeState] = useState({ loading: apiMode, error: false, settings: apiMode ? null : DEFAULT_CUSTOMER_ORDER_START_NOTICE });
   const customerThemeConfig = normalizeCustomerThemeConfig(apiMode ? customerThemeState : fallbackCustomerThemeConfig, apiMode ? "standard" : fallbackCustomerTheme);
   const customerTheme = customerThemeConfig.theme;
   const businessHours = usePublicBusinessHours(apiMode);
@@ -815,6 +833,34 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
       if (event?.resource === "customerTheme" || event?.payload?.resource === "customerTheme" || event?.type === "customer_theme.updated") refreshTheme();
     }, { onReconnect: refreshTheme });
   }, [apiMode, orderClient]);
+  useEffect(() => {
+    if (!apiMode) {
+      setOrderStartNoticeState({ loading: false, error: false, settings: DEFAULT_CUSTOMER_ORDER_START_NOTICE });
+      return undefined;
+    }
+    let cancelled = false;
+    const refreshNotice = async () => {
+      if (typeof orderClient?.getOrderStartNotice !== "function") {
+        if (!cancelled) setOrderStartNoticeState({ loading: false, error: true, settings: null });
+        return;
+      }
+      setOrderStartNoticeState((current) => ({ ...current, loading: true, error: false }));
+      try {
+        const settings = await orderClient.getOrderStartNotice();
+        if (!cancelled) setOrderStartNoticeState({ loading: false, error: false, settings });
+      } catch {
+        if (!cancelled) setOrderStartNoticeState({ loading: false, error: true, settings: null });
+      }
+    };
+    void refreshNotice();
+    const unsubscribe = typeof orderClient?.subscribeInvalidations === "function"
+      ? orderClient.subscribeInvalidations((event) => {
+        const resource = event?.payload?.resource ?? event?.resource;
+        if (resource === "customerOrderStartNotice" || event?.type === "customer_order_start_notice.updated") void refreshNotice();
+      }, { onReconnect: refreshNotice })
+      : null;
+    return () => { cancelled = true; unsubscribe?.(); };
+  }, [apiMode, orderClient, orderStartNoticeRefreshKey]);
   useEffect(() => { setCustomerThemeImageFailed(false); }, [customerTheme, customerThemeConfig.positionX, customerThemeConfig.positionY, customerThemeConfig.zoom]);
   const customerThemeImageStyle = {
     "--customer-theme-position-x": `${customerThemeConfig.positionX * 100}%`,
@@ -990,7 +1036,7 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
         return;
       }
       if (!currentConfig) return;
-      onCustomerDeviceConfigChange?.(currentConfig);
+      onCustomerDeviceConfigChange?.({ ...currentConfig, deviceId: customerDeviceConfig?.deviceId });
       const pinnedVisitContextId = cartVisitContextIdRef.current;
       if (
         Object.keys(cartRef.current).length > 0
@@ -1014,7 +1060,7 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
       cancelled = true;
       unsubscribe();
     };
-  }, [apiMode, orderClient, onCustomerDeviceConfigChange]);
+  }, [apiMode, orderClient, onCustomerDeviceConfigChange, customerDeviceConfig?.deviceId]);
 
   useEffect(() => {
     if (!apiMode || !orderClient?.getCheckout || (modal !== "checkout" && checkoutRefreshKey === 0)) return undefined;
@@ -1437,6 +1483,29 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
     .filter((contact) => contact.type === rideGuidanceType)
     .sort((a, b) => a.sortOrder - b.sortOrder);
   const rideGuidanceTypeLabel = rideGuidanceType === "taxi" ? "タクシー" : "運転代行";
+
+  const orderStartNoticeScopeKey = createCustomerOrderStartNoticeScopeKey(apiMode
+    ? { deviceId: customerDeviceConfig?.deviceId, tableId: customerDeviceConfig?.tableId, visitContextId: customerDeviceConfig?.visitContextId }
+    : { deviceId: device.deviceId, tableId: device.tableId, visitContextId: "demo" });
+  const orderStartNoticeReady = Boolean(orderStartNoticeScopeKey);
+  const orderStartNoticeCanContinue = orderStartNoticeReady && !orderStartNoticeState.loading && !orderStartNoticeState.error && Boolean(orderStartNoticeState.settings);
+  const orderStartNoticeAcknowledged = orderStartNoticeReady && (
+    acknowledgedOrderStartNoticeScope === orderStartNoticeScopeKey
+    || hasCustomerOrderStartNoticeAcknowledgement({ scopeKey: orderStartNoticeScopeKey })
+  );
+  const continueAfterOrderStartNotice = () => {
+    if (!orderStartNoticeCanContinue || !acknowledgeCustomerOrderStartNotice({ scopeKey: orderStartNoticeScopeKey })) return;
+    setAcknowledgedOrderStartNoticeScope(orderStartNoticeScopeKey);
+  };
+
+  if (!orderStartNoticeAcknowledged) return <CustomerOrderStartNotice
+    ready={orderStartNoticeCanContinue}
+    settings={orderStartNoticeState.settings}
+    loading={orderStartNoticeState.loading}
+    error={orderStartNoticeState.error}
+    onRetry={() => setOrderStartNoticeRefreshKey((current) => current + 1)}
+    onContinue={continueAfterOrderStartNotice}
+  />;
 
   return (
     <div className={`customer-app ${majorNavOpen ? "" : "customer-app--category-collapsed"}`} data-customer-theme={visibleCustomerTheme}>
@@ -2396,6 +2465,7 @@ const adminTabs = [
   { id: "menu-access", label: "来店許可", icon: CheckCircle },
   { id: "categories", label: "カテゴリ", icon: ListBullets },
   { id: "customer-theme", label: "客席レール", icon: PaintBrush },
+  { id: "customer-order-notice", label: "注文前注意事項", icon: ClipboardText },
   { id: "hours", label: "営業時間", icon: ClockCounterClockwise },
   { id: "ride-guidance", label: "タクシー／代行料金", icon: Car },
   { id: "devices", label: "端末割り当て", icon: Monitor },
@@ -2622,6 +2692,57 @@ function BusinessHoursTimeFields({ label, value, maxHour, disabled, onChange }) 
     </select>
     {Number(selected.hour) >= 24 ? <small>翌日</small> : null}
   </fieldset>;
+}
+
+function CustomerOrderStartNoticeEditor({ adminApiMode }) {
+  const [state, setState] = useState({ loading: Boolean(adminApiMode), saving: false, error: "", message: "", formal: null, draft: { heading: "", body: "" } });
+  const load = async () => {
+    if (!adminApiMode) return;
+    setState((current) => ({ ...current, loading: true, error: "", message: "" }));
+    try {
+      const formal = await fetchAdminCustomerOrderStartNotice({ env: window });
+      setState({ loading: false, saving: false, error: "", message: "", formal, draft: { heading: formal.heading, body: formal.body } });
+    } catch (error) {
+      setState((current) => ({ ...current, loading: false, error: error?.status === 401 ? "管理者認証を確認してください。" : "注意事項を取得できません。管理APIを確認してください。" }));
+    }
+  };
+  useEffect(() => { void load(); }, [adminApiMode]);
+  const updateDraft = (changes) => setState((current) => ({ ...current, draft: { ...current.draft, ...changes }, message: "", error: "" }));
+  const save = async () => {
+    if (!adminApiMode || !state.formal || state.saving) return;
+    setState((current) => ({ ...current, saving: true, error: "", message: "" }));
+    try {
+      const formal = await saveAdminCustomerOrderStartNotice({ env: window, ...state.draft, expectedVersion: state.formal.version });
+      setState({ loading: false, saving: false, error: "", message: "注意事項を保存しました。客席へ共有されました。", formal, draft: { heading: formal.heading, body: formal.body } });
+    } catch (error) {
+      setState((current) => ({
+        ...current,
+        saving: false,
+        error: error?.status === 409 || error?.code === "CUSTOMER_ORDER_NOTICE_CONFLICT"
+          ? "別の管理端末で更新されています。再読込してから編集してください。"
+          : error?.status === 400 ? "見出しと本文を入力してください。" : "注意事項を保存できません。管理APIを確認してください。",
+      }));
+    }
+  };
+  const dirty = Boolean(state.formal && (state.draft.heading !== state.formal.heading || state.draft.body !== state.formal.body));
+  return <section className="customer-order-notice-editor" aria-label="注文開始前の注意事項設定">
+    <header><span className="section-kicker">CUSTOMER ORDER START</span><h2>注文前の注意事項</h2><p>同じ来店中は、文章を更新しても確認済み状態を保ちます。次の来店から最新の文章を表示します。</p></header>
+    {!adminApiMode ? <p className="customer-order-notice-editor__status">管理者API接続時に編集できます。</p> : null}
+    <div className="customer-order-notice-editor__layout">
+      <div className="customer-order-notice-editor__fields">
+        <label htmlFor="customer-order-notice-heading">見出し<input id="customer-order-notice-heading" maxLength={120} value={state.draft.heading} disabled={!adminApiMode || state.loading || state.saving || !state.formal} onChange={(event) => updateDraft({ heading: event.target.value })} /></label>
+        <label htmlFor="customer-order-notice-body">本文（改行できます）<textarea id="customer-order-notice-body" maxLength={4000} rows={10} value={state.draft.body} disabled={!adminApiMode || state.loading || state.saving || !state.formal} onChange={(event) => updateDraft({ body: event.target.value })} /></label>
+        <small>{[...state.draft.body].length} / 4000文字</small>
+      </div>
+      <section className="customer-order-notice-editor__preview" aria-label="客席表示プレビュー">
+        <span>客席プレビュー</span><h3>{state.draft.heading || "見出し"}</h3><p>{state.draft.body || "本文"}</p><button type="button" disabled>確認して注文を開始する</button>
+      </section>
+    </div>
+    {state.loading ? <p role="status">設定を読み込んでいます。</p> : null}
+    {state.error ? <p className="customer-order-notice-editor__error" role="alert">{state.error}</p> : null}
+    {state.message ? <p className="customer-order-notice-editor__success" role="status">{state.message}</p> : null}
+    <div className="customer-order-notice-editor__actions"><button type="button" className="button button--quiet" onClick={() => setState((current) => ({ ...current, draft: { heading: current.formal?.heading ?? "", body: current.formal?.body ?? "" }, message: "", error: "" }))} disabled={!state.formal || state.saving || !dirty}>変更を破棄</button><button type="button" className="button button--outline" onClick={() => void load()} disabled={!adminApiMode || state.loading || state.saving}>再読込</button><button type="button" className="button button--primary" onClick={() => void save()} disabled={!adminApiMode || state.loading || state.saving || !state.formal || !dirty}>{state.saving ? "保存中" : "注意事項を保存"}</button></div>
+  </section>;
 }
 
 function BusinessHoursEditor({ state, adminApiMode, onChange, onSave, onDiscard, onReload }) {
@@ -3500,7 +3621,7 @@ function AdminScreen({ state, updateState, section = "menu" }) {
   }, [diagnosticHasIssue]);
 
   return (
-    <StaffShell route={`/admin/${section}`} title={section === "hours" ? "営業時間" : section === "ride-guidance" ? "タクシー／代行料金" : section === "categories" ? "カテゴリ管理" : section === "customer-theme" ? "客席レール" : section === "menu-access" ? "来店限定商品" : "メニュー管理"} subtitle={section === "hours" ? "客席とスタッフ画面に表示する営業時間を設定します。" : section === "ride-guidance" ? "タクシー・運転代行の案内と料金情報を管理します。" : section === "customer-theme" ? "客席画面だけに表示する左レールテーマを設定します。" : section === "menu-access" ? "商品ごとの現在の来店許可を管理します。" : "メニューの追加・編集・並び順の変更ができます。"} state={state}>
+    <StaffShell route={`/admin/${section}`} title={section === "hours" ? "営業時間" : section === "ride-guidance" ? "タクシー／代行料金" : section === "categories" ? "カテゴリ管理" : section === "customer-theme" ? "客席レール" : section === "customer-order-notice" ? "注文前注意事項" : section === "menu-access" ? "来店限定商品" : "メニュー管理"} subtitle={section === "hours" ? "客席とスタッフ画面に表示する営業時間を設定します。" : section === "ride-guidance" ? "タクシー・運転代行の案内と料金情報を管理します。" : section === "customer-theme" ? "客席画面だけに表示する左レールテーマを設定します。" : section === "customer-order-notice" ? "客席が注文を始める前に確認する店舗ルールを設定します。" : section === "menu-access" ? "商品ごとの現在の来店許可を管理します。" : "メニューの追加・編集・並び順の変更ができます。"} state={state}>
       <section className="admin-content">
         <nav className="admin-tabs">{adminTabs.map((tab) => <button key={tab.id} className={section === tab.id ? "is-active" : ""} onClick={() => { resetMenuEditor(); navigate(`/admin/${tab.id}`); }}><tab.icon size={24} weight="bold" /> {tab.label}</button>)}</nav>
 
@@ -3565,6 +3686,8 @@ function AdminScreen({ state, updateState, section = "menu" }) {
         {section === "hours" ? <section className="admin-settings-content"><BusinessHoursEditor state={businessHoursState} adminApiMode={adminApiMode} onChange={updateBusinessHoursDraft} onSave={saveBusinessHours} onDiscard={discardBusinessHours} onReload={loadBusinessHours} /></section> : null}
 
         {section === "customer-theme" ? <section className="admin-settings-content"><CustomerThemeEditor adminApiMode={adminApiMode} /></section> : null}
+
+        {section === "customer-order-notice" ? <section className="admin-settings-content"><CustomerOrderStartNoticeEditor adminApiMode={adminApiMode} /></section> : null}
 
         {section === "ride-guidance" ? <section className="admin-settings-content"><RideGuidanceEditor adminApiMode={adminApiMode} /></section> : null}
 
@@ -3806,8 +3929,9 @@ export function App() {
     const store = createIndexedDbCredentialStore({ indexedDB: window.indexedDB });
     const device = await loadOrCreateCustomerDevice({ store, globalObject: window });
     await claimCustomerDevice({ store, baseUrl: config.baseUrl || new URL("/v1", window.location.origin).toString(), pairingCode, deviceId: device.deviceId, displayName, appVersion: "prototype" });
+    clearCustomerOrderStartNoticeAcknowledgements({ deviceId: device.deviceId });
     const credentials = await store.load();
-    setCustomerDeviceConfig(credentials.config ?? null);
+    setCustomerDeviceConfig(credentials.config ? { ...credentials.config, deviceId: credentials.deviceId } : null);
     const runtime = runtimeForCustomerCredentials({ globalObject: window, baseUrl: config.baseUrl || new URL("/v1", window.location.origin).toString(), token: credentials.token });
     setPairingError("");
     setOrderClient(createCustomerOrderClient({ global: runtime, indexedDB: window.indexedDB }));

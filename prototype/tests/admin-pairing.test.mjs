@@ -1,13 +1,36 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { confirmAndCloseAdminEmptySession, createAdminRideGuidanceContact, deleteAdminRideGuidanceContact, fetchAdminCheckoutRequests, fetchAdminCustomerTheme, fetchAdminCustomerThemeConfig, fetchAdminRideGuidance, saveAdminCustomerTheme, saveAdminCustomerThemeConfig, saveAdminRideGuidanceOrdering, saveAdminRideGuidancePickup, updateAdminRideGuidanceContact, fetchAdminBusinessHours, saveAdminBusinessHours, saveAdminCategory, saveAdminMenuItem, saveAdminMenuOrdering, fetchAdminSessionMenuAccess, allowAdminSessionMenuItem, revokeAdminSessionMenuItem } from '../src/admin-pairing.js';
+import { confirmAndCloseAdminEmptySession, createAdminRideGuidanceContact, deleteAdminRideGuidanceContact, fetchAdminCheckoutRequests, fetchAdminCustomerTheme, fetchAdminCustomerThemeConfig, fetchAdminRideGuidance, saveAdminCustomerTheme, saveAdminCustomerThemeConfig, saveAdminRideGuidanceOrdering, saveAdminRideGuidancePickup, updateAdminRideGuidanceContact, fetchAdminBusinessHours, saveAdminBusinessHours, saveAdminCategory, saveAdminMenuItem, saveAdminMenuOrdering, fetchAdminSessionMenuAccess, allowAdminSessionMenuItem, revokeAdminSessionMenuItem, fetchAdminCustomerOrderStartNotice, saveAdminCustomerOrderStartNotice } from '../src/admin-pairing.js';
 
 const env = {
   WARUN_ADMIN_API_TOKEN: 'admin-token-for-test',
   WARUN_API_BASE: 'http://127.0.0.1:8787/v1',
   location: { origin: 'http://127.0.0.1:8787' },
 };
+
+test('customer notice admin client loads and saves shared plain text with optimistic versioning', async () => {
+  const calls = [];
+  const response = { heading: '利用前に確認', body: '一行目\n二行目', version: 6, updatedAtMs: 1234 };
+  const fetchImpl = async (url, options = {}) => {
+    calls.push({ url, options, body: options.body ? JSON.parse(options.body) : null });
+    return { ok: true, status: 200, json: async () => response };
+  };
+  const loaded = await fetchAdminCustomerOrderStartNotice({ env, fetchImpl });
+  const saved = await saveAdminCustomerOrderStartNotice({ env, ...loaded, expectedVersion: loaded.version, fetchImpl });
+  assert.equal(calls[0].url, `${env.WARUN_API_BASE}/admin/customer-order-start-notice`);
+  assert.equal(calls[0].options.headers.Authorization, 'Bearer admin-token-for-test');
+  assert.equal(calls[1].options.method, 'PUT');
+  assert.deepEqual(calls[1].body, { expectedVersion: 6, heading: '利用前に確認', body: '一行目\n二行目' });
+  assert.equal(saved.version, 6);
+});
+
+test('customer notice admin client reports version conflicts', async () => {
+  await assert.rejects(
+    () => saveAdminCustomerOrderStartNotice({ env, expectedVersion: 2, heading: '見出し', body: '本文', fetchImpl: async () => ({ ok: false, status: 409, json: async () => ({ error: { code: 'CUSTOMER_ORDER_NOTICE_CONFLICT' } }) }) }),
+    (error) => error.status === 409 && error.code === 'CUSTOMER_ORDER_NOTICE_CONFLICT',
+  );
+});
 
 test('fetchAdminCheckoutRequests reads active checkout state with the admin token', async () => {
   let captured;

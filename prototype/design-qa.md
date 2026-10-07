@@ -195,3 +195,10 @@ functional result: passed — user-confirmed cancellation preserves the open vis
 - この記録では接続解除・再登録・コード発行を行っていない。未受付outboxが別テーブルへの再割当・再登録後に転送されないこと、元の内容とcontextを保ってスタッフ確認状態になることは未検証。今回をPASS扱いせず、過去の手動PASS記録は変更しない。
 - QA資材: `C:\Users\user\AppData\Local\Temp\warun-table-reassign-qa-20261007-200411`。使い捨てDB、bundle、登録情報、起動資材は保持。
 - 終了処理: health ready／schema v19、上記QA DB絶対パスとruntime PID 7828を再照合し、API 43861・Web 43862のlistener所有PIDも7828で一致。起動した`server/src/run-server.mjs`だけへ通常SIGINTを送り、PID終了と両listener消失を確認した。QA DB・bundle・登録情報・起動資材は保持。
+## 注文前注意事項QA・再読み込み結果 2026-10-07
+
+- 利用者手動確認PASS: 注意事項を確認してメニューへ進んだ後、再読み込みすると注意事項は再表示されず、メニューへ戻る。直前に未確認としていた最新画面動作を、この利用者結果で更新する。
+- 管理者が文章を更新した後、同じ来店で再確認を強制しないことの手動確認は未実施。表示速度の実測および1280×800／1637×602、DPR 1、`fullPage=false`の画面QAも未実施。
+- 遅い再読み込みの調査で、客席画面のテーマ・注意事項・来店状態がそれぞれ独立したSSE購読を作る実装と、ChromeからQA Web originへの6接続維持を確認。購読を1本へ共有する修正を反映し、関連テスト46/46、Vite build、Sites 4/4を確認。QA bundleはschema v20環境へ反映し、DB・登録情報を保持。
+- QA runtime停止: PID 23188と使い捨てDB、Web 55262／API 55263のlistener所有PIDを照合。記録済みterminal sessionへのCtrl+Cを試したが、PIDと両listenerが残り、正常停止を確認できていない。強制終了は行っていない。QA資材・DB・登録情報は保持。
+- 今回の利用者手動PASSは画面viewport／表示速度の受入や、管理者編集後の再確認に関するPASSを意味しない。

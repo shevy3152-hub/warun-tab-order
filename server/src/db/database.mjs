@@ -5,7 +5,7 @@ import { DatabaseSync } from 'node:sqlite';
 
 export const LEGACY_SCHEMA_VERSION = 1;
 export const SESSION_SCHEMA_VERSION = 2;
-export const SCHEMA_VERSION = 19;
+export const SCHEMA_VERSION = 20;
 
 export const REQUIRED_TABLES = Object.freeze([
   'system_state',
@@ -30,6 +30,7 @@ export const REQUIRED_TABLES = Object.freeze([
   'event_log',
   'session_menu_item_grants',
   'menu_item_table_visibility',
+  'customer_order_start_notice_settings',
 ]);
 
 export const REQUIRED_INDEXES = Object.freeze([
@@ -157,6 +158,9 @@ export const DEFAULT_V18_MIGRATION_PATH = resolve(
 );
 export const DEFAULT_V19_MIGRATION_PATH = resolve(
   moduleDirectory, '..', '..', '..', 'docs', 'schema-v19-migration.sql',
+);
+export const DEFAULT_V20_MIGRATION_PATH = resolve(
+  moduleDirectory, '..', '..', '..', 'docs', 'schema-v20-migration.sql',
 );
 
 export class DatabaseInitializationError extends Error {
@@ -329,6 +333,7 @@ function validateLegacySchema(database) {
     'checkout_requests', 'checkout_adjustments',
     'session_menu_item_grants',
     'menu_item_table_visibility',
+    'customer_order_start_notice_settings',
   ].includes(name));
   const legacyIndexes = REQUIRED_INDEXES.filter((name) => ![
     'idx_ride_service_contacts_type_visible_sort',
@@ -383,6 +388,7 @@ function validateSchemaV2(database) {
     'checkout_requests', 'checkout_adjustments',
     'session_menu_item_grants',
     'menu_item_table_visibility',
+    'customer_order_start_notice_settings',
   ].includes(name));
   const indexes = REQUIRED_INDEXES.filter((name) => ![
     'idx_ride_service_contacts_type_visible_sort',
@@ -558,6 +564,14 @@ function migrateSchemaV18ToV19(database, migrationPath) {
   catch (error) {
     try { if (database.isTransaction) database.exec('ROLLBACK;'); } catch {}
     throw new DatabaseInitializationError('MIGRATION_FAILED', 'The table menu visibility schema migration failed.', { cause: error });
+  }
+}
+
+function migrateSchemaV19ToV20(database, migrationPath) {
+  try { database.exec(readFileSync(migrationPath, 'utf8')); }
+  catch (error) {
+    try { if (database.isTransaction) database.exec('ROLLBACK;'); } catch {}
+    throw new DatabaseInitializationError('MIGRATION_FAILED', 'The customer order-start notice migration failed.', { cause: error });
   }
 }
 
@@ -751,6 +765,7 @@ function validateSchema(database) {
   assertRequiredNames(schemaObjectNames(database, 'table'), REQUIRED_TABLES, 'tables');
   assertRequiredNames(schemaObjectNames(database, 'table'), ['customer_theme_settings'], 'tables');
   assertRequiredNames(schemaObjectNames(database, 'table'), ['customer_theme_variants'], 'tables');
+  assertRequiredNames(schemaObjectNames(database, 'table'), ['customer_order_start_notice_settings'], 'tables');
   assertRequiredNames(schemaObjectNames(database, 'index'), REQUIRED_INDEXES, 'indexes');
   assertRequiredNames(schemaObjectNames(database, 'trigger'), REQUIRED_TRIGGERS, 'triggers');
   assertRequiredNames(schemaObjectNames(database, 'trigger'), ['trg_order_item_cancellation_events_immutable_update', 'trg_order_item_cancellation_events_immutable_delete'], 'cancellation history triggers');
@@ -789,6 +804,11 @@ function validateSchema(database) {
     tableColumns(database, 'customer_theme_settings'),
     ['singleton_id', 'theme_key', 'version', 'created_at_ms', 'updated_at_ms'],
     'customer theme columns',
+  );
+  assertRequiredNames(
+    tableColumns(database, 'customer_order_start_notice_settings'),
+    ['singleton_id', 'heading_text', 'body_text', 'version', 'created_at_ms', 'updated_at_ms'],
+    'customer order-start notice columns',
   );
   assertRequiredNames(
     tableColumns(database, 'store_pickup_settings'),
@@ -905,6 +925,7 @@ export function initializeDatabase({
   v17MigrationPath = DEFAULT_V17_MIGRATION_PATH,
   v18MigrationPath = DEFAULT_V18_MIGRATION_PATH,
   v19MigrationPath = DEFAULT_V19_MIGRATION_PATH,
+  v20MigrationPath = DEFAULT_V20_MIGRATION_PATH,
 } = {}) {
   const resolvedDatabasePath = resolveFilePath(databasePath, 'databasePath');
   const resolvedSchemaPath = resolveFilePath(schemaPath, 'schemaPath');
@@ -925,6 +946,7 @@ export function initializeDatabase({
   const resolvedV17MigrationPath = resolveFilePath(v17MigrationPath, 'v17MigrationPath');
   const resolvedV18MigrationPath = resolveFilePath(v18MigrationPath, 'v18MigrationPath');
   const resolvedV19MigrationPath = resolveFilePath(v19MigrationPath, 'v19MigrationPath');
+  const resolvedV20MigrationPath = resolveFilePath(v20MigrationPath, 'v20MigrationPath');
 
   mkdirSync(dirname(resolvedDatabasePath), { recursive: true });
 
@@ -1033,6 +1055,11 @@ export function initializeDatabase({
     }
     if (currentVersion === 18) {
       migrateSchemaV18ToV19(database, resolvedV19MigrationPath);
+      enableWriteAheadLogging(database);
+      currentVersion = 19;
+    }
+    if (currentVersion === 19) {
+      migrateSchemaV19ToV20(database, resolvedV20MigrationPath);
       enableWriteAheadLogging(database);
       currentVersion = SCHEMA_VERSION;
     }

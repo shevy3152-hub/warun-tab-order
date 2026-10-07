@@ -134,6 +134,65 @@ paths:
         '403':
           $ref: '#/components/responses/PermissionDenied'
 
+  /v1/customer/order-start-notice:
+    get:
+      tags: [Customer]
+      summary: 注文開始前の店舗利用ルールを取得する
+      operationId: getCustomerOrderStartNotice
+      responses:
+        '200':
+          description: 認証済み客席端末へ共有中の見出しとプレーンテキスト本文
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PublicCustomerOrderStartNotice'
+        '401':
+          $ref: '#/components/responses/AuthenticationFailed'
+        '403':
+          $ref: '#/components/responses/PermissionDenied'
+
+  /v1/admin/customer-order-start-notice:
+    get:
+      tags: [Admin]
+      summary: 注文開始前の店舗利用ルールを取得する
+      operationId: getAdminCustomerOrderStartNotice
+      responses:
+        '200':
+          description: versionを含む共有注意事項
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminCustomerOrderStartNotice'
+        '401':
+          $ref: '#/components/responses/AuthenticationFailed'
+        '403':
+          $ref: '#/components/responses/PermissionDenied'
+    put:
+      tags: [Admin]
+      summary: 注文開始前の店舗利用ルールを更新する
+      operationId: updateAdminCustomerOrderStartNotice
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateCustomerOrderStartNoticeRequest'
+      responses:
+        '200':
+          description: 更新後の注意事項と新しいversion
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminCustomerOrderStartNotice'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/AuthenticationFailed'
+        '403':
+          $ref: '#/components/responses/PermissionDenied'
+        '409':
+          $ref: '#/components/responses/VersionConflict'
+
   /v1/admin/customer-theme:
     get:
       tags: [Admin]
@@ -1091,7 +1150,7 @@ paths:
         欠落分を昇順送信し、その後ライブ配信する。両方省略した初回接続は現在tailからliveだけを受信する。
         正式な初期同期はsnapshot取得後、そのcursorで接続する。通常イベントはcommit済みevent_logからrole別に投影し、
         生payload_jsonは公開しない。不可視イベントでもid-only cursor frameでcursorを進める。
-        customer_theme.updatedだけはevent_logに保存しない一時invalidationで、customer audienceへdataを送るが
+        customer_theme.updatedとcustomer_order_start_notice.updatedはevent_logに保存しない一時invalidationで、customer audienceへdataを送るが
         SSE idとeventIdを持たない。これは永続cursorを進めず、通知を受け取れなかった場合も再接続後にRESTで現在設定を再取得する。
         heartbeatはcommentとして送る。遅い接続は接続単位で制限・切断し、再接続replayへ戻す。
         SSE切断はREST注文の失敗を意味しない。履歴が利用不能なら410を返し、snapshotを取得する。
@@ -1104,7 +1163,7 @@ paths:
         '200':
           description: |
             text/event-stream。永続イベントはid、event、dataを持ち、dataはRoleScopedEventEnvelopeのJSON表現。
-            customer_theme.updatedはcustomer専用の一時invalidationで、eventとdataのみを持ち、dataはCustomerThemeTransientEventEnvelopeのJSON表現。
+            customer_theme.updatedとcustomer_order_start_notice.updatedはcustomer専用の一時invalidationで、eventとdataのみを持つ。
             一時invalidationはid-only frameと同様にcursorを進めない。id-only frameとheartbeat commentはdataを持たない。
           headers:
             X-Event-Epoch:
@@ -1124,6 +1183,9 @@ paths:
 
                 event: customer_theme.updated
                 data: {"audience":"customer","eventEpoch":"00000000-0000-4000-8000-000000000100","type":"customer_theme.updated","aggregateId":"customer-theme","occurredAtMs":1786280000001,"payload":{"resource":"customerTheme","refreshRequired":true}}
+
+                event: customer_order_start_notice.updated
+                data: {"audience":"customer","eventEpoch":"00000000-0000-4000-8000-000000000100","type":"customer_order_start_notice.updated","aggregateId":"customer-order-notice","occurredAtMs":1786280000002,"payload":{"resource":"customerOrderStartNotice","refreshRequired":true}}
 
         '400':
           $ref: '#/components/responses/ReadOnlyBadRequest'
@@ -1707,6 +1769,59 @@ components:
     CustomerThemeKey:
       type: string
       enum: [standard, camellia]
+    CustomerOrderStartNoticeFields:
+      type: object
+      additionalProperties: false
+      required: [heading, body]
+      properties:
+        heading:
+          type: string
+          minLength: 1
+          maxLength: 120
+        body:
+          type: string
+          minLength: 1
+          maxLength: 4000
+          description: HTMLとして解釈しないプレーンテキスト。改行は表示上も維持する。
+    PublicCustomerOrderStartNotice:
+      allOf:
+        - $ref: '#/components/schemas/CustomerOrderStartNoticeFields'
+    AdminCustomerOrderStartNotice:
+      type: object
+      additionalProperties: false
+      required: [heading, body, version, updatedAtMs]
+      properties:
+        heading:
+          type: string
+          minLength: 1
+          maxLength: 120
+        body:
+          type: string
+          minLength: 1
+          maxLength: 4000
+          description: HTMLとして解釈しないプレーンテキスト。改行は表示上も維持する。
+        version:
+          type: integer
+          minimum: 0
+        updatedAtMs:
+          $ref: '#/components/schemas/TimestampMs'
+    UpdateCustomerOrderStartNoticeRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion, heading, body]
+      properties:
+        expectedVersion:
+          type: integer
+          minimum: 0
+        heading:
+          type: string
+          minLength: 1
+          maxLength: 120
+        body:
+          type: string
+          minLength: 1
+          maxLength: 4000
+          description: HTMLとして解釈しないプレーンテキスト。改行は保存する。
     PublicCustomerTheme:
       type: object
       additionalProperties: false
@@ -2920,7 +3035,7 @@ components:
       properties:
         resource:
           type: string
-          enum: [orders, menu, staffCalls, deviceConfig, businessHours, rideGuidance, customerTheme]
+          enum: [orders, menu, staffCalls, deviceConfig, businessHours, rideGuidance, customerTheme, customerOrderStartNotice]
         refreshRequired:
           type: boolean
           const: true
@@ -2950,6 +3065,7 @@ components:
             - device.revoked
             - table.assignment_updated
             - customer_theme.updated
+            - customer_order_start_notice.updated
         aggregateId:
           $ref: '#/components/schemas/OpaqueId'
         occurredAtMs:
@@ -3013,6 +3129,7 @@ components:
             - device.revoked
             - table.assignment_updated
             - customer_theme.updated
+            - customer_order_start_notice.updated
         aggregateId:
           $ref: '#/components/schemas/OpaqueId'
         occurredAtMs:
@@ -3057,6 +3174,36 @@ components:
               type: boolean
               const: true
       description: 保存済み設定の再取得を促す非永続通知。SSE idとeventIdは持たず、再接続後はRESTから状態を再取得する。
+    CustomerOrderStartNoticeTransientEventEnvelope:
+      type: object
+      additionalProperties: false
+      required: [audience, eventEpoch, type, aggregateId, occurredAtMs, payload]
+      properties:
+        audience:
+          type: string
+          const: customer
+        eventEpoch:
+          $ref: '#/components/schemas/Uuid'
+        type:
+          type: string
+          const: customer_order_start_notice.updated
+        aggregateId:
+          type: string
+          const: customer-order-notice
+        occurredAtMs:
+          $ref: '#/components/schemas/TimestampMs'
+        payload:
+          type: object
+          additionalProperties: false
+          required: [resource, refreshRequired]
+          properties:
+            resource:
+              type: string
+              const: customerOrderStartNotice
+            refreshRequired:
+              type: boolean
+              const: true
+      description: 保存済み注意事項の再取得を促す非永続通知。SSE idとeventIdは持たない。
     CustomerEventReplayResponse:
       type: object
       additionalProperties: false

@@ -12,6 +12,7 @@ export const HTTP_ERROR_CODES = Object.freeze({
   CATALOG_CONFLICT: 'CATALOG_CONFLICT',
   BUSINESS_HOURS_CONFLICT: 'BUSINESS_HOURS_CONFLICT',
   CUSTOMER_THEME_CONFLICT: 'CUSTOMER_THEME_CONFLICT',
+  CUSTOMER_ORDER_NOTICE_CONFLICT: 'CUSTOMER_ORDER_NOTICE_CONFLICT',
   RIDE_GUIDANCE_CONFLICT: 'RIDE_GUIDANCE_CONFLICT',
   CHECKOUT_CONFLICT: 'CHECKOUT_CONFLICT',
   CHECKOUT_NOT_FOUND: 'CHECKOUT_NOT_FOUND',
@@ -92,6 +93,10 @@ const DEFINITIONS = Object.freeze({
   [HTTP_ERROR_CODES.CUSTOMER_THEME_CONFLICT]: Object.freeze({
     statusCode: 409,
     message: 'Customer theme conflicts with a newer version.',
+  }),
+  [HTTP_ERROR_CODES.CUSTOMER_ORDER_NOTICE_CONFLICT]: Object.freeze({
+    statusCode: 409,
+    message: 'Customer order-start notice conflicts with a newer version.',
   }),
   [HTTP_ERROR_CODES.RIDE_GUIDANCE_CONFLICT]: Object.freeze({
     statusCode: 409,

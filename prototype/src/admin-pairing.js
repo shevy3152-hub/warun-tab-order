@@ -268,6 +268,54 @@ export async function fetchAdminCustomerTheme({ env = globalThis, fetchImpl = en
   }
 }
 
+export function normalizeAdminCustomerOrderStartNotice(body) {
+  if (!body || typeof body.heading !== "string" || !body.heading.trim() || [...body.heading].length > 120
+    || typeof body.body !== "string" || !body.body.trim() || [...body.body].length > 4000
+    || !Number.isSafeInteger(body.version) || body.version < 0
+    || !Number.isSafeInteger(body.updatedAtMs) || body.updatedAtMs < 0) {
+    throw new AdminPairingError("注文前の注意事項設定の応答が不正です。", { status: 503, code: "API_UNAVAILABLE" });
+  }
+  return { heading: body.heading, body: body.body, version: body.version, updatedAtMs: body.updatedAtMs };
+}
+
+export async function fetchAdminCustomerOrderStartNotice({ env = globalThis, fetchImpl = env.fetch } = {}) {
+  const { token, base, fetchImpl: request } = assertAdminTransport({ env, fetchImpl });
+  let response;
+  try {
+    response = await request(`${base}/admin/customer-order-start-notice`, {
+      headers: { Accept: "application/json", Authorization: `Bearer ${token}` },
+    });
+  } catch {
+    throw new AdminPairingError("注文前の注意事項を取得できません。", { status: 503, code: "API_UNAVAILABLE" });
+  }
+  if (!response.ok) await responseError(response, "注文前の注意事項を取得できません。", "CUSTOMER_ORDER_NOTICE_REQUEST_FAILED");
+  try { return normalizeAdminCustomerOrderStartNotice(await response.json()); }
+  catch (error) {
+    if (error instanceof AdminPairingError) throw error;
+    throw new AdminPairingError("注文前の注意事項応答が不正です。", { status: 503, code: "API_UNAVAILABLE" });
+  }
+}
+
+export async function saveAdminCustomerOrderStartNotice({ env = globalThis, heading, body, expectedVersion, fetchImpl = env.fetch } = {}) {
+  const { token, base, fetchImpl: request } = assertAdminTransport({ env, fetchImpl });
+  let response;
+  try {
+    response = await request(`${base}/admin/customer-order-start-notice`, {
+      method: "PUT",
+      headers: { Accept: "application/json", "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ expectedVersion, heading, body }),
+    });
+  } catch {
+    throw new AdminPairingError("注文前の注意事項を保存できません。", { status: 503, code: "API_UNAVAILABLE" });
+  }
+  if (!response.ok) await responseError(response, "注文前の注意事項を保存できません。", response.status === 409 ? "CUSTOMER_ORDER_NOTICE_CONFLICT" : "CUSTOMER_ORDER_NOTICE_REQUEST_FAILED");
+  try { return normalizeAdminCustomerOrderStartNotice(await response.json()); }
+  catch (error) {
+    if (error instanceof AdminPairingError) throw error;
+    throw new AdminPairingError("注文前の注意事項の保存応答が不正です。", { status: 503, code: "API_UNAVAILABLE" });
+  }
+}
+
 export async function saveAdminCustomerTheme({ env = globalThis, theme, expectedVersion = 0, fetchImpl = env.fetch } = {}) {
   const { token, base, fetchImpl: request } = assertAdminTransport({ env, fetchImpl });
   let response;

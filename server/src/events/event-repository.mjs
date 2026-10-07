@@ -68,6 +68,7 @@ function eventResource(eventType) {
   if (eventType.startsWith('ride_guidance.')) return 'rideGuidance';
   if (eventType.startsWith('checkout.')) return 'checkout';
   if (eventType === 'customer_theme.updated') return 'customerTheme';
+  if (eventType === 'customer_order_start_notice.updated') return 'customerOrderStartNotice';
   throw repositoryError(
     EVENT_ERROR_CODES.DATABASE_FAILURE,
     'The stored event type is unsupported.',
@@ -87,6 +88,7 @@ function canSeeEvent(row, device) {
   }
 
   if (resource === 'customerTheme') return device.role === 'customer';
+  if (resource === 'customerOrderStartNotice') return device.role === 'customer';
 
   if (resource === 'orders') {
     return row.order_customer_device_id === device.device_id;
@@ -109,6 +111,7 @@ function publicAggregateId(row, resource) {
   if (resource === 'menu') return 'menu';
   if (resource === 'businessHours') return 'business-hours';
   if (resource === 'customerTheme') return 'customer-theme';
+  if (resource === 'customerOrderStartNotice') return 'customer-order-notice';
   if (resource === 'checkout') return row.aggregate_id;
   return 'device-config';
 }

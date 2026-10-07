@@ -462,6 +462,23 @@ export async function fetchCustomerThemeConfig({ config, fetchImpl = globalThis.
   };
 }
 
+export async function fetchCustomerOrderStartNotice({ config, fetchImpl = globalThis.fetch } = {}) {
+  const endpoint = config?.baseUrl ? `${config.baseUrl}/customer/order-start-notice` : null;
+  if (!config?.enabled || !endpoint || typeof fetchImpl !== "function") {
+    throw new Error("Customer order-start notice API is not configured.");
+  }
+  const response = await fetchImpl(endpoint, {
+    method: "GET",
+    headers: { Accept: "application/json", Authorization: `Bearer ${config.token}` },
+  });
+  if (response.status !== 200) throw new Error("Customer order-start notice request failed.");
+  const body = await response.json();
+  if (!body || typeof body.heading !== "string" || !body.heading.trim() || typeof body.body !== "string" || !body.body.trim()) {
+    throw new Error("Customer order-start notice response is invalid.");
+  }
+  return { heading: body.heading, body: body.body };
+}
+
 export class CustomerCheckoutError extends Error {
   constructor(message, { status = 0, code = "CHECKOUT_API_ERROR" } = {}) {
     super(message);
@@ -961,6 +978,7 @@ export function createCustomerOrderClient({
       getMenu() { return Promise.resolve(null); },
       getTheme() { return Promise.resolve({ theme: "camellia" }); },
       getThemeConfig() { return Promise.resolve({ theme: "camellia", positionX: 0.5, positionY: 0.5, zoom: 1 }); },
+      getOrderStartNotice() { return Promise.resolve({ heading: "ご注文の前にご確認ください", body: "20歳未満の入店禁止\n飲酒運転しません・させません\nSNS投稿・LIVE配信禁止\nお支払いは現金のみ" }); },
       getCheckout() { return Promise.resolve(null); },
       requestCheckout() { return Promise.reject(new CustomerCheckoutError("会計APIはデモモードでは利用できません。", { code: "DEMO_MODE" })); },
       list() { return Promise.resolve([]); },
@@ -1006,6 +1024,8 @@ export function createCustomerOrderClient({
     return { status: current.visitContextId === expectedVisitContextId ? "match" : "stale" };
   };
   const service = createOrderOutbox({ store: usableStore, transport, eventTarget, ...options });
+  const invalidationListeners = new Set();
+  let stopInvalidationStream = null;
   return {
     ...service,
     async getVisitContextId() {
@@ -1070,6 +1090,9 @@ export function createCustomerOrderClient({
         fetchImpl: options.fetchImpl || global.fetch,
       });
     },
+    getOrderStartNotice() {
+      return fetchCustomerOrderStartNotice({ config, fetchImpl: options.fetchImpl || global.fetch });
+    },
     getCheckout() {
       return fetchCustomerCheckout({ config, fetchImpl: options.fetchImpl || global.fetch });
     },
@@ -1077,19 +1100,41 @@ export function createCustomerOrderClient({
       return requestCustomerCheckout({ config, checkoutRequestId, receiptRequested, fetchImpl: options.fetchImpl || global.fetch });
     },
     subscribeInvalidations(listener, { onReconnect, onAuthorizationFailure } = {}) {
-      return subscribeCustomerInvalidations({
-        config,
-        env: global,
-        fetchImpl: options.fetchImpl || global.fetch,
-        onEvent: listener,
-        onReconnect(reason) {
-          void service.flush({ force: true, connectivityRestored: true });
-          onReconnect?.(reason);
-        },
-        onAuthorizationFailure(errorCode) {
-          return service.holdPendingForReview(errorCode).finally(() => onAuthorizationFailure?.(errorCode));
-        },
-      });
+      if (typeof listener !== "function") return () => {};
+      const subscription = { listener, onReconnect, onAuthorizationFailure };
+      invalidationListeners.add(subscription);
+      if (!stopInvalidationStream) {
+        stopInvalidationStream = subscribeCustomerInvalidations({
+          config,
+          env: global,
+          fetchImpl: options.fetchImpl || global.fetch,
+          onEvent(event) {
+            for (const current of [...invalidationListeners]) {
+              try { current.listener(event); } catch { /* One observer must not block other invalidation handlers. */ }
+            }
+          },
+          onReconnect(reason) {
+            void service.flush({ force: true, connectivityRestored: true });
+            for (const current of [...invalidationListeners]) {
+              try { current.onReconnect?.(reason); } catch { /* One observer must not block other reconnect handlers. */ }
+            }
+          },
+          onAuthorizationFailure(errorCode) {
+            return service.holdPendingForReview(errorCode).finally(() => {
+              for (const current of [...invalidationListeners]) {
+                try { current.onAuthorizationFailure?.(errorCode); } catch { /* One observer must not block other authorization handlers. */ }
+              }
+            });
+          },
+        });
+      }
+      return () => {
+        invalidationListeners.delete(subscription);
+        if (invalidationListeners.size === 0) {
+          stopInvalidationStream?.();
+          stopInvalidationStream = null;
+        }
+      };
     },
   };
 }

@@ -31,7 +31,7 @@ test("credential survives reload-equivalent bootstrap and selects same-origin AP
   assert.equal(captured.global.WARUN_API_BASE, "http://192.168.1.12:5173/v1");
   assert.equal(captured.global.WARUN_API_TOKEN, TOKEN);
   assert.equal(captured.global.WARUN_VISIT_CONTEXT_ID, undefined);
-  assert.deepEqual(config, { tableId: 1, tableLabel: "テーブル1" });
+  assert.deepEqual(config, { tableId: 1, tableLabel: "テーブル1", deviceId: "device-id" });
   assert.doesNotMatch(captured.global.WARUN_API_BASE, new RegExp(TOKEN));
 });
 

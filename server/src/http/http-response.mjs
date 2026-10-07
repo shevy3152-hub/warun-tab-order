@@ -3,7 +3,7 @@ import { HTTP_ERROR_CODES, createHttpError } from './http-errors.mjs';
 const DEVICE_ROLES = new Set(['customer', 'kitchen', 'admin']);
 const ORDER_STATUSES = new Set(['new', 'active', 'completed', 'cancelled']);
 const STAFF_CALL_STATUSES = new Set(['open', 'resolved']);
-const EVENT_RESOURCES = new Set(['orders', 'menu', 'staffCalls', 'deviceConfig', 'businessHours', 'rideGuidance', 'checkout', 'customerTheme']);
+const EVENT_RESOURCES = new Set(['orders', 'menu', 'staffCalls', 'deviceConfig', 'businessHours', 'rideGuidance', 'checkout', 'customerTheme', 'customerOrderStartNotice']);
 const EVENT_TYPES_BY_ROLE = Object.freeze({
   customer: new Set([
     'order.created',
@@ -16,6 +16,7 @@ const EVENT_TYPES_BY_ROLE = Object.freeze({
     'device.revoked',
     'table.assignment_updated',
     'customer_theme.updated',
+    'customer_order_start_notice.updated',
   ]),
   kitchen: new Set([
     'order.created',
@@ -45,9 +46,10 @@ const EVENT_TYPES_BY_ROLE = Object.freeze({
     'checkout.requested', 'checkout.adjustments_updated', 'checkout.ready', 'checkout.cancelled', 'checkout.paid', 'checkout.voided',
     'table.assignment_updated',
     'customer_theme.updated',
+    'customer_order_start_notice.updated',
   ]),
 });
-const SUPPORTED_SCHEMA_VERSION = 19;
+const SUPPORTED_SCHEMA_VERSION = 20;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const OPAQUE_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
 
@@ -590,6 +592,19 @@ export function mapBusinessHoursResponse(settings, { includeVersion = false } = 
 export function mapCustomerThemeResponse(settings, { includeVersion = false } = {}) {
   requireObject(settings);
   const response = { theme: requireOneOf(settings.theme, new Set(['standard', 'camellia'])) };
+  if (includeVersion) {
+    response.version = requireInteger(settings.version);
+    response.updatedAtMs = requireInteger(settings.updatedAtMs);
+  }
+  return response;
+}
+
+export function mapCustomerOrderStartNoticeResponse(settings, { includeVersion = false } = {}) {
+  requireObject(settings);
+  const response = {
+    heading: requireString(settings.heading),
+    body: requireString(settings.body),
+  };
   if (includeVersion) {
     response.version = requireInteger(settings.version);
     response.updatedAtMs = requireInteger(settings.updatedAtMs);

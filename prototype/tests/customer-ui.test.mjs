@@ -234,7 +234,7 @@ test("customer refreshes menu and device context after session invalidations and
   assert.match(customerScreen, /resource === "deviceConfig"\) void refreshVisitState\(\)/);
   assert.match(customerScreen, /onReconnect: refreshVisitState/);
   assert.match(customerScreen, /orderClient\.getDeviceConfig\(\)/);
-  assert.match(customerScreen, /onCustomerDeviceConfigChange\?\.\(currentConfig\)/);
+  assert.match(customerScreen, /onCustomerDeviceConfigChange\?\.\(\{ \.\.\.currentConfig, deviceId: customerDeviceConfig\?\.deviceId \}\)/);
   assert.match(customerScreen, /currentConfig\.visitContextId !== pinnedVisitContextId/);
   assert.match(customerScreen, /setCartContextStale\(true\)/);
   assert.match(customerScreen, /setMenuRefreshKey\(\(current\) => current \+ 1\)/);

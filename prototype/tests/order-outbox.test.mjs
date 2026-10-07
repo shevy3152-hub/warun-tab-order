@@ -14,6 +14,7 @@ import {
   fetchCustomerThemeConfig,
   requestCustomerCheckout,
   fetchCustomerOrderHistory,
+  fetchCustomerOrderStartNotice,
   resolveOrderApiConfig,
   retryDelayForAttempt,
   subscribeCustomerInvalidations,
@@ -628,6 +629,20 @@ test("customer theme config API returns only safe placement values", async () =>
   assert.equal(Object.hasOwn(result, "notes"), false);
 });
 
+test("customer notice API returns shared plain text with preserved line breaks", async () => {
+  let captured;
+  const result = await fetchCustomerOrderStartNotice({
+    config: { enabled: true, baseUrl: "https://api.example.test/v1", token: "customer-runtime-secret" },
+    fetchImpl: async (url, options) => {
+      captured = { url, options };
+      return { status: 200, json: async () => ({ heading: "利用前", body: "一行目\n二行目" }) };
+    },
+  });
+  assert.equal(captured.url, "https://api.example.test/v1/customer/order-start-notice");
+  assert.equal(captured.options.headers.Authorization, "Bearer customer-runtime-secret");
+  assert.deepEqual(result, { heading: "利用前", body: "一行目\n二行目" });
+});
+
 test("customer theme API rejects unknown or malformed public responses", async () => {
   await assert.rejects(
     () => fetchCustomerTheme({
@@ -848,6 +863,58 @@ test("SSE reconnect flushes a pending order after the online event was missed", 
   assert.equal((await client.get(record.clientOrderId)).state, "synced");
   unsubscribe();
   await client.stop();
+});
+
+test("customer invalidation subscribers share one SSE connection and close it after the last unsubscribe", async () => {
+  const eventEpoch = uuid(63);
+  let eventRequests = 0;
+  let streamSignal;
+  const env = {
+    WARUN_ORDER_MODE: "api",
+    WARUN_API_BASE: "https://api.example.test/v1",
+    WARUN_API_TOKEN: "shared-sse-test-token",
+    location: { origin: "https://tablet.example.test" },
+    navigator: { onLine: true },
+  };
+  const client = createCustomerOrderClient({
+    global: env,
+    store: createMemoryOutbox(),
+    autoRetry: false,
+    fetchImpl: async (url, options = {}) => {
+      assert.equal(url, "https://api.example.test/v1/events");
+      eventRequests += 1;
+      streamSignal = options.signal;
+      let sent = false;
+      return {
+        ok: true,
+        status: 200,
+        headers: { get(name) { return name === "X-Event-Epoch" ? eventEpoch : null; } },
+        body: { getReader() { return { async read() {
+          if (!sent) {
+            sent = true;
+            const frame = `data: {"eventEpoch":"${eventEpoch}","eventId":1,"resource":"menu"}\n\n`;
+            return { done: false, value: new TextEncoder().encode(frame) };
+          }
+          if (streamSignal.aborted) return { done: true };
+          return new Promise((resolve) => streamSignal.addEventListener("abort", () => resolve({ done: true }), { once: true }));
+        } }; } },
+      };
+    },
+  });
+  const eventsA = [];
+  const eventsB = [];
+  const unsubscribeA = client.subscribeInvalidations((event) => eventsA.push(event));
+  const unsubscribeB = client.subscribeInvalidations((event) => eventsB.push(event));
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(eventRequests, 1);
+  assert.equal(eventsA.length, 1);
+  assert.equal(eventsB.length, 1);
+
+  unsubscribeA();
+  assert.equal(streamSignal.aborted, false);
+  unsubscribeB();
+  assert.equal(streamSignal.aborted, true);
 });
 
 test("API mode without runtime configuration is safe and does not use demo transport", async () => {

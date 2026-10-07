@@ -10,6 +10,7 @@ import { createSessionMenuAccessRepository } from "./catalog/session-menu-access
 import { createCheckoutRepository } from "./checkout/checkout-repository.mjs";
 import { createBusinessHoursRepository } from "./business-hours/business-hours-repository.mjs";
 import { createCustomerThemeRepository } from "./customer-theme/customer-theme-repository.mjs";
+import { createCustomerOrderNoticeRepository } from "./customer-order-notice-repository.mjs";
 import { createRideGuidanceRepository } from "./ride-guidance/ride-guidance-repository.mjs";
 import { initializeDatabase } from "./db/database.mjs";
 import { createDiagnosticRecorder } from "./diagnostics/diagnostic-recorder.mjs";
@@ -113,6 +114,7 @@ export function createWarunServer({ databasePath, runtimeInfo = undefined, now =
   const sessionMenuAccess = createSessionMenuAccessRepository({ database, now });
   const businessHours = createBusinessHoursRepository({ database, now });
   const customerTheme = createCustomerThemeRepository({ database, now });
+  const customerOrderNotice = createCustomerOrderNoticeRepository({ database, now });
   const rideGuidance = createRideGuidanceRepository({ database, now });
   const checkout = createCheckoutRepository({ database, now });
   const eventRepository = createEventRepository({ database });
@@ -150,6 +152,7 @@ export function createWarunServer({ databasePath, runtimeInfo = undefined, now =
     menuDiagnosticRecorder,
     businessHours,
     customerTheme,
+    customerOrderNotice,
     rideGuidance,
     checkout,
   });
@@ -161,6 +164,7 @@ export function createWarunServer({ databasePath, runtimeInfo = undefined, now =
     sessionMenuAccess.close?.();
     businessHours.close();
     customerTheme.close();
+    customerOrderNotice.close();
     rideGuidance.close();
     checkout.close();
     eventRepository.close();

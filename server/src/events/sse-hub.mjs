@@ -2,7 +2,7 @@ const EVENT_EPOCH_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f
 const EVENT_TYPE_PATTERN = /^[a-z0-9]+(?:[._-][a-z0-9]+)*$/;
 const EVENT_AUDIENCES = new Set(['customer', 'kitchen', 'admin']);
 const OPAQUE_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
-const EVENT_RESOURCES = new Set(['orders', 'menu', 'staffCalls', 'deviceConfig', 'businessHours', 'rideGuidance', 'checkout', 'customerTheme']);
+const EVENT_RESOURCES = new Set(['orders', 'menu', 'staffCalls', 'deviceConfig', 'businessHours', 'rideGuidance', 'checkout', 'customerTheme', 'customerOrderStartNotice']);
 const EVENT_TYPES_BY_AUDIENCE = Object.freeze({
   customer: new Set([
     'order.created', 'order.updated', 'order.completed',
@@ -10,6 +10,7 @@ const EVENT_TYPES_BY_AUDIENCE = Object.freeze({
     'staff_call.created', 'staff_call.resolved',
     'checkout.requested', 'checkout.adjustments_updated', 'checkout.ready', 'checkout.cancelled',
     'device.revoked', 'table.assignment_updated', 'customer_theme.updated',
+    'customer_order_start_notice.updated',
   ]),
   kitchen: new Set([
     'order.created', 'order.updated', 'order.completed',
@@ -28,6 +29,7 @@ const EVENT_TYPES_BY_AUDIENCE = Object.freeze({
     'ride_guidance.contacts_reordered',
     'checkout.requested', 'checkout.adjustments_updated', 'checkout.ready', 'checkout.cancelled',
     'customer_theme.updated',
+    'customer_order_start_notice.updated',
   ]),
 });
 
@@ -112,6 +114,7 @@ function eventResource(eventType) {
   if (eventType.startsWith('ride_guidance.')) return 'rideGuidance';
   if (eventType.startsWith('checkout.')) return 'checkout';
   if (eventType === 'customer_theme.updated') return 'customerTheme';
+  if (eventType === 'customer_order_start_notice.updated') return 'customerOrderStartNotice';
   return 'deviceConfig';
 }
 
@@ -543,13 +546,13 @@ export function createSseHub({
       || typeof notification !== 'object'
       || typeof notification.eventEpoch !== 'string'
       || !EVENT_EPOCH_PATTERN.test(notification.eventEpoch)
-      || notification.type !== 'customer_theme.updated'
+      || !['customer_theme.updated', 'customer_order_start_notice.updated'].includes(notification.type)
       || !OPAQUE_ID_PATTERN.test(notification.aggregateId)
       || !isNonNegativeSafeInteger(notification.occurredAtMs)
       || notification.payload === null
       || typeof notification.payload !== 'object'
       || Array.isArray(notification.payload)
-      || notification.payload.resource !== 'customerTheme'
+      || notification.payload.resource !== eventResource(notification.type)
       || notification.payload.refreshRequired !== true
     ) return 0;
 
