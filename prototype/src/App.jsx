@@ -36,6 +36,8 @@ import { pairingCodeQrSvg } from "./qr-code.js";
 import { CUSTOMER_TEST_THEME, normalizeCustomerTheme } from "./customer-theme.js";
 import { CUSTOMER_THEME_DEFINITIONS, isAvailableCustomerTheme } from "../../shared/customer-theme-definitions.mjs";
 import { customerThemeImageLayout, customerThemePositionAfterDrag, customerThemeStoredZoomForVisualZoom, normalizeCustomerThemeLayout, resolveCustomerThemeZoom, MIN_CUSTOMER_THEME_ZOOM, MAX_CUSTOMER_THEME_ZOOM } from "./customer-theme-layout.js";
+import { customerThemeGuideImageCoordinates } from "./customer-theme-guide.js";
+import { buildCustomerThemeGenerationPrompt } from "./customer-theme-generation-prompt.js";
 import { DEFAULT_BUSINESS_HOURS, businessHoursDisplay, businessHoursHourLabel, combineBusinessHoursTime, normalizeBusinessHours, splitBusinessHoursTime } from "./business-hours.js";
 import { DEFAULT_BUSINESS_HOURS_NOTICE, withBusinessHoursNotice } from "./business-hours-notice.js";
 import { CHECKOUT_ADJUSTMENT_TYPES, checkoutAdjustmentTotal, normalizeCheckoutAdjustments, parseFixedAdjustment } from "./checkout-adjustments.js";
@@ -2541,7 +2543,7 @@ function customerThemePaletteStyle(theme) {
   };
 }
 
-function CustomerThemePreview({ theme, variant, collapsed, onChangePosition, onImageError, metrics, onMetrics }) {
+function CustomerThemePreview({ theme, variant, collapsed, onChangePosition, onImageError, metrics, onMetrics, onGuideMeasurements }) {
   const railRef = useRef(null);
   const dragRef = useRef(null);
   const [guides, setGuides] = useState([]);
@@ -2551,6 +2553,20 @@ function CustomerThemePreview({ theme, variant, collapsed, onChangePosition, onI
     const rail = railRef.current;
     if (!rail) return;
     const railRect = rail.getBoundingClientRect();
+    const image = rail.querySelector(".customer-sidebar__theme-image");
+    const frame = rail.querySelector(".customer-sidebar__theme-viewport");
+    const imageRect = image?.complete && image.naturalWidth > 0 ? image.getBoundingClientRect() : null;
+    const clipRects = [frame, rail, rail.parentElement].filter(Boolean).map((element) => element.getBoundingClientRect());
+    const regions = Object.entries({ ...guideLabels, notice: "案内ボタン" }).map(([key, label]) => {
+      const element = rail.querySelector(key === "notice" ? ".business-hours-notice-button" : `[data-customer-guide="${key}"]`);
+      const rect = element?.getBoundingClientRect();
+      const hidden = !element || window.getComputedStyle(element).display === "none" || window.getComputedStyle(element).visibility !== "visible" || element.getClientRects().length === 0;
+      return { key, label, ...customerThemeGuideImageCoordinates({ image: CUSTOMER_THEME_DEFINITIONS[theme]?.image, imageRect, clipRects, regionRect: rect, hidden }) };
+    });
+    const visibleImage = customerThemeGuideImageCoordinates({ image: CUSTOMER_THEME_DEFINITIONS[theme]?.image, imageRect, clipRects, regionRect: imageRect });
+    const imageHidden = collapsed || imageFailed || !assetPath;
+    const metricsCurrent = metrics?.storedZoom === variant.zoom && metrics.frameWidth === frame?.clientWidth && metrics.frameHeight === frame?.clientHeight;
+    onGuideMeasurements?.({ theme, collapsed, imageHidden, frameWidth: frame?.clientWidth, frameHeight: frame?.clientHeight, zoom: metrics?.zoom, minimumZoom: metrics?.minimumZoom, storedZoom: imageHidden || metricsCurrent ? variant.zoom : null, positionX: variant.positionX, positionY: variant.positionY, spaceX: metrics?.spaceX, spaceY: metrics?.spaceY, rangeX: metrics?.rangeX, rangeY: metrics?.rangeY, viewportWidth: window.innerWidth, viewportHeight: window.innerHeight, dpr: window.devicePixelRatio, visibleImage, categoryCount: rail.querySelectorAll(".category-nav button").length, placeholderCount: rail.querySelectorAll(".category-nav__placeholder").length, regions });
     const next = Object.entries(guideLabels).map(([key, label]) => {
       const element = rail.querySelector(`[data-customer-guide="${key}"]`);
       if (!element) return null;
@@ -2567,13 +2583,19 @@ function CustomerThemePreview({ theme, variant, collapsed, onChangePosition, onI
     setGuides(next);
   };
   useLayoutEffect(() => {
-    measureGuides();
     const rail = railRef.current;
     if (!rail || typeof ResizeObserver !== "function") return undefined;
-    const observer = new ResizeObserver(measureGuides);
-    observer.observe(rail);
-    return () => observer.disconnect();
-  }, [collapsed, theme]);
+    // Measure after image style and frame metrics have reached the DOM.
+    let animationFrame;
+    const schedule = () => { window.cancelAnimationFrame(animationFrame); animationFrame = window.requestAnimationFrame(measureGuides); };
+    const observer = new ResizeObserver(schedule);
+    [rail, rail.parentElement, ...rail.querySelectorAll(".customer-sidebar__theme-viewport, .customer-sidebar__theme-image, [data-customer-guide], .business-hours-notice-button")].forEach((element) => observer.observe(element));
+    const image = rail.querySelector(".customer-sidebar__theme-image");
+    image?.addEventListener("load", schedule);
+    window.addEventListener("resize", schedule);
+    schedule();
+    return () => { observer.disconnect(); window.cancelAnimationFrame(animationFrame); image?.removeEventListener("load", schedule); window.removeEventListener("resize", schedule); };
+  }, [collapsed, theme, imageFailed, variant.positionX, variant.positionY, variant.zoom, metrics, onGuideMeasurements]);
   useEffect(() => { setImageFailed(false); }, [theme, variant?.prompt]);
   const onPointerDown = (event) => {
     if (collapsed || !assetPath || !themeAvailable || imageFailed) return;
@@ -2619,7 +2641,7 @@ function CustomerThemePreview({ theme, variant, collapsed, onChangePosition, onI
     </div>
     {!themeAvailable && theme !== "standard" ? <p className="customer-theme-preview__fallback" role="status">画像未配置のため選択・保存できません。素材配置後にプレビューを有効にします。</p> : null}
     {imageFailed ? <p className="customer-theme-preview__fallback" role="status">画像を読み込めない場合は標準の赤レールへfallbackします。</p> : null}
-    {!collapsed && !imageFailed && assetPath && themeAvailable ? <p className="customer-theme-preview__hint">画像をドラッグ、またはX・Yスライダーで移動できます。実寸 {CUSTOMER_THEME_DEFINITIONS[theme]?.image?.width ?? "—"}×{CUSTOMER_THEME_DEFINITIONS[theme]?.image?.height ?? "—"}px。現在の切り抜き約 横{Math.round(metrics?.croppedSourceWidth ?? 0)}px・縦{Math.round(metrics?.croppedSourceHeight ?? 0)}px。操作範囲は横{Math.round(metrics?.rangeX ?? 0)}px・縦{Math.round(metrics?.rangeY ?? 0)}pxです。破線は客席UIの重なり領域です。</p> : <p className="customer-theme-preview__hint">{collapsed ? "折り畳み時は画像を表示せず、従来の赤レールに戻ります。" : "標準表示では画像を使用しません。"}</p>}
+    {!collapsed && !imageFailed && assetPath && themeAvailable ? null : <p className="customer-theme-preview__hint">{collapsed ? "折り畳み時は画像を表示せず、従来の赤レールに戻ります。" : "標準表示では画像を使用しません。"}</p>}
   </div>;
 }
 
@@ -2627,7 +2649,9 @@ function CustomerThemeEditor({ adminApiMode }) {
   const [state, setState] = useState({ loading: adminApiMode, saving: false, error: "", message: "", formal: null, draft: "standard", editingTheme: "standard", draftThemes: cloneCustomerThemeVariants() });
   const [previewCollapsed, setPreviewCollapsed] = useState(false);
   const [previewMetrics, setPreviewMetrics] = useState(null);
+  const [guideMeasurements, setGuideMeasurements] = useState(null);
   const [copyMessage, setCopyMessage] = useState("");
+  const [generationCopyMessage, setGenerationCopyMessage] = useState("");
   const [imageFolderCopyMessage, setImageFolderCopyMessage] = useState("");
 
   const load = async ({ keepMessage = false } = {}) => {
@@ -2654,6 +2678,9 @@ function CustomerThemeEditor({ adminApiMode }) {
 
   const selectedVariant = state.draftThemes[state.editingTheme] ?? DEFAULT_CUSTOMER_THEME_VARIANTS.standard;
   const selectedDefinition = CUSTOMER_THEME_DEFINITIONS[state.editingTheme] ?? CUSTOMER_THEME_DEFINITIONS.standard;
+  const currentGuideMeasurement = guideMeasurements?.theme === state.editingTheme && guideMeasurements.collapsed === previewCollapsed && guideMeasurements.storedZoom === selectedVariant.zoom && guideMeasurements.positionX === selectedVariant.positionX && guideMeasurements.positionY === selectedVariant.positionY ? guideMeasurements : null;
+  const generationPrompt = buildCustomerThemeGenerationPrompt({ definition: selectedDefinition, variant: selectedVariant, measurement: currentGuideMeasurement });
+  useEffect(() => { setGenerationCopyMessage(""); }, [generationPrompt]);
   const minimumZoom = previewMetrics?.minimumZoom ?? 0.5;
   const visualZoom = resolveCustomerThemeZoom(selectedVariant.zoom, minimumZoom);
   const setSelectedVariant = (patch) => setState((current) => ({
@@ -2696,6 +2723,30 @@ function CustomerThemeEditor({ adminApiMode }) {
       setImageFolderCopyMessage("コピーできませんでした。上のパスを選択してコピーしてください。");
     }
   };
+  const copyGenerationPrompt = async () => {
+    if (!generationPrompt || !currentGuideMeasurement) return;
+    let temporaryTextarea;
+    try {
+      if (typeof window.navigator?.clipboard?.writeText === "function") {
+        await window.navigator.clipboard.writeText(generationPrompt);
+      } else {
+        // The full text may be inside a closed disclosure; copy from a mounted fallback.
+        temporaryTextarea = document.createElement("textarea");
+        temporaryTextarea.value = generationPrompt;
+        temporaryTextarea.readOnly = true;
+        temporaryTextarea.style.position = "fixed";
+        temporaryTextarea.style.opacity = "0";
+        document.body.appendChild(temporaryTextarea);
+        temporaryTextarea.select();
+        if (!document.execCommand("copy")) throw new Error("copy failed");
+      }
+      setGenerationCopyMessage("ベースプロンプトとイメージ指示の全文をコピーしました。");
+    } catch {
+      setGenerationCopyMessage("コピーできませんでした。「生成プロンプト全文を確認」を開き、全文を選択してコピーしてください。");
+    } finally {
+      temporaryTextarea?.remove();
+    }
+  };
   const save = async () => {
     if (!adminApiMode || state.saving || !state.formal) return;
     setState((current) => ({ ...current, saving: true, error: "", message: "" }));
@@ -2710,7 +2761,7 @@ function CustomerThemeEditor({ adminApiMode }) {
   const discard = () => setState((current) => current.formal ? ({ ...current, draft: current.formal.theme, editingTheme: current.formal.theme, draftThemes: cloneCustomerThemeVariants(current.formal.themes), message: "", error: "" }) : current);
   const previewTheme = state.editingTheme;
   return <section className="customer-theme-editor" aria-label="客席左レールテーマ設定">
-    <header className="customer-theme-editor__heading"><div><span className="section-kicker">CUSTOMER RAIL THEME</span><h2>客席左レールのテーマ</h2><p>客席画面だけに適用します。折り畳み時は従来の赤レールに戻ります。</p></div><span className="customer-theme-editor__version">正式version {state.formal?.version ?? "—"}</span></header>
+    <header className="customer-theme-editor__heading"><div><span className="section-kicker">CUSTOMER RAIL THEME</span><h2>客席左レールのテーマ</h2></div><span className="customer-theme-editor__version">正式version {state.formal?.version ?? "—"}</span></header>
     {state.loading ? <p className="customer-theme-editor__status" role="status">正式値を読み込み中です。</p> : null}
     {!adminApiMode ? <p className="customer-theme-editor__status">管理API接続時に編集できます。</p> : null}
     <fieldset className="customer-theme-editor__options" disabled={!adminApiMode || state.loading || state.saving}>
@@ -2726,8 +2777,34 @@ function CustomerThemeEditor({ adminApiMode }) {
     </fieldset>
     <div className="customer-theme-editor__details">
       <div className="customer-theme-editor__metadata">
-        <div className="customer-theme-editor__field"><label htmlFor="customer-theme-prompt">画像生成プロンプト</label><textarea id="customer-theme-prompt" rows={6} maxLength={4000} value={selectedVariant.prompt} disabled={!adminApiMode || state.loading || state.saving} onChange={(event) => setSelectedVariant({ prompt: event.target.value })} /><div className="customer-theme-editor__field-actions"><span>{[...selectedVariant.prompt].length} / 4000</span><button type="button" className="button button--outline" onClick={() => void copyPrompt()} disabled={!selectedVariant.prompt}>プロンプトをコピー</button></div>{copyMessage ? <small className="customer-theme-editor__copy-status" role="status">{copyMessage}</small> : null}</div>
-        <label className="customer-theme-editor__field" htmlFor="customer-theme-notes"><span>制作メモ</span><textarea id="customer-theme-notes" rows={5} maxLength={4000} value={selectedVariant.notes} disabled={!adminApiMode || state.loading || state.saving} onChange={(event) => setSelectedVariant({ notes: event.target.value })} /><small>{[...selectedVariant.notes].length} / 4000</small></label>
+        <div className="customer-theme-editor__field"><label htmlFor="customer-theme-prompt">イメージ指示</label><textarea id="customer-theme-prompt" rows={6} maxLength={4000} value={selectedVariant.prompt} disabled={!adminApiMode || state.loading || state.saving} onChange={(event) => setSelectedVariant({ prompt: event.target.value })} /><small>{[...selectedVariant.prompt].length} / 4000</small></div>
+        <p>好みの絵柄を入力し、全文コピーして画像生成AIへ渡してください。サイズと現在の重なり座標は自動で含まれます。</p>
+        {selectedDefinition.image ? <>
+          <button type="button" className="button button--outline" disabled={!currentGuideMeasurement || state.loading} onClick={() => void copyGenerationPrompt()}>画像生成プロンプトを全文コピー</button>
+          {generationCopyMessage ? <small role="status">{generationCopyMessage}</small> : null}
+          <details className="customer-theme-editor__disclosure" aria-label="生成プロンプト全文を確認">
+            <summary>生成プロンプト全文を確認</summary>
+            <div className="customer-theme-editor__field"><label htmlFor="customer-theme-generation-prompt">生成プロンプト全文</label><textarea id="customer-theme-generation-prompt" rows={20} readOnly value={generationPrompt} /></div>
+          </details>
+        </> : null}
+        <details className="customer-theme-editor__disclosure" aria-label="制作ガイド・詳細">
+          <summary>制作ガイド・詳細</summary>
+          <div className="customer-theme-editor__metadata">
+        <label className="customer-theme-editor__field" htmlFor="customer-theme-notes"><span>制作・仕様メモ</span><textarea id="customer-theme-notes" rows={5} maxLength={4000} value={selectedVariant.notes} disabled={!adminApiMode || state.loading || state.saving} onChange={(event) => setSelectedVariant({ notes: event.target.value })} /><small>{[...selectedVariant.notes].length} / 4000</small></label>
+        <div><button type="button" className="button button--outline" onClick={() => void copyPrompt()} disabled={!selectedVariant.prompt}>イメージ指示だけをコピー</button>{copyMessage ? <small role="status">{copyMessage}</small> : null}</div>
+        {selectedDefinition.assetPath ? <div className="customer-theme-editor__field" aria-label="制作メモの重なり回避補足">
+          <strong>重なり回避</strong>
+          <p>重要な文字・主役は、破線で示す店名・カテゴリ・営業時間などを避け、表示範囲の端から余裕を取ってください。カテゴリ枠には上側の余白も含まれます。枠側の余白は画像の一部ではありません。</p>
+        </div> : null}
+        {selectedDefinition.image ? <section className="customer-theme-editor__field" aria-label="現在のプレビューでUIが重なる画像座標">
+          <strong>現在のプレビューでUIが重なる画像座標</strong>
+          <p>現在の管理プレビューの参考値です。実客席では画面サイズや表示内容により変わります。</p>
+          <small>元画像{selectedDefinition.image.width}×{selectedDefinition.image.height}pxの左上が原点です。単位は画像px。クリップ後の交差部分を小数第1位まで表示します。</small>
+          {guideMeasurements?.theme !== previewTheme ? <p>計測待ち</p> : guideMeasurements.imageHidden ? <p>画像が非表示のため座標は表示しません。</p> : <>
+            <p>枠 {guideMeasurements.frameWidth ?? "—"}×{guideMeasurements.frameHeight ?? "—"} CSS px ／ 倍率 {guideMeasurements.zoom?.toFixed(3) ?? "—"}×（枠いっぱい＝1.00） ／ X {(guideMeasurements.positionX * 100).toFixed(0)}%・Y {(guideMeasurements.positionY * 100).toFixed(0)}% ／ カテゴリ {guideMeasurements.categoryCount}件{guideMeasurements.placeholderCount ? `＋空き行${guideMeasurements.placeholderCount}件` : ""}</p>
+            <dl>{guideMeasurements.regions.map((region) => <div key={region.key}><dt>{region.label}</dt><dd>{region.status === "hidden" ? "要素が非表示" : region.status === "pending" ? "計測待ち" : region.status === "none" ? "画像との交差なし" : `左 ${region.left.toFixed(1)} ／ 上 ${region.top.toFixed(1)} ／ 右 ${region.right.toFixed(1)} ／ 下 ${region.bottom.toFixed(1)}`}</dd></div>)}</dl>
+          </>}
+        </section> : null}
         <section className="customer-theme-editor__image-location" aria-label="画像ファイルの場所">
           <strong>画像ファイルの場所</strong>
           <dl><div><dt>画像名</dt><dd>{selectedDefinition.assetPath ? selectedDefinition.assetPath.split("/").pop() : "画像なし"}</dd></div><div><dt>画像寸法</dt><dd>{selectedDefinition.image ? `${selectedDefinition.image.width}×${selectedDefinition.image.height}px` : "—"}</dd></div></dl>
@@ -2737,10 +2814,12 @@ function CustomerThemeEditor({ adminApiMode }) {
           <p>同じ名前・同じ寸法のPNGへ差し替える場合、コード変更は不要です。旧画像を別名または別フォルダで保管してから、新画像を入れてください。表示中のQAへの反映は別途必要です。</p>
         </section>
         <dl className="customer-theme-editor__spec"><div><dt>制作テーマ</dt><dd>{selectedDefinition.label}{!selectedDefinition.available ? "（画像未配置）" : ""}</dd></div><div><dt>実画像寸法</dt><dd>{selectedDefinition.image ? `${selectedDefinition.image.width} × ${selectedDefinition.image.height} px` : "画像なし（標準の赤レール）"}</dd></div><div><dt>画像比率</dt><dd>{selectedDefinition.image ? `${(selectedDefinition.image.width / selectedDefinition.image.height).toFixed(3)}:1（幅:高さ）` : "—"}</dd></div><div><dt>描画条件</dt><dd>レール幅328 CSS px・高さ100dvh。倍率1.00×は枠いっぱい、表示枠に合わせた最小倍率で画像全体を表示します。</dd></div><div><dt>適用範囲</dt><dd>客席画面の展開時のみ</dd></div></dl>
+          </div>
+        </details>
       </div>
       <div className="customer-theme-editor__preview-panel">
-        <div className="customer-theme-editor__preview-heading"><div><strong>配置プレビュー</strong><small>実際の客席レールUI要素を測定した制作ガイド</small></div><div className="customer-theme-editor__preview-toggle"><button type="button" className={previewCollapsed ? "" : "is-active"} aria-pressed={!previewCollapsed} onClick={() => setPreviewCollapsed(false)}>展開時</button><button type="button" className={previewCollapsed ? "is-active" : ""} aria-pressed={previewCollapsed} onClick={() => setPreviewCollapsed(true)}>折り畳み時</button></div></div>
-        <CustomerThemePreview theme={previewTheme} variant={selectedVariant} collapsed={previewCollapsed} onChangePosition={setSelectedVariant} metrics={previewMetrics} onMetrics={setPreviewMetrics} />
+        <div className="customer-theme-editor__preview-heading"><div><strong>配置プレビュー</strong></div><div className="customer-theme-editor__preview-toggle"><button type="button" className={previewCollapsed ? "" : "is-active"} aria-pressed={!previewCollapsed} onClick={() => setPreviewCollapsed(false)}>展開時</button><button type="button" className={previewCollapsed ? "is-active" : ""} aria-pressed={previewCollapsed} onClick={() => setPreviewCollapsed(true)}>折り畳み時</button></div></div>
+        <CustomerThemePreview theme={previewTheme} variant={selectedVariant} collapsed={previewCollapsed} onChangePosition={setSelectedVariant} metrics={previewMetrics} onMetrics={setPreviewMetrics} onGuideMeasurements={setGuideMeasurements} />
         {!previewCollapsed ? <div className="customer-theme-editor__position-controls">
           <label>ズーム <output>{visualZoom.toFixed(2)}×</output><input aria-label="テーマ画像ズーム" type="range" min={minimumZoom} max={MAX_CUSTOMER_THEME_ZOOM} step="0.01" value={visualZoom} disabled={!adminApiMode || state.loading || state.saving} onChange={(event) => setSelectedVariant({ zoom: customerThemeStoredZoomForVisualZoom(Number(event.target.value), minimumZoom) })} /><small>1.00×は枠いっぱい、最小{minimumZoom.toFixed(2)}×は画像全体が収まる倍率です。</small></label>
           <label>横位置 X <output>{Math.round(selectedVariant.positionX * 100)}%</output><input aria-label="テーマ画像の横位置" type="range" min="0" max="1" step="0.005" value={selectedVariant.positionX} disabled={!adminApiMode || state.loading || state.saving || !previewMetrics?.canMoveX} onChange={(event) => setSelectedVariant({ positionX: Number(event.target.value) })} /><small>{previewMetrics?.canMoveX ? `${previewMetrics.overflowX > 0 ? "切り抜き" : "余白"}範囲で左右に最大${Math.round(previewMetrics.rangeX)}px移動できます。` : "この方向は枠に一致しているため移動不要です。"}</small></label>

@@ -900,6 +900,8 @@ h1, h2, h3, p { margin: 0; }
 .customer-theme-editor__actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 14px; }
 .customer-theme-editor__details { display: grid; grid-template-columns: minmax(280px, 1fr) minmax(280px, 1fr); gap: 18px; margin-top: 18px; }
 .customer-theme-editor__metadata { display: grid; gap: 14px; align-content: start; }
+.customer-theme-editor__disclosure > summary { cursor: pointer; padding: 10px 0; font-size: 13px; font-weight: 900; }
+.customer-theme-editor__disclosure[open] > summary { margin-bottom: 8px; }
 .customer-theme-editor__field { display: grid; gap: 6px; color: var(--ink); font-size: 13px; font-weight: 900; }
 .customer-theme-editor__field textarea { width: 100%; box-sizing: border-box; border: 1px solid var(--line); background: #fff; color: var(--ink); padding: 10px 12px; font: inherit; font-weight: 700; line-height: 1.5; resize: vertical; }
 .customer-theme-editor__field textarea:focus { outline: 2px solid var(--red); outline-offset: 1px; }
