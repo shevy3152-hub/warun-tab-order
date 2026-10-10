@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { CUSTOMER_THEMES, CUSTOMER_TEST_THEME, normalizeCustomerTheme } from "../src/customer-theme.js";
+import { CUSTOMER_THEME_DEFINITIONS, isAvailableCustomerTheme } from "../../shared/customer-theme-definitions.mjs";
+import { MIN_CUSTOMER_THEME_ZOOM, customerThemeImageLayout, customerThemeImageMinimumZoom, customerThemePositionAfterDrag, customerThemeStoredZoomForVisualZoom, normalizeCustomerThemeLayout, resolveCustomerThemeZoom } from "../src/customer-theme-layout.js";
 
 const appSource = await readFile(new URL("../src/App.jsx", import.meta.url), "utf8");
 const styles = await readFile(new URL("../src/styles.css", import.meta.url), "utf8");
@@ -17,24 +19,67 @@ test("CustomerScreen renders menu prices but no cart or customer-history totals"
 });
 
 test("CustomerScreen exposes a normalized rail theme with camellia as the active test theme", () => {
-  assert.deepEqual(CUSTOMER_THEMES, { standard: "standard", camellia: "camellia" });
+  assert.deepEqual(CUSTOMER_THEMES, { standard: "standard", camellia: "camellia", "autumn-leaves": "autumn-leaves", "moon-susuki": "moon-susuki", "japanese-halloween": "japanese-halloween" });
   assert.equal(CUSTOMER_TEST_THEME, "camellia");
   assert.equal(normalizeCustomerTheme("unknown"), "standard");
   assert.equal(normalizeCustomerTheme("standard"), "standard");
   assert.equal(normalizeCustomerTheme("camellia"), "camellia");
+  assert.equal(normalizeCustomerTheme("autumn-leaves"), "autumn-leaves");
+  assert.equal(isAvailableCustomerTheme("camellia"), true);
+  assert.equal(isAvailableCustomerTheme("autumn-leaves"), true);
+  assert.equal(isAvailableCustomerTheme("moon-susuki"), true);
+  assert.equal(isAvailableCustomerTheme("japanese-halloween"), true);
   assert.match(appSource, /normalizeCustomerTheme\(theme\)/);
   assert.match(customerScreen, /data-customer-theme=\{visibleCustomerTheme\}/);
 });
 
+test("seasonal customer rail themes point to the supplied original-size PNG assets", async () => {
+  const expected = {
+    "autumn-leaves": [1008, 1561],
+    "moon-susuki": [1007, 1561],
+    "japanese-halloween": [803, 1958],
+  };
+  for (const [theme, [width, height]] of Object.entries(expected)) {
+    const assetPath = CUSTOMER_THEME_DEFINITIONS[theme].assetPath;
+    assert.ok(assetPath);
+    const bytes = await readFile(new URL(`../public${assetPath}`, import.meta.url));
+    assert.equal(bytes.toString("ascii", 1, 4), "PNG");
+    assert.equal(bytes.readUInt32BE(16), width);
+    assert.equal(bytes.readUInt32BE(20), height);
+  }
+});
+
 test("Customer rail keeps standard red as the safe fallback and scopes camellia imagery", () => {
-  assert.match(styles, /\.customer-sidebar \{[^}]*background: var\(--red\);/);
-  assert.match(styles, /\.customer-sidebar__theme-image \{[\s\S]*object-fit: cover/);
-  assert.match(customerScreen, /visibleCustomerTheme === "camellia" \? <img className="customer-sidebar__theme-image"/);
-  assert.match(customerScreen, /onError=\{\(\) => setCustomerThemeImageFailed\(true\)\}/);
-  assert.match(styles, /\.customer-app--category-collapsed \.customer-sidebar \{ padding: 18px 10px; \}/);
+  assert.match(styles, /\.customer-sidebar \{[^}]*background: var\(--customer-theme-rail-background, var\(--red\)\);/);
+  assert.match(styles, /\.customer-theme-option__preview \{[^}]*object-fit: cover/);
+  assert.match(customerScreen, /customerThemeAssetPath && visibleCustomerTheme === customerTheme \? <CustomerThemeImage/);
+  assert.match(appSource, /function CustomerThemeImage[\s\S]*customerThemeImageLayout/);
+  assert.match(appSource, /function CustomerThemePreview[\s\S]*<CustomerThemeImage/);
+  assert.match(appSource, /disabled={!available}/);
+  assert.match(appSource, /画像未配置・テーマ選択不可/);
+  assert.match(appSource, /onError=\{\(\) => setCustomerThemeImageFailed\(true\)\}/);
+  assert.match(styles, /\.customer-app--category-collapsed \.customer-sidebar \{ background: var\(--red\); padding: 18px 10px; \}/);
   assert.doesNotMatch(styles, /customer-sidebar::before|customer-sidebar::after|customer-sidebar \{ background: var\(--red\) url/);
   const standardRailRule = styles.match(/\.customer-sidebar \{[^}]*\}/)?.[0] ?? "";
   assert.doesNotMatch(standardRailRule, /customer-rail-washi-camellia/);
+});
+
+test("Japanese Halloween palette is theme-scoped and returns to the original rail palette when collapsed or unavailable", () => {
+  const palette = CUSTOMER_THEME_DEFINITIONS["japanese-halloween"].railPalette;
+  assert.equal(palette.background, "#f3eadb");
+  assert.equal(palette.foreground, "#482c1d");
+  assert.equal(CUSTOMER_THEME_DEFINITIONS.standard.railPalette, undefined);
+  assert.equal(CUSTOMER_THEME_DEFINITIONS.camellia.railPalette, undefined);
+  assert.equal(CUSTOMER_THEME_DEFINITIONS["autumn-leaves"].railPalette, undefined);
+  assert.equal(CUSTOMER_THEME_DEFINITIONS["moon-susuki"].railPalette, undefined);
+  assert.match(appSource, /customerThemePaletteStyle\(visibleCustomerTheme\)/);
+  assert.ok(appSource.includes('customerThemePaletteStyle(imageFailed || !themeAvailable ? "standard" : theme)'));
+  assert.ok(styles.includes('.customer-app[data-customer-theme="japanese-halloween"]:not(.customer-app--category-collapsed) .customer-sidebar'));
+  assert.ok(styles.includes('.category-nav button.is-active { background: var(--customer-theme-rail-selected-background)'));
+  assert.ok(styles.includes('button:focus-visible { outline: 3px solid var(--customer-theme-rail-focus)'));
+  assert.ok(styles.includes('.customer-theme-preview__rail[data-customer-theme="japanese-halloween"]:not(.is-collapsed)'));
+  assert.match(appSource, /customer-hours\$\{guideKey \? " customer-theme-preview__hours"/);
+  assert.match(appSource, /style=\{guideKey \? \{ color: "var\(--customer-theme-rail-foreground, #fff\)"/);
 });
 
 test("API customer themes are fetched with auth, refreshed by the existing invalidation stream, and fall back on image failure", () => {
@@ -42,23 +87,89 @@ test("API customer themes are fetched with auth, refreshed by the existing inval
   assert.match(customerScreen, /event\?\.resource === "customerTheme"/);
   assert.match(customerScreen, /event\?\.type === "customer_theme\.updated"/);
   assert.match(customerScreen, /setCustomerThemeImageFailed\(true\)/);
-  assert.match(customerScreen, /const visibleCustomerTheme = customerThemeImageFailed \? "standard" : customerTheme/);
+  assert.match(customerScreen, /const visibleCustomerTheme = customerThemeImageFailed \|\| !isAvailableCustomerTheme\(customerTheme\) \? "standard" : customerTheme/);
   assert.match(customerScreen, /data-customer-theme=\{visibleCustomerTheme\}/);
   assert.match(customerScreen, /orderClient\.getThemeConfig\(\)/);
   assert.match(customerScreen, /customerThemeConfig\.positionX/);
-  assert.match(customerScreen, /--customer-theme-position-x/);
+  assert.match(appSource, /normalizeCustomerThemeLayout\(variant\)/);
 });
 
-test("admin customer theme editor includes production notes, measured guide preview, and placement controls", () => {
+test("admin customer theme editor includes production notes, measured guide preview, and bounded placement controls", () => {
   assert.match(appSource, /画像生成プロンプト/);
   assert.match(appSource, /プロンプトをコピー/);
   assert.match(appSource, /制作メモ/);
-  assert.match(appSource, /426 × 1587 px/);
+  assert.match(appSource, /画像ファイルの場所/);
+  assert.match(appSource, /フォルダのパスをコピー/);
+  assert.match(appSource, /selectedDefinition\.assetPath/);
+  assert.match(appSource, /selectedDefinition\.image\.width/);
+  assert.match(appSource, /selectedDefinition\.image\.height/);
+  assert.match(appSource, /実画像寸法/);
   assert.match(appSource, /data-customer-guide/);
-  assert.match(appSource, /中央に戻す/);
+  assert.match(appSource, /画像全体を表示/);
+  assert.match(appSource, /枠いっぱいに表示/);
   assert.match(appSource, /onPointerMove/);
+  assert.match(appSource, /aria-label="テーマ画像の横位置"/);
+  assert.match(appSource, /aria-label="テーマ画像の縦位置"/);
+  assert.match(appSource, /この方向は枠に一致しているため移動不要です/);
+  assert.match(appSource, /setSelectedVariant\(\{ positionX: 0\.5, positionY: 0\.5, zoom: 0\.5 \}\)/);
+  assert.match(appSource, /MIN_CUSTOMER_THEME_ZOOM/);
+  assert.match(styles, /\.customer-theme-option__preview \{[^}]*width: 82px; height: 200px/);
+  assert.match(styles, /\.customer-theme-preview__viewport \{[^}]*\.62/);
+  assert.match(styles, /\.customer-theme-preview__rail \{[^}]*transform-origin: top left/);
+  assert.match(styles, /\.customer-theme-preview__rail \.customer-theme-preview__hours \{/);
+  assert.doesNotMatch(styles, /(?:^|\n)\.customer-theme-preview__hours(?:\s+(?:b|span))?\s*\{/);
   assert.match(appSource, /折り畳み時/);
   assert.match(styles, /customer-theme-preview__guide/);
+});
+
+test("customer theme placement supports cover and full-image fit with shared drag positioning", () => {
+  assert.equal(MIN_CUSTOMER_THEME_ZOOM, 1);
+  assert.deepEqual(normalizeCustomerThemeLayout({ zoom: 0.4, positionX: -1, positionY: 2 }), { zoom: 0.5, positionX: 0, positionY: 1 });
+  assert.equal(resolveCustomerThemeZoom(0.5, 0.6), 0.6);
+  assert.equal(resolveCustomerThemeZoom(1, 0.6), 1);
+  assert.equal(resolveCustomerThemeZoom(1.75, 0.6), 1.75);
+  assert.equal(customerThemeStoredZoomForVisualZoom(0.6, 0.6), 0.5);
+  assert.equal(resolveCustomerThemeZoom(customerThemeStoredZoomForVisualZoom(0.8, 0.6), 0.6), 0.8);
+  for (const theme of ["camellia", "autumn-leaves", "moon-susuki", "japanese-halloween"]) {
+    const image = CUSTOMER_THEME_DEFINITIONS[theme].image;
+    const minZoom = customerThemeImageMinimumZoom(image, 328, 800);
+    for (const zoom of [0.5, minZoom, 1, 1.75, 3]) {
+      for (const positionX of [0, 0.5, 1]) {
+        for (const positionY of [0, 0.5, 1]) {
+          const layout = customerThemeImageLayout(image, { zoom, positionX, positionY }, 328, 800);
+          assert.ok(Math.abs((parseFloat(layout.style.width) / parseFloat(layout.style.height)) - (image.width / image.height)) < 1e-10);
+          const left = parseFloat(layout.style.left);
+          const top = parseFloat(layout.style.top);
+          assert.ok(left >= Math.min(0, -layout.metrics.deltaX) - 1e-8 && left <= Math.max(0, -layout.metrics.deltaX) + 1e-8);
+          assert.ok(top >= Math.min(0, -layout.metrics.deltaY) - 1e-8 && top <= Math.max(0, -layout.metrics.deltaY) + 1e-8);
+          if (layout.metrics.deltaX >= 0) assert.ok(left <= 0 && left + layout.metrics.renderWidth >= 328 - 1e-8);
+          else assert.ok(left >= 0 && left + layout.metrics.renderWidth <= 328 + 1e-8);
+          if (layout.metrics.deltaY >= 0) assert.ok(top <= 0 && top + layout.metrics.renderHeight >= 800 - 1e-8);
+          else assert.ok(top >= 0 && top + layout.metrics.renderHeight <= 800 + 1e-8);
+          assert.ok(layout.metrics.zoom >= layout.metrics.minimumZoom);
+        }
+      }
+    }
+  }
+  const image = CUSTOMER_THEME_DEFINITIONS["japanese-halloween"].image;
+  const minZoom = customerThemeImageMinimumZoom(image, 328, 602);
+  assert.ok(minZoom < 1);
+  const fit = customerThemeImageLayout(image, { zoom: 0.5, positionX: 0.5, positionY: 0.5 }, 328, 602);
+  assert.ok(fit.metrics.renderWidth <= 328 + 1e-8);
+  assert.ok(fit.metrics.renderHeight <= 602 + 1e-8);
+  assert.equal(fit.style.left, `${fit.metrics.spaceX / 2}px`);
+  assert.equal(fit.style.top, `${fit.metrics.spaceY / 2}px`);
+  assert.equal(customerThemePositionAfterDrag(0.5, 10, -80, 0.5), 0.75);
+  assert.equal(customerThemePositionAfterDrag(0.5, 10, 80, 0.5), 0.25);
+  assert.equal(customerThemePositionAfterDrag(0.5, 10, 0, 0.5), 0.5);
+  assert.equal(customerThemePositionAfterDrag(0.5, -10, -80, 0.5), 0.25);
+  assert.equal(customerThemePositionAfterDrag(0.5, -10, 80, 0.5), 0.75);
+  const wide = customerThemeImageLayout(CUSTOMER_THEME_DEFINITIONS["moon-susuki"].image, { zoom: 1, positionX: 0.5, positionY: 0.5 }, 328, 800);
+  assert.equal(wide.metrics.canMoveX, true);
+  assert.equal(wide.metrics.canMoveY, false);
+  const zoomed = customerThemeImageLayout(CUSTOMER_THEME_DEFINITIONS.camellia.image, { zoom: 1.5, positionX: 0.5, positionY: 0.5 }, 328, 800);
+  assert.equal(zoomed.metrics.canMoveX, true);
+  assert.equal(zoomed.metrics.canMoveY, true);
 });
 
 test("customer menu uses major category navigation with a collapsible rail", () => {

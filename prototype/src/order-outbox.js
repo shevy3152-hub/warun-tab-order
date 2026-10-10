@@ -1,3 +1,5 @@
+import { CUSTOMER_THEME_DEFINITIONS } from "../../shared/customer-theme-definitions.mjs";
+
 export const OUTBOX_DB_NAME = "warun-customer-order-outbox";
 export const OUTBOX_DB_VERSION = 1;
 export const OUTBOX_STORE_NAME = "orders";
@@ -431,7 +433,7 @@ export async function fetchCustomerTheme({ config, fetchImpl = globalThis.fetch 
   });
   if (response.status !== 200) throw new Error("Customer theme request failed.");
   const body = await response.json();
-  if (!body || !["standard", "camellia"].includes(body.theme)) {
+  if (!body || !Object.hasOwn(CUSTOMER_THEME_DEFINITIONS, body.theme)) {
     throw new Error("Customer theme response is invalid.");
   }
   return { theme: body.theme };
@@ -448,7 +450,7 @@ export async function fetchCustomerThemeConfig({ config, fetchImpl = globalThis.
   });
   if (response.status !== 200) throw new Error("Customer theme config request failed.");
   const body = await response.json();
-  if (!body || !["standard", "camellia"].includes(body.theme)
+  if (!body || !Object.hasOwn(CUSTOMER_THEME_DEFINITIONS, body.theme)
     || typeof body.positionX !== "number" || !Number.isFinite(body.positionX) || body.positionX < 0 || body.positionX > 1
     || typeof body.positionY !== "number" || !Number.isFinite(body.positionY) || body.positionY < 0 || body.positionY > 1
     || typeof body.zoom !== "number" || !Number.isFinite(body.zoom) || body.zoom < 0.5 || body.zoom > 3) {

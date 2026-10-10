@@ -3,11 +3,7 @@ import {
   CUSTOMER_THEME_ERROR_CODES,
   CustomerThemeRepositoryError,
 } from './customer-theme-errors.mjs';
-
-export const CUSTOMER_THEME_KEYS = Object.freeze({
-  standard: 'standard',
-  camellia: 'camellia',
-});
+import { CUSTOMER_THEME_DEFINITIONS, CUSTOMER_THEME_KEYS, isSupportedCustomerTheme } from '../../../shared/customer-theme-definitions.mjs';
 
 const CUSTOMER_THEME_VALUES = new Set(Object.values(CUSTOMER_THEME_KEYS));
 const DEFAULT_SETTINGS = Object.freeze({ theme: CUSTOMER_THEME_KEYS.standard, version: 0, updatedAtMs: 0 });
@@ -16,29 +12,20 @@ const DEFAULT_POSITION_Y = 0.5;
 const DEFAULT_ZOOM = 1;
 const MAX_PROMPT_LENGTH = 4_000;
 const MAX_NOTES_LENGTH = 4_000;
-const DEFAULT_VARIANTS = Object.freeze({
-  standard: Object.freeze({
-    prompt: '画像は使用しない標準の赤レール。文字やロゴを画像に描かず、UIが重なる領域に重要な絵柄を置かない。',
-    notes: '未設定・画像読込失敗時のfallback。客席レールは従来の赤表示。',
-    positionX: DEFAULT_POSITION_X,
-    positionY: DEFAULT_POSITION_Y,
-    zoom: DEFAULT_ZOOM,
-  }),
-  camellia: Object.freeze({
-    prompt: '和紙に描いた椿の縦長模様。文字・ロゴを画像に描かない。UIが重なる領域に重要な絵柄を置かない。客席端末の展開時レールに使う背景素材。',
-    notes: '既存asset: 426×1587 px、縦長比率 426:1587（約0.268:1、縦が横の約3.73倍）。展開時のみ表示し、折り畳み時は赤レールへ戻す。',
-    positionX: DEFAULT_POSITION_X,
-    positionY: DEFAULT_POSITION_Y,
-    zoom: DEFAULT_ZOOM,
-  }),
-});
+const DEFAULT_VARIANTS = Object.freeze(Object.fromEntries(Object.entries(CUSTOMER_THEME_DEFINITIONS).map(([theme, definition]) => [theme, Object.freeze({
+  prompt: definition.prompt,
+  notes: definition.notes,
+  positionX: definition.initialPositionX ?? DEFAULT_POSITION_X,
+  positionY: DEFAULT_POSITION_Y,
+  zoom: DEFAULT_ZOOM,
+})])));
 
 function repositoryError(code, message, options = undefined) {
   return new CustomerThemeRepositoryError(code, message, options);
 }
 
 export function normalizeCustomerThemeKey(value) {
-  return CUSTOMER_THEME_VALUES.has(value) ? value : CUSTOMER_THEME_KEYS.standard;
+  return isSupportedCustomerTheme(value) && CUSTOMER_THEME_VALUES.has(value) ? value : CUSTOMER_THEME_KEYS.standard;
 }
 
 function requireExpectedVersion(request) {

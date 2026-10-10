@@ -57,6 +57,9 @@ test('customer theme config client preserves prompt metadata and sends normalize
     themes: {
       standard: { prompt: 'red', notes: 'fallback', positionX: 0.5, positionY: 0.5, zoom: 1 },
       camellia: { prompt: '椿。文字なし', notes: '426x1587', positionX: 0.2, positionY: 0.8, zoom: 1.25 },
+      'autumn-leaves': { prompt: '紅葉', notes: '426x1587', positionX: 0.5, positionY: 0.5, zoom: 1 },
+      'moon-susuki': { prompt: '月とすすき', notes: '426x1587', positionX: 0.5, positionY: 0.5, zoom: 1 },
+      'japanese-halloween': { prompt: '和風ハロウィン', notes: '426x1587', positionX: 0.5, positionY: 0.5, zoom: 1 },
     },
   };
   const loaded = await fetchAdminCustomerThemeConfig({ env, fetchImpl: async () => ({ ok: true, json: async () => responseBody }) });

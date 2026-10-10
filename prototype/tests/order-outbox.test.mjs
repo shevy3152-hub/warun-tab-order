@@ -619,12 +619,12 @@ test("customer theme config API returns only safe placement values", async () =>
     config: { enabled: true, baseUrl: "https://api.example.test/v1", token: "customer-runtime-secret" },
     fetchImpl: async (url, options) => {
       captured = { url, options };
-      return { status: 200, json: async () => ({ theme: "camellia", positionX: 0.2, positionY: 0.8, zoom: 1.25, prompt: "secret", notes: "secret" }) };
+      return { status: 200, json: async () => ({ theme: "camellia", positionX: 0.2, positionY: 0.8, zoom: 0.5, prompt: "secret", notes: "secret" }) };
     },
   });
   assert.equal(captured.url, "https://api.example.test/v1/customer/theme-config");
   assert.equal(captured.options.headers.Authorization, "Bearer customer-runtime-secret");
-  assert.deepEqual(result, { theme: "camellia", positionX: 0.2, positionY: 0.8, zoom: 1.25 });
+  assert.deepEqual(result, { theme: "camellia", positionX: 0.2, positionY: 0.8, zoom: 0.5 });
   assert.equal(Object.hasOwn(result, "prompt"), false);
   assert.equal(Object.hasOwn(result, "notes"), false);
 });

@@ -314,7 +314,7 @@ test('customer theme config persists production metadata, exposes only safe plac
     assert.equal(adminInitial.statusCode, 200);
     assert.equal(adminInitial.json.theme, 'standard');
     assert.equal(adminInitial.json.version, 0);
-    assert.deepEqual(Object.keys(adminInitial.json.themes).sort(), ['camellia', 'standard']);
+    assert.deepEqual(Object.keys(adminInitial.json.themes).sort(), ['autumn-leaves', 'camellia', 'japanese-halloween', 'moon-susuki', 'standard']);
     assert.match(adminInitial.json.themes.camellia.notes, /426×1587/);
     assert.match(adminInitial.json.themes.camellia.prompt, /文字.*ロゴ/);
 
@@ -326,16 +326,11 @@ test('customer theme config persists production metadata, exposes only safe plac
     assert.equal(Object.hasOwn(customerInitial.json, 'version'), false);
 
     const draft = {
-      standard: { ...adminInitial.json.themes.standard, positionX: 0.25, positionY: 0.75, zoom: 1.1 },
-      camellia: {
-        ...adminInitial.json.themes.camellia,
-        prompt: '椿の背景。文字やロゴを画像に描かない。UIが重なる領域に重要な絵柄を置かない。',
-        notes: '制作確認用メモ',
-        positionX: 0.2,
-        positionY: 0.8,
-        zoom: 1.35,
-      },
+      ...Object.fromEntries(Object.entries(adminInitial.json.themes).map(([theme, variant]) => [theme, { ...variant }])),
     };
+    draft.standard = { ...draft.standard, positionX: 0.25, positionY: 0.75, zoom: 1.1 };
+    draft.camellia = { ...draft.camellia, prompt: '椿の背景。文字やロゴを画像に描かない。UIが重なる領域に重要な絵柄を置かない。', notes: '制作確認用メモ', positionX: 0.2, positionY: 0.8, zoom: 0.5 };
+    draft['autumn-leaves'] = { ...draft['autumn-leaves'], positionX: 0.15, positionY: 0.65, zoom: 1.4 };
     const saved = await request({
       port,
       token: ADMIN_TOKEN,
@@ -347,11 +342,14 @@ test('customer theme config persists production metadata, exposes only safe plac
     assert.equal(saved.json.theme, 'camellia');
     assert.equal(saved.json.version, 1);
     assert.equal(saved.json.themes.camellia.positionX, 0.2);
-    assert.equal(saved.json.themes.camellia.zoom, 1.35);
+    assert.equal(saved.json.themes.camellia.zoom, 0.5);
     assert.equal(saved.json.themes.camellia.notes, '制作確認用メモ');
+    assert.equal(saved.json.themes['autumn-leaves'].positionX, 0.15);
+    assert.equal(database.prepare("SELECT theme_key FROM customer_theme_settings").get().theme_key, 'camellia');
+    assert.equal(database.prepare("SELECT zoom FROM customer_theme_variants WHERE theme_key = 'autumn-leaves'").get().zoom, 1.4);
 
     const customerAfterSave = await request({ port, token: CUSTOMER_TOKEN, path: '/v1/customer/theme-config' });
-    assert.deepEqual(customerAfterSave.json, { theme: 'camellia', positionX: 0.2, positionY: 0.8, zoom: 1.35 });
+    assert.deepEqual(customerAfterSave.json, { theme: 'camellia', positionX: 0.2, positionY: 0.8, zoom: 0.5 });
     assert.equal(JSON.stringify(customerAfterSave.json).includes('制作確認用メモ'), false);
 
     const invalid = await request({
@@ -389,6 +387,15 @@ test('customer theme config persists production metadata, exposes only safe plac
     });
     assert.equal(unknownTopLevelField.statusCode, 400);
 
+    const unknownTheme = await request({
+      port,
+      token: ADMIN_TOKEN,
+      method: 'PUT',
+      path: '/v1/admin/customer-theme-config',
+      body: { expectedVersion: 1, theme: 'unregistered-theme', themes: draft },
+    });
+    assert.equal(unknownTheme.statusCode, 400);
+
     const stale = await request({
       port,
       token: ADMIN_TOKEN,
@@ -399,6 +406,17 @@ test('customer theme config persists production metadata, exposes only safe plac
     assert.equal(stale.statusCode, 409);
     assert.equal(stale.json.error.code, 'CUSTOMER_THEME_CONFLICT');
     assert.equal(database.prepare('SELECT prompt_text FROM customer_theme_variants WHERE theme_key = \'camellia\'').get().prompt_text, draft.camellia.prompt);
+
+    const seasonalTheme = await request({
+      port,
+      token: ADMIN_TOKEN,
+      method: 'PUT',
+      path: '/v1/admin/customer-theme-config',
+      body: { expectedVersion: 1, theme: 'autumn-leaves', themes: draft },
+    });
+    assert.equal(seasonalTheme.statusCode, 200);
+    assert.equal(seasonalTheme.json.theme, 'autumn-leaves');
+    assert.equal((await request({ port, token: CUSTOMER_TOKEN, path: '/v1/customer/theme-config' })).json.theme, 'autumn-leaves');
     assert.equal(database.prepare('PRAGMA integrity_check').get().integrity_check, 'ok');
     assert.deepEqual(database.prepare('PRAGMA foreign_key_check').all(), []);
   });

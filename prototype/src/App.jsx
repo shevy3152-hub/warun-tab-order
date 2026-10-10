@@ -34,6 +34,8 @@ import { addCustomerCartSelection, customerCartRows, removeCustomerCartSelection
 import { taxExcludedYen } from "./pricing.js";
 import { pairingCodeQrSvg } from "./qr-code.js";
 import { CUSTOMER_TEST_THEME, normalizeCustomerTheme } from "./customer-theme.js";
+import { CUSTOMER_THEME_DEFINITIONS, isAvailableCustomerTheme } from "../../shared/customer-theme-definitions.mjs";
+import { customerThemeImageLayout, customerThemePositionAfterDrag, customerThemeStoredZoomForVisualZoom, normalizeCustomerThemeLayout, resolveCustomerThemeZoom, MIN_CUSTOMER_THEME_ZOOM, MAX_CUSTOMER_THEME_ZOOM } from "./customer-theme-layout.js";
 import { DEFAULT_BUSINESS_HOURS, businessHoursDisplay, businessHoursHourLabel, combineBusinessHoursTime, normalizeBusinessHours, splitBusinessHoursTime } from "./business-hours.js";
 import { DEFAULT_BUSINESS_HOURS_NOTICE, withBusinessHoursNotice } from "./business-hours-notice.js";
 import { CHECKOUT_ADJUSTMENT_TYPES, checkoutAdjustmentTotal, normalizeCheckoutAdjustments, parseFixedAdjustment } from "./checkout-adjustments.js";
@@ -608,7 +610,7 @@ function CustomerBusinessHours({ settings, onOpenNotice, guideKey = undefined })
   const showNotice = settings?.noticeEnabled === true && Boolean(settings.noticeText?.trim());
   if (!showHours && !showNotice) return null;
   const display = businessHoursDisplay(settings);
-  return <div className="customer-hours" {...(guideKey ? { "data-customer-guide": guideKey } : {})}>
+  return <div className={`customer-hours${guideKey ? " customer-theme-preview__hours" : ""}`} style={guideKey ? { color: "var(--customer-theme-rail-foreground, #fff)", borderTopColor: "var(--customer-theme-rail-separator, rgb(255 255 255 / 65%))" } : undefined} {...(guideKey ? { "data-customer-guide": guideKey } : {})}>
     {showHours ? <><b>本日の営業時間</b><span>{display.range}</span><small>{display.lastOrder}</small></> : null}
     {showNotice ? <button type="button" className="business-hours-notice-button" onClick={onOpenNotice}>その他ご案内</button> : null}
   </div>;
@@ -862,12 +864,8 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
     return () => { cancelled = true; unsubscribe?.(); };
   }, [apiMode, orderClient, orderStartNoticeRefreshKey]);
   useEffect(() => { setCustomerThemeImageFailed(false); }, [customerTheme, customerThemeConfig.positionX, customerThemeConfig.positionY, customerThemeConfig.zoom]);
-  const customerThemeImageStyle = {
-    "--customer-theme-position-x": `${customerThemeConfig.positionX * 100}%`,
-    "--customer-theme-position-y": `${customerThemeConfig.positionY * 100}%`,
-    "--customer-theme-zoom": customerThemeConfig.zoom,
-  };
-  const visibleCustomerTheme = customerThemeImageFailed ? "standard" : customerTheme;
+  const visibleCustomerTheme = customerThemeImageFailed || !isAvailableCustomerTheme(customerTheme) ? "standard" : customerTheme;
+  const customerThemeAssetPath = CUSTOMER_THEME_DEFINITIONS[customerTheme]?.assetPath;
   const assignedTableId = apiMode && Number.isSafeInteger(customerDeviceConfig?.tableId) ? String(customerDeviceConfig.tableId) : null;
   const device = assignedTableId
     ? { ...localDevice, tableId: assignedTableId, label: customerDeviceConfig.tableLabel || localDevice.label }
@@ -1508,11 +1506,11 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
   />;
 
   return (
-    <div className={`customer-app ${majorNavOpen ? "" : "customer-app--category-collapsed"}`} data-customer-theme={visibleCustomerTheme}>
+    <div className={`customer-app ${majorNavOpen ? "" : "customer-app--category-collapsed"}`} data-customer-theme={visibleCustomerTheme} style={customerThemePaletteStyle(visibleCustomerTheme)}>
       {modal === "ride-guidance" ? <RideGuidanceModal dataState={rideGuidanceState} selectedType={rideGuidanceType} onSelectType={setRideGuidanceType} onBack={() => setRideGuidanceType(null)} onClose={closeRideGuidance} /> : null}
       {modal === "checkout" ? <CustomerCheckoutModal checkoutState={checkoutState} receiptRequested={checkoutReceiptRequested} onReceiptChange={setCheckoutReceiptRequested} onRequest={requestCheckout} onRetry={retryCheckout} onResetCancelled={resetCancelledCheckout} onClose={() => setModal(null)} submitting={checkoutSubmitting} /> : null}
       <aside className="customer-sidebar">
-        {majorNavOpen && visibleCustomerTheme === "camellia" ? <img className="customer-sidebar__theme-image" src="/customer-rail-washi-camellia-accepted.png" alt="椿模様の客席レール" style={customerThemeImageStyle} onError={() => setCustomerThemeImageFailed(true)} /> : null}
+        {majorNavOpen && customerThemeAssetPath && visibleCustomerTheme === customerTheme ? <CustomerThemeImage theme={customerTheme} variant={customerThemeConfig} alt={`${CUSTOMER_THEME_DEFINITIONS[customerTheme]?.label ?? "客席テーマ"}のレール画像`} onError={() => setCustomerThemeImageFailed(true)} /> : null}
         <CustomerRailContent expanded={majorNavOpen} categories={customerMajorCategories} currentCategoryId={majorCategoryId} onSelectCategory={selectMajorCategory} onExpand={() => setMajorNavOpen(true)} businessHours={businessHours} onOpenNotice={() => setShowBusinessNotice(true)} />
       </aside>
 
@@ -2479,33 +2477,71 @@ function customerThemeErrorMessage(error, action = "操作") {
   return `${action}できませんでした。`;
 }
 
-const DEFAULT_CUSTOMER_THEME_VARIANTS = Object.freeze({
-  standard: Object.freeze({
-    prompt: "画像は使用しない標準の赤レール。文字やロゴを画像に描かず、UIが重なる領域に重要な絵柄を置かない。",
-    notes: "未設定・画像読込失敗時のfallback。客席レールは従来の赤表示。",
-    positionX: 0.5,
-    positionY: 0.5,
-    zoom: 1,
-  }),
-  camellia: Object.freeze({
-    prompt: "和紙に描いた椿の縦長模様。文字・ロゴを画像に描かない。UIが重なる領域に重要な絵柄を置かない。客席端末の展開時レールに使う背景素材。",
-    notes: "既存asset: 426×1587 px、縦長比率 426:1587（約0.268:1、縦が横の約3.73倍）。展開時のみ表示し、折り畳み時は赤レールへ戻す。",
-    positionX: 0.5,
-    positionY: 0.5,
-    zoom: 1,
-  }),
-});
+const DEFAULT_CUSTOMER_THEME_VARIANTS = Object.freeze(Object.fromEntries(Object.entries(CUSTOMER_THEME_DEFINITIONS).map(([theme, definition]) => [theme, Object.freeze({
+  prompt: definition.prompt,
+  notes: definition.notes,
+  positionX: definition.initialPositionX ?? 0.5,
+  positionY: 0.5,
+  zoom: 1,
+})])));
 
 function cloneCustomerThemeVariants(source = DEFAULT_CUSTOMER_THEME_VARIANTS) {
-  return Object.fromEntries(Object.entries(DEFAULT_CUSTOMER_THEME_VARIANTS).map(([theme, fallback]) => [theme, {
-    ...fallback,
-    ...(source?.[theme] ?? {}),
-  }]));
+  return Object.fromEntries(Object.entries(DEFAULT_CUSTOMER_THEME_VARIANTS).map(([theme, fallback]) => {
+    const variant = { ...fallback, ...(source?.[theme] ?? {}) };
+    return [theme, { ...variant, ...normalizeCustomerThemeLayout(variant) }];
+  }));
 }
 
-const CUSTOMER_THEME_PREVIEW_SCALE = 0.55;
+const CUSTOMER_THEME_PREVIEW_SCALE = 0.62;
+const configuredImageSourceFolder = String(import.meta.env.VITE_CUSTOMER_THEME_IMAGE_SOURCE_FOLDER ?? "").trim();
+const CUSTOMER_THEME_IMAGE_SOURCE_FOLDER = /^(?:[A-Za-z]:[\\/]|\\\\|\/)/.test(configuredImageSourceFolder) ? configuredImageSourceFolder : "";
+const normalizedImageSourceFolder = CUSTOMER_THEME_IMAGE_SOURCE_FOLDER.replaceAll("\\", "/");
+const CUSTOMER_THEME_IMAGE_SOURCE_FOLDER_URL = CUSTOMER_THEME_IMAGE_SOURCE_FOLDER
+  ? encodeURI(`${normalizedImageSourceFolder.startsWith("//") ? "file:" : normalizedImageSourceFolder.startsWith("/") ? "file://" : "file:///"}${normalizedImageSourceFolder.replace(/\/$/, "")}/`).replaceAll("#", "%23").replaceAll("?", "%3F")
+  : "";
 
-function CustomerThemePreview({ theme, variant, collapsed, onChangePosition, onImageError }) {
+function CustomerThemeImage({ theme, variant, alt, onError, onMetrics }) {
+  const viewportRef = useRef(null);
+  const [size, setSize] = useState({ width: 0, height: 0 });
+  const definition = CUSTOMER_THEME_DEFINITIONS[theme];
+  useLayoutEffect(() => {
+    const element = viewportRef.current;
+    if (!element) return undefined;
+    const measure = () => setSize({ width: element.clientWidth, height: element.clientHeight });
+    measure();
+    if (typeof ResizeObserver !== "function") {
+      window.addEventListener("resize", measure);
+      return () => window.removeEventListener("resize", measure);
+    }
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+  const normalized = normalizeCustomerThemeLayout(variant);
+  const layout = useMemo(() => customerThemeImageLayout(definition?.image, normalized, size.width, size.height), [definition?.image, normalized.positionX, normalized.positionY, normalized.zoom, size.width, size.height]);
+  useEffect(() => { onMetrics?.(layout?.metrics ?? null); }, [layout, onMetrics]);
+  if (!definition?.assetPath) return null;
+  return <div ref={viewportRef} className="customer-sidebar__theme-viewport" aria-hidden="true">
+    {layout ? <img className="customer-sidebar__theme-image" src={definition.assetPath} alt={alt} style={layout.style} onError={onError} draggable="false" /> : null}
+  </div>;
+}
+
+function customerThemePaletteStyle(theme) {
+  const palette = CUSTOMER_THEME_DEFINITIONS[theme]?.railPalette;
+  if (!palette) return undefined;
+  return {
+    "--customer-theme-rail-background": palette.background,
+    "--customer-theme-rail-foreground": palette.foreground,
+    "--customer-theme-rail-separator": palette.separator,
+    "--customer-theme-rail-selected-background": palette.selectedBackground,
+    "--customer-theme-rail-selected-foreground": palette.selectedForeground,
+    "--customer-theme-rail-selected-marker-background": palette.selectedMarkerBackground,
+    "--customer-theme-rail-selected-marker-foreground": palette.selectedMarkerForeground,
+    "--customer-theme-rail-focus": palette.focus,
+  };
+}
+
+function CustomerThemePreview({ theme, variant, collapsed, onChangePosition, onImageError, metrics, onMetrics }) {
   const railRef = useRef(null);
   const dragRef = useRef(null);
   const [guides, setGuides] = useState([]);
@@ -2539,25 +2575,19 @@ function CustomerThemePreview({ theme, variant, collapsed, onChangePosition, onI
     return () => observer.disconnect();
   }, [collapsed, theme]);
   useEffect(() => { setImageFailed(false); }, [theme, variant?.prompt]);
-  const positionStyle = {
-    "--customer-theme-position-x": `${(variant?.positionX ?? 0.5) * 100}%`,
-    "--customer-theme-position-y": `${(variant?.positionY ?? 0.5) * 100}%`,
-    "--customer-theme-zoom": variant?.zoom ?? 1,
-  };
   const onPointerDown = (event) => {
-    if (collapsed || theme !== "camellia" || imageFailed) return;
+    if (collapsed || !assetPath || !themeAvailable || imageFailed) return;
     if (event.button !== undefined && event.button !== 0) return;
     event.currentTarget.setPointerCapture?.(event.pointerId);
     dragRef.current = { x: event.clientX, y: event.clientY, positionX: variant.positionX, positionY: variant.positionY };
   };
   const onPointerMove = (event) => {
     if (!dragRef.current || !railRef.current) return;
-    const rect = railRef.current.getBoundingClientRect();
-    const logicalWidth = rect.width / CUSTOMER_THEME_PREVIEW_SCALE;
-    const logicalHeight = rect.height / CUSTOMER_THEME_PREVIEW_SCALE;
+    const deltaX = metrics?.deltaX ?? 0;
+    const deltaY = metrics?.deltaY ?? 0;
     onChangePosition({
-      positionX: Math.max(0, Math.min(1, dragRef.current.positionX + (event.clientX - dragRef.current.x) / logicalWidth)),
-      positionY: Math.max(0, Math.min(1, dragRef.current.positionY + (event.clientY - dragRef.current.y) / logicalHeight)),
+      positionX: customerThemePositionAfterDrag(dragRef.current.positionX, event.clientX - dragRef.current.x, deltaX, CUSTOMER_THEME_PREVIEW_SCALE),
+      positionY: customerThemePositionAfterDrag(dragRef.current.positionY, event.clientY - dragRef.current.y, deltaY, CUSTOMER_THEME_PREVIEW_SCALE),
     });
   };
   const stopDrag = () => { dragRef.current = null; };
@@ -2565,38 +2595,47 @@ function CustomerThemePreview({ theme, variant, collapsed, onChangePosition, onI
     setImageFailed(true);
     onImageError?.();
   };
+  const assetPath = CUSTOMER_THEME_DEFINITIONS[theme]?.assetPath;
+  const themeAvailable = isAvailableCustomerTheme(theme);
+  useEffect(() => {
+    if (collapsed || !assetPath || !themeAvailable || imageFailed) onMetrics?.(null);
+  }, [collapsed, assetPath, themeAvailable, imageFailed, onMetrics]);
   return <div className="customer-theme-preview" aria-label={`${collapsed ? "折り畳み時" : "展開時"}の客席レールプレビュー`}>
     <div className={`customer-theme-preview__viewport ${collapsed ? "is-collapsed" : ""}`}>
       <div
         ref={railRef}
         className={`customer-theme-preview__rail customer-sidebar ${collapsed ? "is-collapsed" : ""}`}
-        style={{ ...positionStyle, "--customer-theme-preview-scale": CUSTOMER_THEME_PREVIEW_SCALE }}
+        data-customer-theme={imageFailed || !themeAvailable ? "standard" : theme}
+        style={{ ...customerThemePaletteStyle(imageFailed || !themeAvailable ? "standard" : theme), "--customer-theme-preview-scale": CUSTOMER_THEME_PREVIEW_SCALE }}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={stopDrag}
       onPointerCancel={stopDrag}
       >
-        {!collapsed && theme === "camellia" && !imageFailed ? <img className="customer-sidebar__theme-image" src="/customer-rail-washi-camellia-accepted.png" alt="椿模様の客席レール配置プレビュー" style={positionStyle} onError={handleImageError} draggable="false" /> : null}
+        {!collapsed && assetPath && themeAvailable && !imageFailed ? <CustomerThemeImage theme={theme} variant={variant} alt={`${CUSTOMER_THEME_DEFINITIONS[theme].label}のレール画像配置プレビュー`} onError={handleImageError} onMetrics={onMetrics} /> : null}
         <CustomerRailContent expanded={!collapsed} categories={CUSTOMER_MAJOR_CATEGORIES} currentCategoryId="drink" onSelectCategory={() => {}} onExpand={() => {}} businessHours={DEFAULT_BUSINESS_HOURS} />
         {!collapsed ? guides.map((guide) => <span key={guide.key} className="customer-theme-preview__guide" style={{ left: `${guide.left}%`, top: `${guide.top}%`, width: `${guide.width}%`, height: `${guide.height}%` }}><b>{guide.label}</b></span>) : null}
       </div>
     </div>
+    {!themeAvailable && theme !== "standard" ? <p className="customer-theme-preview__fallback" role="status">画像未配置のため選択・保存できません。素材配置後にプレビューを有効にします。</p> : null}
     {imageFailed ? <p className="customer-theme-preview__fallback" role="status">画像を読み込めない場合は標準の赤レールへfallbackします。</p> : null}
-    {!collapsed && !imageFailed ? <p className="customer-theme-preview__hint">画像をドラッグして位置を調整。破線は実際のレールUI要素から測定した重なり領域です。</p> : <p className="customer-theme-preview__hint">折り畳み時は画像を表示せず、従来の赤レールに戻ります。</p>}
+    {!collapsed && !imageFailed && assetPath && themeAvailable ? <p className="customer-theme-preview__hint">画像をドラッグ、またはX・Yスライダーで移動できます。実寸 {CUSTOMER_THEME_DEFINITIONS[theme]?.image?.width ?? "—"}×{CUSTOMER_THEME_DEFINITIONS[theme]?.image?.height ?? "—"}px。現在の切り抜き約 横{Math.round(metrics?.croppedSourceWidth ?? 0)}px・縦{Math.round(metrics?.croppedSourceHeight ?? 0)}px。操作範囲は横{Math.round(metrics?.rangeX ?? 0)}px・縦{Math.round(metrics?.rangeY ?? 0)}pxです。破線は客席UIの重なり領域です。</p> : <p className="customer-theme-preview__hint">{collapsed ? "折り畳み時は画像を表示せず、従来の赤レールに戻ります。" : "標準表示では画像を使用しません。"}</p>}
   </div>;
 }
 
 function CustomerThemeEditor({ adminApiMode }) {
-  const [state, setState] = useState({ loading: adminApiMode, saving: false, error: "", message: "", formal: null, draft: "standard", draftThemes: cloneCustomerThemeVariants() });
+  const [state, setState] = useState({ loading: adminApiMode, saving: false, error: "", message: "", formal: null, draft: "standard", editingTheme: "standard", draftThemes: cloneCustomerThemeVariants() });
   const [previewCollapsed, setPreviewCollapsed] = useState(false);
+  const [previewMetrics, setPreviewMetrics] = useState(null);
   const [copyMessage, setCopyMessage] = useState("");
+  const [imageFolderCopyMessage, setImageFolderCopyMessage] = useState("");
 
   const load = async ({ keepMessage = false } = {}) => {
     if (!adminApiMode) return null;
     setState((current) => ({ ...current, loading: true, error: "", ...(keepMessage ? {} : { message: "" }) }));
     try {
       const formal = await fetchAdminCustomerThemeConfig({ env: window });
-      setState((current) => ({ ...current, loading: false, saving: false, error: "", formal, draft: formal.theme, draftThemes: cloneCustomerThemeVariants(formal.themes), ...(keepMessage ? {} : { message: "" }) }));
+      setState((current) => ({ ...current, loading: false, saving: false, error: "", formal, draft: formal.theme, editingTheme: formal.theme, draftThemes: cloneCustomerThemeVariants(formal.themes), ...(keepMessage ? {} : { message: "" }) }));
       return formal;
     } catch (error) {
       setState((current) => ({ ...current, loading: false, error: customerThemeErrorMessage(error, "テーマ設定の取得"), formal: current.formal }));
@@ -2606,17 +2645,20 @@ function CustomerThemeEditor({ adminApiMode }) {
 
   useEffect(() => {
     if (!adminApiMode) {
-      setState({ loading: false, saving: false, error: "", message: "", formal: null, draft: "standard", draftThemes: cloneCustomerThemeVariants() });
+      setState({ loading: false, saving: false, error: "", message: "", formal: null, draft: "standard", editingTheme: "standard", draftThemes: cloneCustomerThemeVariants() });
       return undefined;
     }
     void load();
     return undefined;
   }, [adminApiMode]);
 
-  const selectedVariant = state.draftThemes[state.draft] ?? DEFAULT_CUSTOMER_THEME_VARIANTS.standard;
+  const selectedVariant = state.draftThemes[state.editingTheme] ?? DEFAULT_CUSTOMER_THEME_VARIANTS.standard;
+  const selectedDefinition = CUSTOMER_THEME_DEFINITIONS[state.editingTheme] ?? CUSTOMER_THEME_DEFINITIONS.standard;
+  const minimumZoom = previewMetrics?.minimumZoom ?? 0.5;
+  const visualZoom = resolveCustomerThemeZoom(selectedVariant.zoom, minimumZoom);
   const setSelectedVariant = (patch) => setState((current) => ({
     ...current,
-    draftThemes: { ...current.draftThemes, [current.draft]: { ...current.draftThemes[current.draft], ...patch } },
+    draftThemes: { ...current.draftThemes, [current.editingTheme]: { ...current.draftThemes[current.editingTheme], ...patch } },
     message: "",
   }));
   const copyPrompt = async () => {
@@ -2639,38 +2681,72 @@ function CustomerThemeEditor({ adminApiMode }) {
       setCopyMessage("コピーできませんでした。欄の文字を選択してコピーしてください。");
     }
   };
+  const copyImageFolderPath = async () => {
+    if (!CUSTOMER_THEME_IMAGE_SOURCE_FOLDER) return;
+    try {
+      if (typeof window.navigator?.clipboard?.writeText === "function") {
+        await window.navigator.clipboard.writeText(CUSTOMER_THEME_IMAGE_SOURCE_FOLDER);
+      } else {
+        const input = document.getElementById("customer-theme-image-folder-path");
+        input?.select();
+        if (!input || !document.execCommand("copy")) throw new Error("copy failed");
+      }
+      setImageFolderCopyMessage("フォルダのパスをコピーしました。");
+    } catch {
+      setImageFolderCopyMessage("コピーできませんでした。上のパスを選択してコピーしてください。");
+    }
+  };
   const save = async () => {
     if (!adminApiMode || state.saving || !state.formal) return;
     setState((current) => ({ ...current, saving: true, error: "", message: "" }));
     try {
       const formal = await saveAdminCustomerThemeConfig({ env: window, theme: state.draft, themes: state.draftThemes, expectedVersion: state.formal.version });
-      setState({ loading: false, saving: false, error: "", message: `保存しました（version ${formal.version}）。`, formal, draft: formal.theme, draftThemes: cloneCustomerThemeVariants(formal.themes) });
+      setState({ loading: false, saving: false, error: "", message: `保存しました（version ${formal.version}）。`, formal, draft: formal.theme, editingTheme: formal.theme, draftThemes: cloneCustomerThemeVariants(formal.themes) });
     } catch (error) {
       if (error?.status === 409 || error?.code === "CUSTOMER_THEME_CONFLICT") await load({ keepMessage: true });
       setState((current) => ({ ...current, saving: false, error: customerThemeErrorMessage(error, "テーマ設定の保存"), message: "" }));
     }
   };
-  const discard = () => setState((current) => current.formal ? ({ ...current, draft: current.formal.theme, draftThemes: cloneCustomerThemeVariants(current.formal.themes), message: "", error: "" }) : current);
-  const previewTheme = state.draft;
+  const discard = () => setState((current) => current.formal ? ({ ...current, draft: current.formal.theme, editingTheme: current.formal.theme, draftThemes: cloneCustomerThemeVariants(current.formal.themes), message: "", error: "" }) : current);
+  const previewTheme = state.editingTheme;
   return <section className="customer-theme-editor" aria-label="客席左レールテーマ設定">
     <header className="customer-theme-editor__heading"><div><span className="section-kicker">CUSTOMER RAIL THEME</span><h2>客席左レールのテーマ</h2><p>客席画面だけに適用します。折り畳み時は従来の赤レールに戻ります。</p></div><span className="customer-theme-editor__version">正式version {state.formal?.version ?? "—"}</span></header>
     {state.loading ? <p className="customer-theme-editor__status" role="status">正式値を読み込み中です。</p> : null}
     {!adminApiMode ? <p className="customer-theme-editor__status">管理API接続時に編集できます。</p> : null}
     <fieldset className="customer-theme-editor__options" disabled={!adminApiMode || state.loading || state.saving}>
       <legend className="sr-only">客席レールテーマ</legend>
-      <label className="customer-theme-option"><input type="radio" name="customer-rail-theme" value="standard" checked={state.draft === "standard"} onChange={() => setState((current) => ({ ...current, draft: "standard", message: "" }))} /><span className="customer-theme-option__copy"><strong>標準（赤レール）</strong><small>未設定時・画像読込失敗時のfallback</small><span className="customer-theme-option__preview customer-theme-option__preview--standard">STANDARD</span></span></label>
-      <label className="customer-theme-option"><input type="radio" name="customer-rail-theme" value="camellia" checked={state.draft === "camellia"} onChange={() => setState((current) => ({ ...current, draft: "camellia", message: "" }))} /><span className="customer-theme-option__copy"><strong>椿（camellia）</strong><small>既存の椿assetを展開時だけ表示</small><img className="customer-theme-option__preview" src="/customer-rail-washi-camellia-accepted.png" alt="椿模様の客席レールプレビュー" /></span></label>
+      {Object.values(CUSTOMER_THEME_DEFINITIONS).map((definition) => {
+        const available = definition.available;
+        const isSelected = state.draft === definition.id;
+        return <div className={`customer-theme-option${available ? "" : " customer-theme-option--unavailable"}`} key={definition.id}>
+          <label className="customer-theme-option__select"><input type="radio" name="customer-rail-theme" value={definition.id} checked={isSelected} disabled={!available} onChange={() => setState((current) => ({ ...current, draft: definition.id, editingTheme: definition.id, message: "" }))} /><span className="customer-theme-option__copy"><strong>{definition.label}</strong><small>{available ? (definition.id === "standard" ? "未設定・画像読込失敗時のfallback" : "画像を展開時だけ表示") : "画像未配置・テーマ選択不可"}</small>{definition.assetPath ? <img className="customer-theme-option__preview" src={definition.assetPath} alt={`${definition.label}の客席レールプレビュー`} /> : !available ? <span className="customer-theme-option__preview customer-theme-option__preview--missing">画像未配置</span> : <span className="customer-theme-option__preview customer-theme-option__preview--standard">STANDARD</span>}</span></label>
+          {!available ? <button type="button" className="customer-theme-option__metadata" aria-pressed={state.editingTheme === definition.id} onClick={() => setState((current) => ({ ...current, editingTheme: definition.id, message: "" }))}>制作情報を編集</button> : null}
+        </div>;
+      })}
     </fieldset>
     <div className="customer-theme-editor__details">
       <div className="customer-theme-editor__metadata">
         <div className="customer-theme-editor__field"><label htmlFor="customer-theme-prompt">画像生成プロンプト</label><textarea id="customer-theme-prompt" rows={6} maxLength={4000} value={selectedVariant.prompt} disabled={!adminApiMode || state.loading || state.saving} onChange={(event) => setSelectedVariant({ prompt: event.target.value })} /><div className="customer-theme-editor__field-actions"><span>{[...selectedVariant.prompt].length} / 4000</span><button type="button" className="button button--outline" onClick={() => void copyPrompt()} disabled={!selectedVariant.prompt}>プロンプトをコピー</button></div>{copyMessage ? <small className="customer-theme-editor__copy-status" role="status">{copyMessage}</small> : null}</div>
         <label className="customer-theme-editor__field" htmlFor="customer-theme-notes"><span>制作メモ</span><textarea id="customer-theme-notes" rows={5} maxLength={4000} value={selectedVariant.notes} disabled={!adminApiMode || state.loading || state.saving} onChange={(event) => setSelectedVariant({ notes: event.target.value })} /><small>{[...selectedVariant.notes].length} / 4000</small></label>
-        <dl className="customer-theme-editor__spec"><div><dt>推奨キャンバス</dt><dd>{state.draft === "camellia" ? "426 × 1587 px" : "画像なし（標準の赤レール）"}</dd></div><div><dt>縦横比</dt><dd>{state.draft === "camellia" ? "426:1587（約0.268:1／縦長3.73:1）" : "—"}</dd></div><div><dt>適用範囲</dt><dd>客席画面の展開時のみ</dd></div></dl>
+        <section className="customer-theme-editor__image-location" aria-label="画像ファイルの場所">
+          <strong>画像ファイルの場所</strong>
+          <dl><div><dt>画像名</dt><dd>{selectedDefinition.assetPath ? selectedDefinition.assetPath.split("/").pop() : "画像なし"}</dd></div><div><dt>画像寸法</dt><dd>{selectedDefinition.image ? `${selectedDefinition.image.width}×${selectedDefinition.image.height}px` : "—"}</dd></div></dl>
+          <label htmlFor="customer-theme-image-folder-path">編集元フォルダ<input id="customer-theme-image-folder-path" type="text" readOnly value={CUSTOMER_THEME_IMAGE_SOURCE_FOLDER || "prototype/public（プロジェクト内）"} onFocus={(event) => event.currentTarget.select()} onClick={(event) => event.currentTarget.select()} /></label>
+          {CUSTOMER_THEME_IMAGE_SOURCE_FOLDER ? <div className="customer-theme-editor__image-location-actions"><button type="button" className="button button--outline" onClick={() => void copyImageFolderPath()}>フォルダのパスをコピー</button><a href={CUSTOMER_THEME_IMAGE_SOURCE_FOLDER_URL} target="_blank" rel="noreferrer">フォルダを開く（対応ブラウザーのみ）</a></div> : <small>このbuildには編集元フォルダの絶対パスが設定されていません。</small>}
+          {imageFolderCopyMessage ? <small role="status">{imageFolderCopyMessage}</small> : null}
+          <p>同じ名前・同じ寸法のPNGへ差し替える場合、コード変更は不要です。旧画像を別名または別フォルダで保管してから、新画像を入れてください。表示中のQAへの反映は別途必要です。</p>
+        </section>
+        <dl className="customer-theme-editor__spec"><div><dt>制作テーマ</dt><dd>{selectedDefinition.label}{!selectedDefinition.available ? "（画像未配置）" : ""}</dd></div><div><dt>実画像寸法</dt><dd>{selectedDefinition.image ? `${selectedDefinition.image.width} × ${selectedDefinition.image.height} px` : "画像なし（標準の赤レール）"}</dd></div><div><dt>画像比率</dt><dd>{selectedDefinition.image ? `${(selectedDefinition.image.width / selectedDefinition.image.height).toFixed(3)}:1（幅:高さ）` : "—"}</dd></div><div><dt>描画条件</dt><dd>レール幅328 CSS px・高さ100dvh。倍率1.00×は枠いっぱい、表示枠に合わせた最小倍率で画像全体を表示します。</dd></div><div><dt>適用範囲</dt><dd>客席画面の展開時のみ</dd></div></dl>
       </div>
       <div className="customer-theme-editor__preview-panel">
         <div className="customer-theme-editor__preview-heading"><div><strong>配置プレビュー</strong><small>実際の客席レールUI要素を測定した制作ガイド</small></div><div className="customer-theme-editor__preview-toggle"><button type="button" className={previewCollapsed ? "" : "is-active"} aria-pressed={!previewCollapsed} onClick={() => setPreviewCollapsed(false)}>展開時</button><button type="button" className={previewCollapsed ? "is-active" : ""} aria-pressed={previewCollapsed} onClick={() => setPreviewCollapsed(true)}>折り畳み時</button></div></div>
-        <CustomerThemePreview theme={previewTheme} variant={selectedVariant} collapsed={previewCollapsed} onChangePosition={setSelectedVariant} />
-        {!previewCollapsed ? <div className="customer-theme-editor__position-controls"><label>ズーム <output>{selectedVariant.zoom.toFixed(2)}×</output><input type="range" min="0.5" max="3" step="0.01" value={selectedVariant.zoom} disabled={!adminApiMode || state.loading || state.saving} onChange={(event) => setSelectedVariant({ zoom: Number(event.target.value) })} /></label><div><span>位置 X {Math.round(selectedVariant.positionX * 100)}% / Y {Math.round(selectedVariant.positionY * 100)}%</span><button type="button" className="button button--quiet" onClick={() => setSelectedVariant({ positionX: 0.5, positionY: 0.5, zoom: 1 })} disabled={!adminApiMode || state.loading || state.saving}>中央に戻す</button></div></div> : null}
+        <CustomerThemePreview theme={previewTheme} variant={selectedVariant} collapsed={previewCollapsed} onChangePosition={setSelectedVariant} metrics={previewMetrics} onMetrics={setPreviewMetrics} />
+        {!previewCollapsed ? <div className="customer-theme-editor__position-controls">
+          <label>ズーム <output>{visualZoom.toFixed(2)}×</output><input aria-label="テーマ画像ズーム" type="range" min={minimumZoom} max={MAX_CUSTOMER_THEME_ZOOM} step="0.01" value={visualZoom} disabled={!adminApiMode || state.loading || state.saving} onChange={(event) => setSelectedVariant({ zoom: customerThemeStoredZoomForVisualZoom(Number(event.target.value), minimumZoom) })} /><small>1.00×は枠いっぱい、最小{minimumZoom.toFixed(2)}×は画像全体が収まる倍率です。</small></label>
+          <label>横位置 X <output>{Math.round(selectedVariant.positionX * 100)}%</output><input aria-label="テーマ画像の横位置" type="range" min="0" max="1" step="0.005" value={selectedVariant.positionX} disabled={!adminApiMode || state.loading || state.saving || !previewMetrics?.canMoveX} onChange={(event) => setSelectedVariant({ positionX: Number(event.target.value) })} /><small>{previewMetrics?.canMoveX ? `${previewMetrics.overflowX > 0 ? "切り抜き" : "余白"}範囲で左右に最大${Math.round(previewMetrics.rangeX)}px移動できます。` : "この方向は枠に一致しているため移動不要です。"}</small></label>
+          <label>縦位置 Y <output>{Math.round(selectedVariant.positionY * 100)}%</output><input aria-label="テーマ画像の縦位置" type="range" min="0" max="1" step="0.005" value={selectedVariant.positionY} disabled={!adminApiMode || state.loading || state.saving || !previewMetrics?.canMoveY} onChange={(event) => setSelectedVariant({ positionY: Number(event.target.value) })} /><small>{previewMetrics?.canMoveY ? `${previewMetrics.overflowY > 0 ? "切り抜き" : "余白"}範囲で上下に最大${Math.round(previewMetrics.rangeY)}px移動できます。` : "この方向は枠に一致しているため移動不要です。"}</small></label>
+          <div className="customer-theme-editor__fit-actions"><span>中央位置はX・Yとも50%です。</span><button type="button" className="button button--quiet" onClick={() => setSelectedVariant({ positionX: 0.5, positionY: 0.5, zoom: 0.5 })} disabled={!adminApiMode || state.loading || state.saving}>画像全体を表示</button><button type="button" className="button button--quiet" onClick={() => setSelectedVariant({ positionX: 0.5, positionY: 0.5, zoom: MIN_CUSTOMER_THEME_ZOOM })} disabled={!adminApiMode || state.loading || state.saving}>枠いっぱいに表示</button></div>
+        </div> : null}
       </div>
     </div>
     {state.error ? <p className="customer-theme-editor__message is-error" role="alert">{state.error}</p> : null}

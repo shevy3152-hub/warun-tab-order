@@ -189,19 +189,19 @@ function createV14Database(databasePath) {
   return database;
 }
 
-test('new database creates its parent directory and applies schema v20', async () => {
+test('new database creates its parent directory and applies schema v21', async () => {
   await withTemporaryDatabase(({ databasePath }) => {
     const connection = initializeDatabase({ databasePath });
     assert.equal(existsSync(databasePath), true);
-    assert.equal(connection.schemaVersion, 20);
+    assert.equal(connection.schemaVersion, 21);
     connection.close();
   });
 });
 
-test('new database records PRAGMA user_version = 20 and customer notice defaults', async () => {
+test('new database records PRAGMA user_version = 21 and customer notice defaults', async () => {
   await withTemporaryDatabase(({ databasePath }) => {
     const connection = initializeDatabase({ databasePath });
-    assert.equal(pragmaValue(connection.database, 'user_version'), 20);
+    assert.equal(pragmaValue(connection.database, 'user_version'), 21);
     assert.deepEqual({ ...connection.database.prepare('SELECT heading_text, body_text, version FROM customer_order_start_notice_settings WHERE singleton_id = 1').get() }, {
       heading_text: 'ご注文の前にご確認ください',
       body_text: '20歳未満の入店禁止\n飲酒運転しません・させません\nSNS投稿・LIVE配信禁止\nお支払いは現金のみ',
@@ -230,8 +230,8 @@ test('schema v14 migrates to v17 without changing order-time snapshots or existi
 
     const connection = initializeDatabase({ databasePath });
     const database = connection.database;
-    assert.equal(connection.schemaVersion, 20);
-    assert.equal(pragmaValue(database, 'user_version'), 20);
+    assert.equal(connection.schemaVersion, 21);
+    assert.equal(pragmaValue(database, 'user_version'), 21);
     assert.equal(database.prepare('SELECT schema_version FROM system_state').get().schema_version, 16);
     assert.deepEqual({ ...database.prepare('SELECT unit_price_yen_snapshot, line_total_yen, is_cancelled FROM order_items WHERE order_id = ?').get(ORDER_ID) }, {
       unit_price_yen_snapshot: 380,
@@ -285,14 +285,14 @@ test('schema v17 migration adds theme objects without rebuilding event infrastru
       eventLog: connection.database.prepare('SELECT COUNT(*) AS count FROM event_log').get().count,
       systemState: connection.database.prepare('SELECT COUNT(*) AS count FROM system_state').get().count,
     }, beforeCounts);
-    assert.equal(pragmaValue(connection.database, 'user_version'), 20);
+    assert.equal(pragmaValue(connection.database, 'user_version'), 21);
     assert.equal(connection.database.prepare('SELECT schema_version FROM system_state').get().schema_version, 16);
     assert.equal(connection.database.prepare('SELECT COUNT(*) AS count FROM customer_theme_variants').get().count, 2);
     connection.close();
   });
 });
 
-test('schema v19 to v20 migration is additive and preserves rows, indexes, and triggers', async () => {
+test('schema v19 through v21 preserves operational data, non-theme objects, and theme settings', async () => {
   await withTemporaryDatabase(({ databasePath }) => {
     let v17;
     try {
@@ -302,6 +302,17 @@ test('schema v19 to v20 migration is additive and preserves rows, indexes, and t
     }
     seedOrderParents(v17);
     v17.exec(readFileSync(new URL('../../docs/schema-v19-migration.sql', import.meta.url), 'utf8'));
+    v17.exec(readFileSync(new URL('../../docs/schema-v20-migration.sql', import.meta.url), 'utf8'));
+    v17.prepare(`
+      INSERT INTO customer_theme_settings (singleton_id, theme_key, version, created_at_ms, updated_at_ms)
+      VALUES (1, 'camellia', 7, 2100, 2200)
+    `).run();
+    v17.prepare(`
+      UPDATE customer_theme_variants
+      SET prompt_text = '保持する椿プロンプト', production_notes = '保持する制作メモ',
+          position_x = 0.2, position_y = 0.8, zoom = 1.7, updated_at_ms = 2200
+      WHERE theme_key = 'camellia'
+    `).run();
     const sessionId = '88888888-8888-4888-8888-888888888888';
     v17.prepare(`
       INSERT INTO table_sessions (
@@ -350,6 +361,12 @@ test('schema v19 to v20 migration is additive and preserves rows, indexes, and t
       BEGIN
         SELECT NEW.event_id;
       END;
+      CREATE INDEX idx_customer_theme_variant_preserve ON customer_theme_variants (updated_at_ms);
+      CREATE TRIGGER trg_customer_theme_variant_preserve
+      AFTER UPDATE ON customer_theme_variants
+      BEGIN
+        SELECT NEW.theme_key;
+      END;
     `);
     const beforeIndexes = v17.prepare("SELECT name, sql FROM sqlite_schema WHERE type = 'index' AND name NOT LIKE 'sqlite_autoindex_%' ORDER BY name").all();
     const beforeTriggers = v17.prepare("SELECT name, sql FROM sqlite_schema WHERE type = 'trigger' ORDER BY name").all();
@@ -359,7 +376,7 @@ test('schema v19 to v20 migration is additive and preserves rows, indexes, and t
       table,
       v17.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all().map((row) => ({ ...row })),
     ]));
-    assert.equal(pragmaValue(v17, 'user_version'), 19);
+    assert.equal(pragmaValue(v17, 'user_version'), 20);
     v17.close();
     v17 = null;
 
@@ -371,6 +388,15 @@ test('schema v19 to v20 migration is additive and preserves rows, indexes, and t
     assert.deepEqual(afterIndexes, beforeIndexes);
     assert.deepEqual(afterTriggers, beforeTriggers);
     assert.deepEqual(database.prepare('SELECT menu_item_id, formal_name, price_yen, version FROM menu_items WHERE menu_item_id = ?').get('edamame'), beforeItem);
+    assert.deepEqual({ ...database.prepare('SELECT singleton_id, theme_key, version, created_at_ms, updated_at_ms FROM customer_theme_settings').get() }, {
+      singleton_id: 1, theme_key: 'camellia', version: 7, created_at_ms: 2100, updated_at_ms: 2200,
+    });
+    assert.deepEqual({ ...database.prepare("SELECT theme_key, prompt_text, production_notes, position_x, position_y, zoom, updated_at_ms FROM customer_theme_variants WHERE theme_key = 'camellia'").get() }, {
+      theme_key: 'camellia', prompt_text: '保持する椿プロンプト', production_notes: '保持する制作メモ', position_x: 0.2, position_y: 0.8, zoom: 1.7, updated_at_ms: 2200,
+    });
+    const rebuiltThemeSql = database.prepare("SELECT name, sql FROM sqlite_schema WHERE type = 'table' AND name IN ('customer_theme_settings', 'customer_theme_variants') ORDER BY name").all();
+    assert.equal(rebuiltThemeSql.length, 2);
+    assert.ok(rebuiltThemeSql.every((table) => !/theme_key\s+TEXT[^,]*CHECK\s*\(\s*theme_key\s+IN/i.test(table.sql)));
     assert.equal(database.prepare('SELECT customer_visibility_mode FROM menu_items WHERE menu_item_id = ?').get('edamame').customer_visibility_mode, 'all_tables');
     assert.equal(database.prepare('SELECT table_visibility_mode FROM menu_items WHERE menu_item_id = ?').get('edamame').table_visibility_mode, 'all_tables');
     assert.equal(database.prepare('SELECT COUNT(*) AS count FROM menu_item_table_visibility').get().count, 0);
@@ -379,7 +405,7 @@ test('schema v19 to v20 migration is additive and preserves rows, indexes, and t
       table,
       database.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all().map((row) => ({ ...row })),
     ])), beforeHistory);
-    assert.equal(pragmaValue(database, 'user_version'), 20);
+    assert.equal(pragmaValue(database, 'user_version'), 21);
     assert.deepEqual({ ...database.prepare('SELECT heading_text, body_text, version FROM customer_order_start_notice_settings WHERE singleton_id = 1').get() }, {
       heading_text: 'ご注文の前にご確認ください',
       body_text: '20歳未満の入店禁止\n飲酒運転しません・させません\nSNS投稿・LIVE配信禁止\nお支払いは現金のみ',
@@ -427,6 +453,38 @@ test('schema v17 migration rolls back atomically after a failed migration script
   });
 });
 
+test('schema v20 to v21 theme-table rebuild rolls back atomically after a failed script', async () => {
+  await withTemporaryDatabase(({ directory, databasePath }) => {
+    const v20 = createV14Database(databasePath);
+    for (const file of ['schema-v15-migration.sql', 'schema-v16-migration.sql', 'schema-v17-migration.sql', 'schema-v18-migration.sql', 'schema-v19-migration.sql', 'schema-v20-migration.sql']) {
+      v20.exec(readFileSync(new URL(`../../docs/${file}`, import.meta.url), 'utf8'));
+    }
+    v20.prepare(`
+      INSERT INTO customer_theme_settings (singleton_id, theme_key, version, created_at_ms, updated_at_ms)
+      VALUES (1, 'camellia', 3, 100, 200)
+    `).run();
+    v20.close();
+
+    const failedMigrationPath = join(directory, 'schema-v21-failing.sql');
+    writeFileSync(failedMigrationPath, `
+      CREATE TABLE customer_theme_settings_v21 (singleton_id INTEGER PRIMARY KEY, theme_key TEXT NOT NULL);
+      THIS IS NOT VALID SQL;
+    `);
+    assert.throws(
+      () => initializeDatabase({ databasePath, v21MigrationPath: failedMigrationPath }),
+      (error) => error.code === 'MIGRATION_FAILED',
+    );
+
+    const recovered = new DatabaseSync(databasePath);
+    assert.equal(pragmaValue(recovered, 'user_version'), 20);
+    assert.deepEqual({ ...recovered.prepare('SELECT singleton_id, theme_key, version, created_at_ms, updated_at_ms FROM customer_theme_settings').get() }, {
+      singleton_id: 1, theme_key: 'camellia', version: 3, created_at_ms: 100, updated_at_ms: 200,
+    });
+    assert.equal(recovered.prepare("SELECT COUNT(*) AS count FROM sqlite_schema WHERE type = 'table' AND name LIKE 'customer_theme_%_v21'").get().count, 0);
+    recovered.close();
+  });
+});
+
 test('schema contains every required table', async () => {
   await withTemporaryDatabase(({ databasePath }) => {
     const connection = initializeDatabase({ databasePath });
@@ -455,8 +513,8 @@ test('schema v7 migrates to v8 with every existing menu item in normal mode', as
     raw.close();
 
     const connection = initializeDatabase({ databasePath });
-    assert.equal(connection.schemaVersion, 20);
-    assert.equal(pragmaValue(connection.database, 'user_version'), 20);
+    assert.equal(connection.schemaVersion, 21);
+    assert.equal(pragmaValue(connection.database, 'user_version'), 21);
     assert.equal(connection.database.prepare('SELECT schema_version FROM system_state').get().schema_version, 16);
     assert.equal(connection.database.prepare("SELECT COUNT(*) AS count FROM menu_items WHERE ordering_mode = 'normal'").get().count, 1);
     assert.equal(connection.database.prepare('SELECT COUNT(*) AS count FROM menu_items').get().count, 1);
@@ -519,8 +577,8 @@ test('schema v9 clone migrates through v10, v11, and v12 with notice defaults an
     raw.close();
 
     const connection = initializeDatabase({ databasePath });
-    assert.equal(connection.schemaVersion, 20);
-    assert.equal(pragmaValue(connection.database, 'user_version'), 20);
+    assert.equal(connection.schemaVersion, 21);
+    assert.equal(pragmaValue(connection.database, 'user_version'), 21);
     const noticeDefaults = connection.database.prepare('SELECT notice_text, notice_enabled FROM business_hours').get();
     assert.equal(noticeDefaults.notice_text, '');
     assert.equal(noticeDefaults.notice_enabled, 0);
@@ -566,7 +624,7 @@ test('a valid schema v17 database can be closed and reopened', async () => {
   await withTemporaryDatabase(({ databasePath }) => {
     initializeDatabase({ databasePath }).close();
     const reopened = initializeDatabase({ databasePath });
-    assert.equal(reopened.schemaVersion, 20);
+    assert.equal(reopened.schemaVersion, 21);
     assert.equal(reopened.database.prepare('SELECT COUNT(*) AS count FROM customer_theme_settings').get().count, 0);
     reopened.close();
   });
@@ -703,8 +761,8 @@ test('legacy schema v1 migrates through schema v10 and assigns existing orders t
       WHERE order_id = ?
     `).get(ORDER_ID);
 
-    assert.equal(connection.schemaVersion, 20);
-    assert.equal(pragmaValue(connection.database, 'user_version'), 20);
+    assert.equal(connection.schemaVersion, 21);
+    assert.equal(pragmaValue(connection.database, 'user_version'), 21);
     assert.equal(connection.database.prepare('SELECT schema_version FROM system_state').get().schema_version, 16);
     assert.deepEqual({
       orders: connection.database.prepare('SELECT COUNT(*) AS count FROM orders').get().count,
@@ -777,8 +835,8 @@ test('schema v4 fixture migrates through the formal v7 path while preserving cat
 
     const connection = initializeDatabase({ databasePath: v4Path });
     const database = connection.database;
-    assert.equal(connection.schemaVersion, 20);
-    assert.equal(pragmaValue(database, 'user_version'), 20);
+    assert.equal(connection.schemaVersion, 21);
+    assert.equal(pragmaValue(database, 'user_version'), 21);
     assert.equal(database.prepare('PRAGMA integrity_check').get().integrity_check, 'ok');
     assert.deepEqual({
       orders: database.prepare('SELECT COUNT(*) AS count FROM orders').get().count,
@@ -855,11 +913,11 @@ test('invalid item quantities are rejected by CHECK constraints', async () => {
   });
 });
 
-test('schema versions newer than v20 are rejected without migration', async () => {
+test('schema versions newer than v21 are rejected without migration', async () => {
   await withTemporaryDatabase(({ directory }) => {
     const databasePath = join(directory, 'version-5.sqlite3');
     const raw = new DatabaseSync(databasePath);
-    raw.exec('PRAGMA user_version = 21;');
+    raw.exec('PRAGMA user_version = 22;');
     raw.close();
 
     assert.throws(

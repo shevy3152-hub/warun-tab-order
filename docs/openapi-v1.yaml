@@ -1768,7 +1768,7 @@ components:
               $ref: '#/components/schemas/TimestampMs'
     CustomerThemeKey:
       type: string
-      enum: [standard, camellia]
+      enum: [standard, camellia, autumn-leaves, moon-susuki, japanese-halloween]
     CustomerOrderStartNoticeFields:
       type: object
       additionalProperties: false
@@ -1903,11 +1903,17 @@ components:
         themes:
           type: object
           additionalProperties: false
-          required: [standard, camellia]
+          required: [standard, camellia, autumn-leaves, moon-susuki, japanese-halloween]
           properties:
             standard:
               $ref: '#/components/schemas/CustomerThemeVariantConfig'
             camellia:
+              $ref: '#/components/schemas/CustomerThemeVariantConfig'
+            autumn-leaves:
+              $ref: '#/components/schemas/CustomerThemeVariantConfig'
+            moon-susuki:
+              $ref: '#/components/schemas/CustomerThemeVariantConfig'
+            japanese-halloween:
               $ref: '#/components/schemas/CustomerThemeVariantConfig'
     UpdateCustomerThemeConfigRequest:
       type: object
@@ -1922,11 +1928,17 @@ components:
         themes:
           type: object
           additionalProperties: false
-          required: [standard, camellia]
+          required: [standard, camellia, autumn-leaves, moon-susuki, japanese-halloween]
           properties:
             standard:
               $ref: '#/components/schemas/CustomerThemeVariantConfig'
             camellia:
+              $ref: '#/components/schemas/CustomerThemeVariantConfig'
+            autumn-leaves:
+              $ref: '#/components/schemas/CustomerThemeVariantConfig'
+            moon-susuki:
+              $ref: '#/components/schemas/CustomerThemeVariantConfig'
+            japanese-halloween:
               $ref: '#/components/schemas/CustomerThemeVariantConfig'
     AdminCustomerTheme:
       type: object

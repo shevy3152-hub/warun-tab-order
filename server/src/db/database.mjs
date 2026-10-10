@@ -5,7 +5,7 @@ import { DatabaseSync } from 'node:sqlite';
 
 export const LEGACY_SCHEMA_VERSION = 1;
 export const SESSION_SCHEMA_VERSION = 2;
-export const SCHEMA_VERSION = 20;
+export const SCHEMA_VERSION = 21;
 
 export const REQUIRED_TABLES = Object.freeze([
   'system_state',
@@ -161,6 +161,9 @@ export const DEFAULT_V19_MIGRATION_PATH = resolve(
 );
 export const DEFAULT_V20_MIGRATION_PATH = resolve(
   moduleDirectory, '..', '..', '..', 'docs', 'schema-v20-migration.sql',
+);
+export const DEFAULT_V21_MIGRATION_PATH = resolve(
+  moduleDirectory, '..', '..', '..', 'docs', 'schema-v21-migration.sql',
 );
 
 export class DatabaseInitializationError extends Error {
@@ -575,6 +578,61 @@ function migrateSchemaV19ToV20(database, migrationPath) {
   }
 }
 
+function migrateSchemaV20ToV21(database, migrationPath) {
+  let transactionOpen = false;
+  try {
+    database.exec('BEGIN IMMEDIATE;');
+    transactionOpen = true;
+    const tables = ['customer_theme_settings', 'customer_theme_variants'];
+    const objects = database.prepare(`
+      SELECT type, name, sql
+      FROM sqlite_schema
+      WHERE tbl_name IN (?, ?) AND type IN ('index', 'trigger') AND sql IS NOT NULL
+      ORDER BY type, name
+    `).all(...tables);
+    const foreignKeys = tables.flatMap((table) => database.prepare(`PRAGMA foreign_key_list(${table})`).all());
+    const inboundForeignKeys = userTableNames(database).flatMap((table) => database.prepare(`PRAGMA foreign_key_list(${table})`).all()
+      .filter((foreignKey) => tables.includes(foreignKey.table)));
+
+    database.exec(readFileSync(migrationPath, 'utf8'));
+    const sameRows = (table, columns) => {
+      const oldRows = database.prepare(`SELECT ${columns.join(', ')} FROM ${table} ORDER BY ${columns[0]}`).all();
+      const nextTable = `${table}_v21`;
+      const nextRows = database.prepare(`SELECT ${columns.join(', ')} FROM ${nextTable} ORDER BY ${columns[0]}`).all();
+      return oldRows.length === nextRows.length
+        && oldRows.every((row, index) => columns.every((column) => row[column] === nextRows[index][column]));
+    };
+    if (!sameRows('customer_theme_settings', ['singleton_id', 'theme_key', 'version', 'created_at_ms', 'updated_at_ms'])
+      || !sameRows('customer_theme_variants', ['theme_key', 'prompt_text', 'production_notes', 'position_x', 'position_y', 'zoom', 'created_at_ms', 'updated_at_ms'])) {
+      throw new Error('Customer theme migration copy verification failed.');
+    }
+    if (foreignKeys.length > 0 || inboundForeignKeys.length > 0) {
+      throw new Error('Unexpected customer theme foreign-key dependency prevents safe table rebuild.');
+    }
+
+    for (const table of tables) database.exec(`DROP TABLE ${table};`);
+    for (const table of tables) database.exec(`ALTER TABLE ${table}_v21 RENAME TO ${table};`);
+    for (const object of objects) database.exec(object.sql);
+    const integrity = database.prepare('PRAGMA integrity_check').get()?.integrity_check;
+    const violations = database.prepare('PRAGMA foreign_key_check').all();
+    if (integrity !== 'ok' || violations.length > 0) {
+      throw new Error('Customer theme migration integrity verification failed.');
+    }
+    for (const object of objects) {
+      const restored = database.prepare('SELECT sql FROM sqlite_schema WHERE type = ? AND name = ?').get(object.type, object.name);
+      if (restored?.sql !== object.sql) throw new Error(`Customer theme ${object.type} preservation verification failed.`);
+    }
+    database.exec('PRAGMA user_version = 21;');
+    database.exec('COMMIT;');
+    transactionOpen = false;
+  } catch (error) {
+    if (transactionOpen) {
+      try { database.exec('ROLLBACK;'); } catch {}
+    }
+    throw new DatabaseInitializationError('MIGRATION_FAILED', 'The customer theme key schema migration failed.', { cause: error });
+  }
+}
+
 function migrateSchemaV1ToV2(database) {
   let transactionOpen = false;
   try {
@@ -926,6 +984,7 @@ export function initializeDatabase({
   v18MigrationPath = DEFAULT_V18_MIGRATION_PATH,
   v19MigrationPath = DEFAULT_V19_MIGRATION_PATH,
   v20MigrationPath = DEFAULT_V20_MIGRATION_PATH,
+  v21MigrationPath = DEFAULT_V21_MIGRATION_PATH,
 } = {}) {
   const resolvedDatabasePath = resolveFilePath(databasePath, 'databasePath');
   const resolvedSchemaPath = resolveFilePath(schemaPath, 'schemaPath');
@@ -947,6 +1006,7 @@ export function initializeDatabase({
   const resolvedV18MigrationPath = resolveFilePath(v18MigrationPath, 'v18MigrationPath');
   const resolvedV19MigrationPath = resolveFilePath(v19MigrationPath, 'v19MigrationPath');
   const resolvedV20MigrationPath = resolveFilePath(v20MigrationPath, 'v20MigrationPath');
+  const resolvedV21MigrationPath = resolveFilePath(v21MigrationPath, 'v21MigrationPath');
 
   mkdirSync(dirname(resolvedDatabasePath), { recursive: true });
 
@@ -1060,6 +1120,10 @@ export function initializeDatabase({
     }
     if (currentVersion === 19) {
       migrateSchemaV19ToV20(database, resolvedV20MigrationPath);
+      currentVersion = 20;
+    }
+    if (currentVersion === 20) {
+      migrateSchemaV20ToV21(database, resolvedV21MigrationPath);
       enableWriteAheadLogging(database);
       currentVersion = SCHEMA_VERSION;
     }

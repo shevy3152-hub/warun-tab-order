@@ -1,3 +1,4 @@
+import { CUSTOMER_THEME_DEFINITIONS } from "../../shared/customer-theme-definitions.mjs";
 import { normalizeBusinessHours } from "./business-hours.js";
 import { withBusinessHoursNotice } from "./business-hours-notice.js";
 
@@ -354,7 +355,8 @@ function normalizeCustomerThemeVariant(value) {
 }
 
 export function normalizeAdminCustomerThemeConfig(body) {
-  if (!body || !["standard", "camellia"].includes(body.theme)
+  const themeKeys = Object.keys(CUSTOMER_THEME_DEFINITIONS);
+  if (!body || !themeKeys.includes(body.theme)
     || !Number.isSafeInteger(body.version) || body.version < 0
     || !Number.isSafeInteger(body.updatedAtMs) || body.updatedAtMs < 0
     || !body.themes || typeof body.themes !== "object") {
@@ -364,10 +366,7 @@ export function normalizeAdminCustomerThemeConfig(body) {
     theme: body.theme,
     version: body.version,
     updatedAtMs: body.updatedAtMs,
-    themes: {
-      standard: normalizeCustomerThemeVariant(body.themes.standard),
-      camellia: normalizeCustomerThemeVariant(body.themes.camellia),
-    },
+    themes: Object.fromEntries(themeKeys.map((theme) => [theme, normalizeCustomerThemeVariant(body.themes[theme])])),
   };
 }
 

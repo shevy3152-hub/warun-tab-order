@@ -1,4 +1,5 @@
 import { HTTP_ERROR_CODES, createHttpError } from './http-errors.mjs';
+import { CUSTOMER_THEME_DEFINITIONS } from '../../../shared/customer-theme-definitions.mjs';
 
 const DEVICE_ROLES = new Set(['customer', 'kitchen', 'admin']);
 const ORDER_STATUSES = new Set(['new', 'active', 'completed', 'cancelled']);
@@ -49,7 +50,7 @@ const EVENT_TYPES_BY_ROLE = Object.freeze({
     'customer_order_start_notice.updated',
   ]),
 });
-const SUPPORTED_SCHEMA_VERSION = 20;
+const SUPPORTED_SCHEMA_VERSION = 21;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const OPAQUE_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
 
@@ -591,7 +592,7 @@ export function mapBusinessHoursResponse(settings, { includeVersion = false } = 
 
 export function mapCustomerThemeResponse(settings, { includeVersion = false } = {}) {
   requireObject(settings);
-  const response = { theme: requireOneOf(settings.theme, new Set(['standard', 'camellia'])) };
+  const response = { theme: requireOneOf(settings.theme, new Set(Object.keys(CUSTOMER_THEME_DEFINITIONS))) };
   if (includeVersion) {
     response.version = requireInteger(settings.version);
     response.updatedAtMs = requireInteger(settings.updatedAtMs);
@@ -625,7 +626,7 @@ function mapCustomerThemeVariant(variant) {
 
 export function mapCustomerThemeConfigResponse(settings, { includeVersion = false, publicOnly = false } = {}) {
   requireObject(settings);
-  const theme = requireOneOf(settings.theme, new Set(['standard', 'camellia']));
+  const theme = requireOneOf(settings.theme, new Set(Object.keys(CUSTOMER_THEME_DEFINITIONS)));
   if (publicOnly) {
     return {
       theme,
@@ -637,10 +638,7 @@ export function mapCustomerThemeConfigResponse(settings, { includeVersion = fals
   requireObject(settings.themes);
   const response = {
     theme,
-    themes: {
-      standard: mapCustomerThemeVariant(settings.themes.standard),
-      camellia: mapCustomerThemeVariant(settings.themes.camellia),
-    },
+    themes: Object.fromEntries(Object.keys(CUSTOMER_THEME_DEFINITIONS).map((key) => [key, mapCustomerThemeVariant(settings.themes[key])])),
   };
   if (includeVersion) {
     response.version = requireInteger(settings.version);
