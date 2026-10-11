@@ -1,0 +1,236 @@
+export const KITCHEN_NOTIFICATION_GAIN = 0.35;
+export const DEFAULT_KITCHEN_SOUND_VOLUME = 50;
+export function normalizeKitchenSoundVolume(value) {
+  return typeof value === "number" && Number.isFinite(value) ? Math.round(Math.max(0, Math.min(100, value))) : DEFAULT_KITCHEN_SOUND_VOLUME;
+}
+
+export function kitchenSoundStorageKey(env = globalThis) {
+  try {
+    const endpoint = new URL(env.WARUN_API_BASE || "/v1", env.location?.origin);
+    return "warun:kitchen-order-sound:v1:" + endpoint.origin + endpoint.pathname.replace(/\/+$/, "") + (env.WARUN_ORDER_MODE === "demo" || new URLSearchParams(env.location?.search).get("demo") === "1" ? ":demo" : ":api");
+  } catch { return "warun:kitchen-order-sound:v1:local"; }
+}
+
+export function createKitchenSoundEngine({ env = globalThis, onStateChange = () => {} } = {}) {
+  let context = null;
+  let nextStart = 0;
+  let volume = DEFAULT_KITCHEN_SOUND_VOLUME;
+  const nodes = new Set();
+  return {
+    async activate() {
+      const Constructor = env.AudioContext || env.webkitAudioContext;
+      if (!Constructor) throw new Error("Audio unavailable");
+      if (!context) {
+        context = new Constructor();
+        context.onstatechange = () => onStateChange(context.state);
+      }
+      await context.resume();
+      if (context.state !== "running") throw new Error("Audio not running");
+    },
+    setVolume(value) { volume = normalizeKitchenSoundVolume(value); if (volume === 0) this.stop(); },
+    isRunning() { return context?.state === "running"; },
+    play() {
+      if (context?.state !== "running") throw new Error("Audio not running");
+      if (volume === 0) return;
+      const peak = KITCHEN_NOTIFICATION_GAIN * volume / DEFAULT_KITCHEN_SOUND_VOLUME;
+      const oscillator = context.createOscillator();
+      const gain = context.createGain();
+      const start = Math.max(context.currentTime, nextStart);
+      nextStart = start + 0.42;
+      nodes.add(oscillator);
+      oscillator.type = "sine";
+      oscillator.frequency.setValueAtTime(880, start);
+      oscillator.frequency.setValueAtTime(1174, start + 0.14);
+      gain.gain.setValueAtTime(0, start);
+      gain.gain.linearRampToValueAtTime(peak, start + 0.015);
+      gain.gain.setValueAtTime(peak, start + 0.20);
+      gain.gain.exponentialRampToValueAtTime(0.001, start + 0.32);
+      oscillator.connect(gain);
+      gain.connect(context.destination);
+      oscillator.onended = () => { nodes.delete(oscillator); oscillator.disconnect(); gain.disconnect(); };
+      oscillator.start(start);
+      oscillator.stop(start + 0.34);
+    },
+    stop() {
+      for (const oscillator of nodes) { try { oscillator.stop(); oscillator.disconnect(); } catch { /* Already ended. */ } }
+      nodes.clear();
+      nextStart = 0;
+    },
+    dispose() {
+      this.stop();
+      if (context) { context.onstatechange = null; void context.close().catch(() => {}); }
+    },
+  };
+}
+
+export function createKitchenOrderSound({ storage, storageKey, engine, loadBaseline = async () => [], now = () => performance.now(), onChange = () => {}, setTimer = setTimeout, clearTimer = clearTimeout, timeoutMs = 8000 } = {}) {
+  let stored = {};
+  let storageAvailable = true;
+  try { stored = JSON.parse(storage?.getItem(storageKey) || "{}"); } catch { storageAvailable = false; }
+  if (!stored || typeof stored !== "object") stored = {};
+  const seen = new Set(Array.isArray(stored.seenIds) ? stored.seenIds.filter((id) => typeof id === "string") : []);
+  let volume = normalizeKitchenSoundVolume(stored.volume);
+  engine.setVolume?.(volume);
+  let requestedOn = stored.requestedOn === true;
+  let initialized = false;
+  let enabledAt = Infinity;
+  let generation = 0;
+  let disposed = false;
+  let status = "off";
+  let message = requestedOn ? "前回はONでした。スイッチをONにして、この画面の音を有効にしてください。" : "通知音はOFFです。スイッチをONにすると有効になります。";
+  let pending = null;
+  let audioStatus = "idle";
+  let baselineStatus = "idle";
+  const state = () => ({ status, message, storageAvailable, audioStatus, baselineStatus, volume });
+  const cancelPending = () => { pending?.abort(); pending = null; };
+  const bounded = (operation, stage, signal) => new Promise((resolve, reject) => {
+    let timer;
+    let settled = false;
+    const finish = (callback, value) => {
+      if (settled) return;
+      settled = true;
+      clearTimer(timer);
+      signal.removeEventListener("abort", abort);
+      callback(value);
+    };
+    const abort = () => finish(reject, { stage, code: "CANCELLED" });
+    signal.addEventListener("abort", abort, { once: true });
+    timer = setTimer(() => finish(reject, { stage, code: "TIMEOUT" }), timeoutMs);
+    Promise.resolve(operation).then(value => finish(resolve, value), error => finish(reject, { stage, code: error?.code, status: error?.status, name: error?.name, message: error?.message }));
+  });
+  const publish = () => onChange(state());
+  const persist = () => {
+    if (!storageAvailable) return;
+    try {
+      if (!storage?.setItem) throw new Error("Storage unavailable");
+      storage.setItem(storageKey, JSON.stringify({ requestedOn, seenIds: [...seen], volume }));
+    } catch { storageAvailable = false; publish(); }
+  };
+  const fail = (error = {}, stage = error.stage || "audio") => {
+    generation += 1;
+    cancelPending();
+    enabledAt = Infinity;
+    engine.stop();
+    status = "blocked";
+    if (stage === "audio") audioStatus = "failed";
+    else baselineStatus = "failed";
+    const reason = stage === "audio"
+      ? error.code === "TIMEOUT" ? "音声有効化が8秒以内に完了しませんでした"
+        : error.message === "Audio unavailable" ? "このブラウザーは音声機能に対応していません"
+        : error.name === "NotAllowedError" ? "ブラウザーが音声の有効化を拒否しました"
+        : "音声を実行中にできませんでした（停止・再生失敗）"
+      : error.code === "TIMEOUT" ? "注文一覧の取得が8秒以内に完了しませんでした"
+        : error.code === "API_UNAVAILABLE" ? "注文APIの接続先または認証設定がありません"
+        : error.status ? `注文一覧の取得に失敗しました（HTTP ${error.status}）`
+        : error.code === "INVALID_RESPONSE" ? "注文一覧の応答形式が不正です"
+        : "注文一覧を取得できませんでした（通信・応答エラー）";
+    message = `${reason}。通知音はOFFです。注文表示は続きます。スイッチをONにして再度有効化してください。`;
+    publish();
+  };
+  return {
+    getState: state,
+    setEnabled(value) { return value ? this.enable() : this.disable(); },
+    setVolume(value) {
+      if (disposed) return;
+      volume = normalizeKitchenSoundVolume(value);
+      engine.setVolume?.(volume);
+      persist();
+      publish();
+    },
+    async enable() {
+      if (disposed) return;
+      cancelPending();
+      const attempt = ++generation;
+      pending = new AbortController();
+      const signal = pending.signal;
+      status = "enabling";
+      audioStatus = "pending";
+      baselineStatus = "pending";
+      enabledAt = Infinity;
+      const activationStartedAt = now();
+      message = "有効化中：音声と注文一覧を確認しています。クリックで中止できます。";
+      publish();
+      const progress = (stage) => {
+        if (disposed || attempt !== generation) return;
+        if (stage === "audio") audioStatus = "ready";
+        else baselineStatus = "ready";
+        message = audioStatus !== "ready" ? "有効化中：音声の有効化を待っています。クリックで中止できます。"
+          : baselineStatus !== "ready" ? "有効化中：音声は準備済み、注文一覧の取得を待っています。クリックで中止できます。"
+          : "有効化中：ONを確定しています。";
+        publish();
+      };
+      try {
+        // Both operations start in the click handler; only a completed baseline can confirm ON.
+        const activation = bounded(engine.activate(), "audio", signal).then(() => progress("audio"));
+        const baselineRead = bounded(loadBaseline({ signal }), "baseline", signal).then(baseline => {
+          if (!Array.isArray(baseline)) throw { stage: "baseline", code: "INVALID_RESPONSE" };
+          progress("baseline");
+          return baseline;
+        });
+        const [, baseline] = await Promise.all([activation, baselineRead]);
+        if (disposed || attempt !== generation) return;
+        if (engine.isRunning?.() === false) throw { stage: "audio", message: "Audio not running" };
+        pending = null;
+        for (const order of baseline) if (typeof order?.id === "string" && order.id) seen.add(order.id);
+        initialized = true;
+        status = "on";
+        requestedOn = true;
+        enabledAt = activationStartedAt;
+        message = "通知音ON：新規注文を受信すると鳴ります。";
+        persist();
+        publish();
+      } catch (error) { if (!disposed && attempt === generation) fail(error); }
+    },
+    disable() {
+      if (disposed) return;
+      generation += 1;
+      cancelPending();
+      audioStatus = "idle";
+      baselineStatus = "idle";
+      enabledAt = Infinity;
+      requestedOn = false;
+      engine.stop();
+      status = "off";
+      message = "通知音はOFFです。";
+      persist();
+      publish();
+    },
+    async test() {
+      if (disposed) return;
+      const attempt = generation;
+      if (volume === 0) { message = "消音（音量0％）のため試聴音は鳴りません。"; publish(); return; }
+      try {
+        await engine.activate();
+        if (disposed || attempt !== generation) return;
+        if (volume > 0) engine.play();
+        message = volume === 0 ? "消音（音量0％）のため試聴音は鳴りません。" : status === "on" ? "通知音ON：試聴音を再生しました。" : "試聴音を再生しました。新規注文の通知音はOFFです。";
+        publish();
+      } catch (error) {
+        if (disposed || attempt !== generation) return;
+        if (status === "on" && engine.isRunning?.() === false) { fail(error); return; }
+        message = "試聴できませんでした（音声の有効化・再生失敗）。通知スイッチの状態は変更していません。音を試すを再度クリックしてください。";
+        publish();
+      }
+    },
+    observe(orders, { ready = true, requestStartedAt, allowUnversioned = false } = {}) {
+      if (disposed || !ready || !Array.isArray(orders)) return;
+      const first = !initialized;
+      initialized = true;
+      const added = [];
+      for (const order of orders) {
+        if (typeof order?.id !== "string" || !order.id || seen.has(order.id)) continue;
+        seen.add(order.id);
+        added.push(order);
+      }
+      if (added.length) persist();
+      if (first || status !== "on" || !Number.isFinite(requestStartedAt) || requestStartedAt < enabledAt) return;
+      for (const order of added) {
+        // An unseen restored/edited order is not a newly created order.
+        if (!["new", "active"].includes(order.status) || (order.version !== 1 && !(allowUnversioned && order.version == null))) continue;
+        try { if (volume > 0) engine.play(); } catch { fail(); break; }
+      }
+    },
+    audioStateChanged(value) { if (!disposed && status === "on" && value !== "running") fail(); },
+    dispose() { disposed = true; generation += 1; cancelPending(); engine.dispose(); },
+  };
+}

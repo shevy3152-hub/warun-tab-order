@@ -1,3 +1,4 @@
+import { KitchenOrderSound } from "./KitchenOrderSound.jsx";
 import { ProductImageLocation, ProductImageUriField } from "./ProductImageLocation.jsx";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
@@ -2121,6 +2122,7 @@ function KitchenScreen({ state, updateState, apiState, checkoutState, onServe, o
   const displayedCalls = callPanelTableId === null ? activeCalls : activeCalls.filter((call) => String(call.tableId) === callPanelTableId);
   return <StaffShell route="/kitchen" title="新着注文" subtitle="未提供の注文をテーブルごとに表示します。提供完了後も来店・注文履歴は保持されます。" state={state} newOrderCount={activeOrders.length} clock={<time className="kitchen-clock" aria-label={`現在時刻 ${formatTime(new Date())}`}>{formatTime(new Date())}</time>} status={<div className="staff-topbar__right"><div className="staff-call-rail"><button type="button" className="staff-call-button" aria-label="スタッフ呼出" title="スタッフ呼出" onClick={() => openCallPanel()}><Bell size={26} weight="fill" /><span className="kitchen-sidebar__call-label">スタッフ呼出</span> {activeCalls.length ? <b>{activeCalls.length}</b> : null}</button></div>{activeCallGroups.length ? <div className="staff-call-rail__list" aria-label="未対応のスタッフ呼び出し一覧">{activeCallGroups.map((group) => <button type="button" className="staff-call-rail__item" key={group.tableId} aria-label={`テーブル ${group.tableId} のスタッフ呼び出し ${group.calls.length}件を確認`} onClick={() => openCallPanel(group.tableId)}><span>T{group.tableId}</span></button>)}</div> : null}<ConnectionBadge online announceStatus /></div>}>
     <section className="kitchen-content">
+      <KitchenOrderSound orders={liveOrders} ready={demoMode || (apiMode && !apiState.loading && !apiState.error)} requestStartedAt={apiState?.notificationRequestStartedAt} demoMode={demoMode} />
       {apiMode && apiState.loading ? <div className="kitchen-empty"><p>注文を読み込み中です。</p></div> : null}
       {apiMode && apiState.error ? <div className="kitchen-empty" role="alert"><p>注文情報を取得できません。</p></div> : null}
       {!apiMode && !tables.length ? <div className="kitchen-empty"><CheckCircle size={54} weight="thin" /><h2>すべて提供済みです</h2><p>新しい注文が届くと、テーブルごとに表示されます。</p></div> : null}
@@ -3975,7 +3977,7 @@ export function App() {
     const load = async () => {
       try {
         const [snapshot, checkouts] = await Promise.all([fetchKitchenSnapshot({ env: window }), fetchKitchenCheckoutRequests({ env: window })]);
-        if (!cancelled) setKitchenApiState({ loading: false, error: false, orders: snapshot.orders, sessions: snapshot.sessions });
+        if (!cancelled) setKitchenApiState({ loading: false, error: false, orders: snapshot.orders, sessions: snapshot.sessions, notificationRequestStartedAt: snapshot.notificationRequestStartedAt });
         if (!cancelled) setKitchenCheckoutState({ loading: false, error: false, checkouts });
       } catch {
         if (!cancelled) setKitchenApiState({ loading: false, error: true, orders: [], sessions: [] });
@@ -3993,7 +3995,7 @@ export function App() {
     try {
       await markKitchenItemServed({ env: window, orderId, orderItemId });
       const snapshot = await fetchKitchenSnapshot({ env: window });
-      setKitchenApiState({ loading: false, error: false, orders: snapshot.orders, sessions: snapshot.sessions });
+      setKitchenApiState({ loading: false, error: false, orders: snapshot.orders, sessions: snapshot.sessions, notificationRequestStartedAt: snapshot.notificationRequestStartedAt });
     } catch {
       setKitchenApiState((current) => current ? { ...current, error: true } : current);
     }
@@ -4002,14 +4004,14 @@ export function App() {
   const saveKitchenItemPrice = async (orderId, orderItemId, unitPriceYen) => {
     await adjustKitchenItemUnitPrice({ env: window, orderId, orderItemId, unitPriceYen });
     const [snapshot, checkouts] = await Promise.all([fetchKitchenSnapshot({ env: window }), fetchKitchenCheckoutRequests({ env: window })]);
-    setKitchenApiState({ loading: false, error: false, orders: snapshot.orders, sessions: snapshot.sessions });
+    setKitchenApiState({ loading: false, error: false, orders: snapshot.orders, sessions: snapshot.sessions, notificationRequestStartedAt: snapshot.notificationRequestStartedAt });
     setKitchenCheckoutState({ loading: false, error: false, checkouts });
   };
 
   const adjustKitchenItemQuantity = async (operation) => {
     await adjustKitchenItemQuantityRequest({ env: window, ...operation });
     const [snapshot, checkouts] = await Promise.all([fetchKitchenSnapshot({ env: window }), fetchKitchenCheckoutRequests({ env: window })]);
-    setKitchenApiState({ loading: false, error: false, orders: snapshot.orders, sessions: snapshot.sessions });
+    setKitchenApiState({ loading: false, error: false, orders: snapshot.orders, sessions: snapshot.sessions, notificationRequestStartedAt: snapshot.notificationRequestStartedAt });
     setKitchenCheckoutState({ loading: false, error: false, checkouts });
   };
 
@@ -4018,7 +4020,7 @@ export function App() {
     const result = await change({ env: window, orderId, orderItemId, reason });
     if (kitchenApiConfigured(window)) {
       const [snapshot, checkouts] = await Promise.all([fetchKitchenSnapshot({ env: window }), fetchKitchenCheckoutRequests({ env: window })]);
-      setKitchenApiState({ loading: false, error: false, orders: snapshot.orders, sessions: snapshot.sessions });
+      setKitchenApiState({ loading: false, error: false, orders: snapshot.orders, sessions: snapshot.sessions, notificationRequestStartedAt: snapshot.notificationRequestStartedAt });
       setKitchenCheckoutState({ loading: false, error: false, checkouts });
     }
     return result;
@@ -4052,7 +4054,7 @@ export function App() {
     const result = await payKitchenCheckout({ env: window, checkoutRequestId: checkout.checkoutRequestId, expectedVersion: checkout.version, paymentMethod });
     await refreshKitchenCheckouts();
     const snapshot = await fetchKitchenSnapshot({ env: window });
-    setKitchenApiState({ loading: false, error: false, orders: snapshot.orders, sessions: snapshot.sessions });
+    setKitchenApiState({ loading: false, error: false, orders: snapshot.orders, sessions: snapshot.sessions, notificationRequestStartedAt: snapshot.notificationRequestStartedAt });
     return result;
   };
 
@@ -4064,7 +4066,7 @@ export function App() {
   const closeKitchenSession = async ({ tableId, sessionId }) => {
     await closeKitchenTableSession({ env: window, tableId, sessionId });
     const snapshot = await fetchKitchenSnapshot({ env: window });
-    setKitchenApiState({ loading: false, error: false, orders: snapshot.orders, sessions: snapshot.sessions });
+    setKitchenApiState({ loading: false, error: false, orders: snapshot.orders, sessions: snapshot.sessions, notificationRequestStartedAt: snapshot.notificationRequestStartedAt });
   };
 
   useEffect(() => {

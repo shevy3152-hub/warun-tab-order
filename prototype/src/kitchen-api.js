@@ -190,15 +190,17 @@ export function subscribeKitchenInvalidations({ env = globalThis, fetchImpl = en
   };
 }
 
-export async function fetchKitchenSnapshot({ env = globalThis, fetchImpl = env.fetch } = {}) {
+export async function fetchKitchenSnapshot({ env = globalThis, fetchImpl = env.fetch, signal } = {}) {
+  const notificationRequestStartedAt = typeof env.performance?.now === "function" ? env.performance.now() : null;
   const base = apiBase(env);
   const requestHeaders = headers(env);
-  if (!base || !requestHeaders || typeof fetchImpl !== "function") throw new Error("Kitchen API is not configured.");
-  const response = await fetchImpl(`${base}/snapshot`, { headers: requestHeaders });
-  if (!response.ok) throw new Error("Kitchen orders could not be loaded.");
+  if (!base || !requestHeaders || typeof fetchImpl !== "function") throw new KitchenApiError("Kitchen API is not configured.", { code: "API_UNAVAILABLE" });
+  const response = await fetchImpl(`${base}/snapshot`, { headers: requestHeaders, ...(signal ? { signal } : {}) });
+  if (!response.ok) throw await responseError(response, "Kitchen orders could not be loaded.");
   const body = await response.json();
-  if (!Array.isArray(body?.activeOrders)) throw new Error("Kitchen order response was invalid.");
+  if (!Array.isArray(body?.activeOrders)) throw new KitchenApiError("Kitchen order response was invalid.", { code: "INVALID_RESPONSE" });
   return {
+    notificationRequestStartedAt,
     orders: body.activeOrders.map((order) => ({
       id: order.orderId,
       tableId: String(order.tableId),

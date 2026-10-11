@@ -1975,3 +1975,17 @@ h1, h2, h3, p { margin: 0; }
 .product-image-location { min-width: 0; display: grid; gap: 8px; padding: 12px; border: 1px solid var(--line); background: #fffaf3; font-size: 12px; overflow-wrap: anywhere; align-content: start; }
 .product-image-location input { width: 100%; min-width: 0; }
 .product-image-location__actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+
+.kitchen-order-sound { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 14px; padding: 10px 0; }
+.kitchen-order-sound__actions { display: flex; align-items: center; flex-wrap: wrap; gap: 12px 18px; }
+.kitchen-order-sound small { flex: 1 1 240px; color: var(--muted); font-weight: 800; }
+
+.kitchen-order-sound__switch-field { display: flex; align-items: center; gap: 10px; }
+.kitchen-order-sound__switch { display: flex; align-items: center; gap: 8px; min-height: 44px; border: 0; padding: 6px; background: transparent; font: inherit; font-weight: 900; cursor: pointer; }
+.kitchen-order-sound__switch i { position: relative; width: 54px; height: 30px; border: 2px solid #51483d; border-radius: 18px; background: #cbc5ba; }
+.kitchen-order-sound__switch i::after { content: ""; position: absolute; left: 2px; top: 2px; width: 22px; height: 22px; border-radius: 50%; background: #fffaf3; }
+.kitchen-order-sound__switch.is-on i { background: var(--red); }
+.kitchen-order-sound__switch.is-on i::after { left: 26px; }
+.kitchen-order-sound__volume { display: grid; gap: 4px; min-width: 160px; font-weight: 900; }
+.kitchen-order-sound__volume span { display: flex; justify-content: space-between; gap: 12px; }
+.kitchen-order-sound__volume input { width: 180px; min-height: 28px; accent-color: var(--red); }
