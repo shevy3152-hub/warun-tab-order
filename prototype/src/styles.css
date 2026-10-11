@@ -1969,3 +1969,9 @@ h1, h2, h3, p { margin: 0; }
 .session-menu-access__error { padding: 12px; background: #ffe8df; color: #852214; font-weight: 900; }
 .session-menu-access__message { padding: 12px; background: #e7f2e5; color: #23502c; font-weight: 900; }
 @media (max-width: 900px) { .session-menu-access__controls { grid-template-columns: 1fr 1fr; } .session-menu-access__controls button { grid-column: 1 / -1; } }
+
+.product-image-uri-field { min-width: 0; display: grid; gap: 8px; align-content: start; }
+.product-image-uri-field > label, .product-image-location label { display: grid; gap: 6px; font-weight: 900; }
+.product-image-location { min-width: 0; display: grid; gap: 8px; padding: 12px; border: 1px solid var(--line); background: #fffaf3; font-size: 12px; overflow-wrap: anywhere; align-content: start; }
+.product-image-location input { width: 100%; min-width: 0; }
+.product-image-location__actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
