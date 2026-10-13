@@ -1989,3 +1989,13 @@ h1, h2, h3, p { margin: 0; }
 .kitchen-order-sound__volume { display: grid; gap: 4px; min-width: 160px; font-weight: 900; }
 .kitchen-order-sound__volume span { display: flex; justify-content: space-between; gap: 12px; }
 .kitchen-order-sound__volume input { width: 180px; min-height: 28px; accent-color: var(--red); }
+
+/* A90 authoring model: fixed measured CSS rectangles, independent of PC rail rules. */
+.customer-theme-a90-stage { position:relative; overflow:hidden; max-width:none; }
+.customer-theme-a90-rail { position:absolute; left:0; top:0; overflow:hidden; transform-origin:top left; background:var(--customer-theme-rail-background, var(--paper)); touch-action:none; user-select:none; }
+.customer-theme-a90-rail > img { max-width:none; pointer-events:none; }
+.customer-theme-a90-region { position:absolute; z-index:1; box-sizing:border-box; border:1px dashed var(--customer-theme-rail-separator,#9b5e39); color:var(--customer-theme-rail-foreground,#482c1d); background:rgb(255 245 228 / 60%); font-size:12px; display:flex; align-items:center; justify-content:center; pointer-events:none; }
+.customer-theme-a90-region.is-background { border-style:dotted; background:transparent; }
+
+.customer-theme-placement-frame { position:absolute; z-index:2; box-sizing:border-box; border:1px solid #166b43; background:rgb(80 210 130 / 12%); pointer-events:none; }
+.customer-theme-placement-frame > span { font-size:9px; color:#124c31; background:#e9fff1; }
