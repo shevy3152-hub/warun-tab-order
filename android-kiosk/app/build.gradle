@@ -25,6 +25,8 @@ android {
         targetSdk 35
         versionCode 3
         versionName '1.0.1'
+        buildConfigField 'boolean', 'QA_BUILD', 'false'
+        manifestPlaceholders = [kioskAppLabel: 'Warun Kiosk', kioskPort: '25173', kioskEntryPath: '/pairing.html']
     }
 
     signingConfigs {
@@ -39,6 +41,13 @@ android {
     }
 
     buildTypes {
+        qa {
+            initWith debug
+            applicationIdSuffix '.qa'
+            buildConfigField 'boolean', 'QA_BUILD', 'true'
+            manifestPlaceholders = [kioskAppLabel: 'Warun Kiosk QA', kioskPort: '60291', kioskEntryPath: '/qa-a90-kiosk-start.html']
+            signingConfig signingConfigs.debug
+        }
         release {
             debuggable false
             minifyEnabled false
@@ -85,4 +94,13 @@ tasks.register('pinSecurityTest', JavaExec) {
         "$buildDir/intermediates/javac/debugUnitTest/compileDebugUnitTestJavaWithJavac/classes"
     )
     mainClass = 'jp.co.warun.androidkiosk.PinSecurityTest'
+}
+
+tasks.register('qaUrlPolicyTest', JavaExec) {
+    dependsOn 'compileQaUnitTestJavaWithJavac'
+    classpath = files(
+        "$buildDir/intermediates/javac/qa/compileQaJavaWithJavac/classes",
+        "$buildDir/intermediates/javac/qaUnitTest/compileQaUnitTestJavaWithJavac/classes"
+    )
+    mainClass = 'jp.co.warun.androidkiosk.QaUrlPolicyTest'
 }

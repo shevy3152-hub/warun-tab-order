@@ -3,7 +3,7 @@
 
     <application
         android:allowBackup="false"
-        android:label="Warun Kiosk"
+        android:label="${kioskAppLabel}"
         android:supportsRtl="true"
         android:theme="@style/AppTheme"
         android:usesCleartextTraffic="true">
@@ -24,8 +24,8 @@
                 <data
                     android:scheme="http"
                     android:host="192.168.11.6"
-                    android:port="25173"
-                    android:path="/pairing.html" />
+                    android:port="${kioskPort}"
+                    android:path="${kioskEntryPath}" />
             </intent-filter>
         </activity>
     </application>

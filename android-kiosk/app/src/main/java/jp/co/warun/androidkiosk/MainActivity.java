@@ -34,6 +34,8 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 import java.util.Locale;
 import java.util.regex.Pattern;
+import org.json.JSONObject;
+import org.json.JSONTokener;
 
 public final class MainActivity extends Activity {
     private static final String TAG = "WarunKiosk";
@@ -66,13 +68,16 @@ public final class MainActivity extends Activity {
     private Runnable rendererStartWatchdog;
     private final StringBuilder diagnosticLog = new StringBuilder();
     private long debugTimingStartElapsedRealtime;
+    private Runnable qaViewportSampler;
+    private String lastQaMeasurement = "";
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        if (handleQaStopIntent(getIntent())) return;
         if (handleDebugNormalExitIntent(getIntent())) return;
         boolean openPinSetup = isExplicitPinSetupIntent(getIntent());
-        debugEnabled = BuildConfig.DEBUG && getIntent().getBooleanExtra(DEBUG_EXTRA, false);
+        debugEnabled = !BuildConfig.QA_BUILD && BuildConfig.DEBUG && getIntent().getBooleanExtra(DEBUG_EXTRA, false);
         pinPreferences = getSharedPreferences(PinSettings.PREFS, MODE_PRIVATE);
         debugTiming("onCreate");
         requestWindowFeature(Window.FEATURE_NO_TITLE);
@@ -111,7 +116,7 @@ public final class MainActivity extends Activity {
             refreshDebug();
             if (openPinSetup) showPinSetupDialog();
         });
-        if (debugEnabled) runNativeHttpProbes();
+        if (debugEnabled || BuildConfig.QA_BUILD) runNativeHttpProbes();
     }
 
     private WebView createAndAttachWebView() {
@@ -151,6 +156,8 @@ public final class MainActivity extends Activity {
         view.setWebViewClient(new WebViewClient() {
             @Override
             public void onPageStarted(WebView v, String url, android.graphics.Bitmap favicon) {
+                qaWebViewDiagnostic("page_started", url, true, null, null, null);
+                cancelQaViewportMeasurement();
                 cancelRendererStartWatchdog();
                 debugTiming("pageStarted");
                 debugEvent("pageStarted url=" + safeUrl(url));
@@ -159,6 +166,7 @@ public final class MainActivity extends Activity {
 
             @Override
             public void onPageCommitVisible(WebView v, String url) {
+                qaWebViewDiagnostic("page_commit_visible", url, true, null, null, null);
                 cancelRendererStartWatchdog();
                 debugTiming("pageCommitVisible");
                 debugEvent("pageCommitVisible url=" + safeUrl(url));
@@ -167,20 +175,23 @@ public final class MainActivity extends Activity {
 
             @Override
             public void onPageFinished(WebView v, String url) {
+                qaWebViewDiagnostic("page_finished", url, true, null, null, null);
                 cancelRendererStartWatchdog();
                 debugTiming("pageFinished");
                 debugEvent("pageFinished url=" + safeUrl(url));
-                if (PairingUrlPolicy.isPairingUrl(url)) pairingFlowActive = true;
-                if (!PairingUrlPolicy.isPairingUrl(url)) {
+                if (isPairingUrlForVariant(url)) pairingFlowActive = true;
+                if (!isPairingUrlForVariant(url)) {
                     rendererRecoveryAttempts = 0;
                     hideRecoveryView();
                 }
                 evaluatePageSnapshot(v);
+                scheduleQaViewportMeasurement(v, url);
                 super.onPageFinished(v, url);
             }
 
             @Override
             public void onReceivedError(WebView v, WebResourceRequest request, android.webkit.WebResourceError error) {
+                qaWebViewDiagnostic("webview_error", request.getUrl().toString(), request.isForMainFrame(), error.getErrorCode(), null, null);
                 if (request.isForMainFrame()) {
                     debugEvent("receivedError main=true code=" + error.getErrorCode()
                             + " description=" + redact(error.getDescription().toString())
@@ -191,6 +202,7 @@ public final class MainActivity extends Activity {
 
             @Override
             public void onReceivedHttpError(WebView v, WebResourceRequest request, android.webkit.WebResourceResponse response) {
+                qaWebViewDiagnostic("http_error", request.getUrl().toString(), request.isForMainFrame(), null, response.getStatusCode(), null);
                 if (request.isForMainFrame()) {
                     debugEvent("receivedHttpError main=true status=" + response.getStatusCode()
                             + " reason=" + redact(response.getReasonPhrase())
@@ -202,6 +214,7 @@ public final class MainActivity extends Activity {
             @Override
             @android.annotation.TargetApi(26)
             public boolean onRenderProcessGone(WebView v, android.webkit.RenderProcessGoneDetail detail) {
+                qaWebViewDiagnostic(detail.didCrash() ? "renderer_crashed" : "renderer_killed", v.getUrl(), true, null, null, null);
                 debugEvent("renderProcessGone didCrash=" + detail.didCrash()
                         + " rendererPriorityAtExit=" + detail.rendererPriorityAtExit());
                 recoverFromRendererGone(v);
@@ -211,6 +224,7 @@ public final class MainActivity extends Activity {
             @Override
             public boolean shouldOverrideUrlLoading(WebView v, WebResourceRequest request) {
                 boolean blocked = !isAllowedWebViewUrl(request.getUrl());
+                qaWebViewDiagnostic("navigation_policy", request.getUrl().toString(), request.isForMainFrame(), null, null, !blocked);
                 if (blocked) debugEvent("blockedNavigation url=" + safeUrl(request.getUrl().toString()));
                 return blocked;
             }
@@ -219,6 +233,7 @@ public final class MainActivity extends Activity {
             public boolean shouldOverrideUrlLoading(WebView v, String url) {
                 android.net.Uri uri = android.net.Uri.parse(url);
                 boolean blocked = !isAllowedWebViewUrl(uri);
+                qaWebViewDiagnostic("navigation_policy", url, true, null, null, !blocked);
                 if (blocked) debugEvent("blockedNavigation url=" + safeUrl(url));
                 return blocked;
             }
@@ -245,6 +260,7 @@ public final class MainActivity extends Activity {
     }
 
     private boolean isAllowedWebViewUrl(android.net.Uri uri) {
+        if (BuildConfig.QA_BUILD) return uri != null && QaUrlPolicy.isAllowedNavigationUrl(uri.toString());
         if (uri == null || !PairingUrlPolicy.isAllowedOriginUrl(uri.toString())) return false;
         return !"/pairing.html".equals(uri.getPath()) || PairingUrlPolicy.isValidPairingUrl(uri.toString());
     }
@@ -252,14 +268,17 @@ public final class MainActivity extends Activity {
     private void loadUrlForIntent(Intent incoming) {
         boolean isActionView = incoming != null && Intent.ACTION_VIEW.equals(incoming.getAction());
         String rawUrl = incoming == null ? null : incoming.getDataString();
-        boolean acceptedPairing = isActionView && PairingUrlPolicy.isValidPairingUrl(rawUrl);
+        boolean acceptedPairing = !BuildConfig.QA_BUILD && isActionView && PairingUrlPolicy.isValidPairingUrl(rawUrl);
         pairingFlowActive = acceptedPairing;
         if (isActionView) debugEvent(acceptedPairing ? "externalIntent accepted path=/pairing.html" : "externalIntent rejected");
-        String targetUrl = PairingUrlPolicy.resolveNavigationUrl(isActionView, rawUrl);
+        String targetUrl = BuildConfig.QA_BUILD
+                ? QaUrlPolicy.resolveNavigationUrl(isActionView, rawUrl)
+                : PairingUrlPolicy.resolveNavigationUrl(isActionView, rawUrl);
         sanitizeIntent(incoming);
         if (webView == null) createAndAttachWebView();
         debugTiming("loadUrl");
         webView.clearHistory();
+        qaWebViewDiagnostic("load_requested", targetUrl, true, null, null, BuildConfig.QA_BUILD ? QaUrlPolicy.isAllowedNavigationUrl(targetUrl) : null);
         webView.loadUrl(targetUrl);
         scheduleRendererStartWatchdog(webView);
     }
@@ -291,7 +310,7 @@ public final class MainActivity extends Activity {
             WebView freshWebView = createAndAttachWebView();
             freshWebView.clearHistory();
             debugTiming("loadUrl(recovery)");
-            freshWebView.loadUrl(PairingUrlPolicy.START_URL);
+            freshWebView.loadUrl(startUrlForVariant());
             scheduleRendererStartWatchdog(freshWebView);
         } finally {
             rendererRecoveryInProgress = false;
@@ -310,7 +329,7 @@ public final class MainActivity extends Activity {
         WebView freshWebView = createAndAttachWebView();
         freshWebView.clearHistory();
         debugTiming("loadUrl(retry)");
-        freshWebView.loadUrl(PairingUrlPolicy.START_URL);
+        freshWebView.loadUrl(startUrlForVariant());
         scheduleRendererStartWatchdog(freshWebView);
     }
 
@@ -322,6 +341,7 @@ public final class MainActivity extends Activity {
                     && "pending".equals(pageSnapshot)) {
                 debugTiming("rendererStartWatchdog");
                 debugEvent("rendererStartWatchdog timeout");
+                qaWebViewDiagnostic("start_watchdog_timeout", expectedWebView.getUrl(), true, null, null, null);
                 recoverFromRendererGone(expectedWebView);
             }
         };
@@ -355,6 +375,7 @@ public final class MainActivity extends Activity {
     }
 
     private void showRecoveryView() {
+        qaWebViewDiagnostic("recovery_exhausted", webView == null ? null : webView.getUrl(), true, null, null, null);
         if (recoveryView != null) recoveryView.setVisibility(View.VISIBLE);
         debugEvent("rendererRecovery exhausted");
     }
@@ -584,10 +605,11 @@ public final class MainActivity extends Activity {
     @Override
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
+        if (handleQaStopIntent(intent)) return;
         if (handleDebugNormalExitIntent(intent)) return;
         boolean openPinSetup = isExplicitPinSetupIntent(intent);
         setIntent(intent);
-        if (BuildConfig.DEBUG && intent != null && intent.getBooleanExtra(DEBUG_EXTRA, false)) debugEnabled = true;
+        if (!BuildConfig.QA_BUILD && BuildConfig.DEBUG && intent != null && intent.getBooleanExtra(DEBUG_EXTRA, false)) debugEnabled = true;
         if (openPinSetup) {
             mainHandler.post(this::showPinSetupDialog);
             return;
@@ -603,6 +625,75 @@ public final class MainActivity extends Activity {
                         | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
                         | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
                         | View.SYSTEM_UI_FLAG_LAYOUT_STABLE);
+    }
+
+    private static String startUrlForVariant() {
+        return BuildConfig.QA_BUILD ? QaUrlPolicy.START_URL : PairingUrlPolicy.START_URL;
+    }
+
+    private static boolean isPairingUrlForVariant(String url) {
+        return !BuildConfig.QA_BUILD && PairingUrlPolicy.isPairingUrl(url);
+    }
+
+    private void cancelQaViewportMeasurement() {
+        if (qaViewportSampler != null) mainHandler.removeCallbacks(qaViewportSampler);
+        qaViewportSampler = null;
+    }
+
+    private void scheduleQaViewportMeasurement(WebView view, String url) {
+        if (!BuildConfig.QA_BUILD) return;
+        cancelQaViewportMeasurement();
+        if (!QaUrlPolicy.CUSTOMER_URL.equals(url)) return;
+        lastQaMeasurement = "";
+        qaViewportSampler = new Runnable() {
+            @Override public void run() {
+                if (webView != view || !QaUrlPolicy.CUSTOMER_URL.equals(view.getUrl())) return;
+                captureQaViewport(view);
+                mainHandler.postDelayed(this, 2000L);
+            }
+        };
+        mainHandler.postDelayed(qaViewportSampler, 750L);
+    }
+
+    private void captureQaViewport(WebView view) {
+        if (!BuildConfig.QA_BUILD || !QaUrlPolicy.CUSTOMER_URL.equals(view.getUrl())) return;
+        // Read only the rendered customer root and geometry, never credentials or page text.
+        String js = "(() => { const r=document.querySelector('.customer-app'); if(!r || r.getAttribute('data-customer-theme')!=='japanese-halloween') return null; const i=r.querySelector('.customer-sidebar__theme-image'); return JSON.stringify({width:innerWidth,height:innerHeight,dpr:devicePixelRatio,theme:r.getAttribute('data-customer-theme'),imageWidth:i?i.naturalWidth:0,imageHeight:i?i.naturalHeight:0,cssLandscape:matchMedia('(orientation: landscape)').matches,browserFullscreen:!!document.fullscreenElement}); })()";
+        view.evaluateJavascript(js, value -> {
+            if (webView != view || !QaUrlPolicy.CUSTOMER_URL.equals(view.getUrl())) return;
+            try {
+                Object decoded = new JSONTokener(value).nextValue();
+                if (!(decoded instanceof String)) return;
+                JSONObject report = new JSONObject((String) decoded);
+                int flags = getWindow().getDecorView().getSystemUiVisibility();
+                report.put("source", "android-qa-webview");
+                report.put("nativeLandscape", getResources().getConfiguration().orientation
+                        == android.content.res.Configuration.ORIENTATION_LANDSCAPE);
+                report.put("landscapeRequested", getRequestedOrientation()
+                        == android.content.pm.ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE);
+                report.put("systemUiFlags", flags);
+                report.put("fullscreenFlag", (flags & View.SYSTEM_UI_FLAG_FULLSCREEN) != 0);
+                report.put("hideNavigationFlag", (flags & View.SYSTEM_UI_FLAG_HIDE_NAVIGATION) != 0);
+                report.put("immersiveStickyFlag", (flags & View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY) != 0);
+                WindowInsets insets = view.getRootWindowInsets();
+                if (insets != null && android.os.Build.VERSION.SDK_INT >= 30) {
+                    report.put("statusBarVisible", insets.isVisible(WindowInsets.Type.statusBars()));
+                    report.put("navigationBarVisible", insets.isVisible(WindowInsets.Type.navigationBars()));
+                } else {
+                    report.put("statusBarVisible", JSONObject.NULL);
+                    report.put("navigationBarVisible", JSONObject.NULL);
+                }
+                String payload = report.toString();
+                if (payload.equals(lastQaMeasurement)) return;
+                lastQaMeasurement = payload;
+                Log.i("WarunKioskQA", payload);
+                // QA-only telemetry; no JavaScript bridge or OS operation API is exposed.
+                view.evaluateJavascript("void fetch('/qa-a90-metrics',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify("
+                        + payload + ")}).catch(()=>{});", null);
+            } catch (Exception ignored) {
+                Log.i("WarunKioskQA", "QA viewport measurement unavailable");
+            }
+        });
     }
 
     private void evaluatePageSnapshot(WebView view) {
@@ -626,8 +717,8 @@ public final class MainActivity extends Activity {
 
     private void runNativeHttpProbes() {
         new Thread(() -> {
-            probeHttp(HEALTH_URL);
-            probeHttp(PairingUrlPolicy.START_URL);
+            probeHttp(BuildConfig.QA_BUILD ? QaUrlPolicy.HEALTH_URL : HEALTH_URL);
+            probeHttp(startUrlForVariant());
         }, "debug-http-probe").start();
     }
 
@@ -640,16 +731,45 @@ public final class MainActivity extends Activity {
             connection.setReadTimeout(3000);
             connection.setInstanceFollowRedirects(false);
             int status = connection.getResponseCode();
+            qaWebViewDiagnostic("native_http", url, true, null, status, null);
             String contentType = connection.getHeaderField("Content-Type");
             String contentLength = connection.getHeaderField("Content-Length");
             debugEvent("nativeHttp url=" + safeUrl(url) + " status=" + status
                     + " contentType=" + redact(contentType == null ? "unknown" : contentType)
                     + " contentLength=" + (contentLength == null ? "unknown" : contentLength));
         } catch (Exception error) {
+            qaWebViewDiagnostic("native_http_failure_" + error.getClass().getSimpleName(), url, true, null, null, null);
             debugEvent("nativeHttp url=" + safeUrl(url) + " error=" + redact(error.getClass().getSimpleName() + ": " + error.getMessage()));
         } finally {
             if (connection != null) connection.disconnect();
         }
+    }
+
+    private void qaWebViewDiagnostic(String event, String url, boolean main, Integer errorCode, Integer status, Boolean allowed) {
+        if (!BuildConfig.QA_BUILD) return;
+        try {
+            JSONObject record = new JSONObject();
+            record.put("event", event);
+            record.put("url", QaUrlPolicy.diagnosticUrl(url));
+            record.put("mainFrame", main);
+            record.put("errorCode", errorCode == null ? JSONObject.NULL : errorCode);
+            record.put("httpStatus", status == null ? JSONObject.NULL : status);
+            record.put("navigationAllowed", allowed == null ? JSONObject.NULL : allowed);
+            Log.i("WarunKioskQADiag", record.toString());
+        } catch (Exception ignored) { }
+    }
+
+    private boolean handleQaStopIntent(Intent intent) {
+        if (!BuildConfig.QA_BUILD || intent == null
+                || !"jp.co.warun.androidkiosk.qa.action.STOP".equals(intent.getAction())) return false;
+        if (intent.getComponent() == null
+                || !getPackageName().equals(intent.getComponent().getPackageName())
+                || !MainActivity.class.getName().equals(intent.getComponent().getClassName())) return false;
+        cancelQaViewportMeasurement();
+        cancelRendererStartWatchdog();
+        disposeWebView();
+        finishAndRemoveTask();
+        return true;
     }
 
     private void debugEvent(String message) {
@@ -737,6 +857,7 @@ public final class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        cancelQaViewportMeasurement();
         disposeWebView();
         pairingFlowActive = false;
         debugView = null;
