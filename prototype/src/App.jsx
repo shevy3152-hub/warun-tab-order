@@ -32,6 +32,7 @@ import { AdminPairingError, configuredAdminToken, createAdminRideGuidanceContact
 import { adjustKitchenItemUnitPrice, adjustKitchenOrderItemQuantity as adjustKitchenItemQuantityRequest, cancelKitchenCheckout, cancelKitchenOrderItem, closeKitchenTableSession, createKitchenOrder, fetchKitchenCheckoutRequests, fetchKitchenOrderHistory, fetchKitchenPaymentHistory, fetchKitchenSnapshot, kitchenAdditionRequestItem, kitchenApiConfigured, KitchenApiError, markKitchenItemServed, payKitchenCheckout, readyKitchenCheckout, restoreKitchenOrderItem, saveKitchenCheckoutAdjustments, subscribeKitchenInvalidations, voidKitchenPayment } from "./kitchen-api.js";
 import { buildKitchenTableGroups } from "./kitchen-order-board.js";
 import { bootstrapCustomerOrderClient } from "./customer-bootstrap.js";
+import { createCustomerVisitConfigRefresher } from "./customer-visit-config-refresh.js";
 import { addCustomerCartSelection, customerCartRows, removeCustomerCartSelection } from "./customer-cart.js";
 import { taxExcludedYen } from "./pricing.js";
 import { pairingCodeQrSvg } from "./qr-code.js";
@@ -1021,24 +1022,10 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
   }, [rideGuidanceRefreshKey]);
 
   useEffect(() => {
-    if (!apiMode || typeof orderClient.subscribeInvalidations !== "function") return undefined;
+    if (!apiMode || typeof orderClient.getDeviceConfig !== "function") return undefined;
     let cancelled = false;
-    const refreshVisitState = async () => {
-      setMenuRefreshKey((current) => current + 1);
-      if (typeof orderClient.getDeviceConfig !== "function") return;
-      let currentConfig;
-      try {
-        currentConfig = await orderClient.getDeviceConfig();
-      } catch (error) {
-        if (error?.status === 401 || error?.code === "HTTP_401") blockCartAfterAuthenticationFailure();
-        return;
-      }
+    const applyVisitConfig = (currentConfig) => {
       if (cancelled) return;
-      if (currentConfig?.status === "unauthorized" || currentConfig?.errorCode === "HTTP_401") {
-        blockCartAfterAuthenticationFailure();
-        return;
-      }
-      if (!currentConfig) return;
       onCustomerDeviceConfigChange?.({ ...currentConfig, deviceId: customerDeviceConfig?.deviceId });
       const pinnedVisitContextId = cartVisitContextIdRef.current;
       if (
@@ -1052,15 +1039,25 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
         setNotice({ kind: "error", message: "来店または端末の割当が変わりました。カートの内容は保持しています。確認後、破棄してください。" });
       }
     };
-    const unsubscribe = orderClient.subscribeInvalidations((event) => {
+    const visitConfigRefresher = createCustomerVisitConfigRefresher({
+      getConfig: (options) => orderClient.getDeviceConfig(options),
+      onConfig: applyVisitConfig,
+      onAuthorizationFailure: blockCartAfterAuthenticationFailure,
+    });
+    const refreshVisitState = () => {
+      setMenuRefreshKey((current) => current + 1);
+      void visitConfigRefresher.refresh();
+    };
+    const unsubscribe = typeof orderClient.subscribeInvalidations === "function" ? orderClient.subscribeInvalidations((event) => {
       const resource = event?.payload?.resource ?? event?.resource;
       if (resource === "menu") setMenuRefreshKey((current) => current + 1);
       if (resource === "deviceConfig") void refreshVisitState();
       if (resource === "orders") setHistoryRefreshKey((current) => current + 1);
       if (resource === "checkout" || String(event?.payload?.type || event?.type || "").startsWith("checkout.")) setCheckoutRefreshKey((current) => current + 1);
-    }, { onReconnect: refreshVisitState, onAuthorizationFailure: blockCartAfterAuthenticationFailure });
+    }, { onReconnect: refreshVisitState, onAuthorizationFailure: blockCartAfterAuthenticationFailure }) : () => {};
     return () => {
       cancelled = true;
+      visitConfigRefresher.stop();
       unsubscribe();
     };
   }, [apiMode, orderClient, onCustomerDeviceConfigChange, customerDeviceConfig?.deviceId]);

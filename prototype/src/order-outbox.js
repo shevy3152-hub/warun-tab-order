@@ -1034,12 +1034,13 @@ export function createCustomerOrderClient({
       const current = await readCurrentVisitContext();
       return current.status === "available" ? current.visitContextId : visitContextId || null;
     },
-    async getDeviceConfig() {
+    async getDeviceConfig({ signal } = {}) {
       const fetchImpl = options.fetchImpl || global.fetch;
       if (!config.enabled || typeof fetchImpl !== "function" || global.navigator?.onLine === false) return null;
       try {
         const response = await fetchImpl(config.baseUrl + "/device/config", {
           headers: { Accept: "application/json", Authorization: "Bearer " + config.token },
+          ...(signal ? { signal } : {}),
         });
         if (!response.ok) return response.status === 401 || response.status === 403
           ? { status: "unauthorized", errorCode: `HTTP_${response.status}` }
