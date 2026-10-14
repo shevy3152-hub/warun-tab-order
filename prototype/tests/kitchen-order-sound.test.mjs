@@ -190,7 +190,7 @@ test("sound engine stops every scheduled oscillator on OFF", async () => {
   assert.equal(context.state, "closed");
   await assert.rejects(createKitchenSoundEngine({ env: {} }).activate());
 });
-test("staff-call double tone is distinct and queued after the order tone without overlap", async () => {
+test("staff-call three-pair tone is distinct and queued without overlapping the order tone", async () => {
   const oscillators = [];
   class Context {
     constructor() { this.state = "suspended"; this.currentTime = 0; this.destination = {}; }
@@ -203,8 +203,9 @@ test("staff-call double tone is distinct and queued after the order tone without
   await engine.activate();
   engine.play("order");
   engine.play("staffCall");
-  assert.deepEqual(oscillators.map((node) => node.startTime), [0, 0.42, 0.61]);
-  assert.deepEqual(oscillators.map((node) => node.frequencyValues[0][0]), [880, 523, 659]);
+  engine.play("order");
+  assert.deepEqual(oscillators.map((node) => node.startTime), [0, 0.42, 0.69, 1.27, 1.54, 2.12, 2.39, 2.62]);
+  assert.deepEqual(oscillators.map((node) => node.frequencyValues[0][0]), [880, 523, 659, 523, 659, 523, 659, 880]);
   for (let index = 1; index < oscillators.length; index++) assert.ok(oscillators[index].startTime >= oscillators[index - 1].stopTime);
   engine.dispose();
 });

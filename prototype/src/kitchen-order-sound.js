@@ -34,9 +34,11 @@ export function createKitchenSoundEngine({ env = globalThis, onStateChange = () 
       if (volume === 0) return;
       const peak = KITCHEN_NOTIFICATION_GAIN * volume / DEFAULT_KITCHEN_SOUND_VOLUME;
       const start = Math.max(context.currentTime, nextStart);
-      nextStart = start + 0.42;
-      const notes = kind === "staffCall"
-        ? [{ frequency: 523, at: 0, duration: 0.12, holdAt: 0.075 }, { frequency: 659, at: 0.19, duration: 0.12, holdAt: 0.075 }]
+      const isStaffCall = kind === "staffCall";
+      nextStart = start + (isStaffCall ? 2.2 : 0.42);
+      const callPair = [{ frequency: 523, duration: 0.18, holdAt: 0.12 }, { frequency: 659, duration: 0.18, holdAt: 0.12 }];
+      const notes = isStaffCall
+        ? Array.from({ length: 3 }, (_, repeat) => callPair.map((note, index) => ({ ...note, at: repeat * 0.85 + index * 0.27 }))).flat()
         : [{ frequency: 880, at: 0, endFrequency: 1174, sweepAt: 0.14, duration: 0.34, holdAt: 0.20 }];
       for (const note of notes) {
         const oscillator = context.createOscillator();
