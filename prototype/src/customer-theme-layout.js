@@ -63,16 +63,20 @@ export function customerThemeImageLayout(image, variant, frameWidth, frameHeight
   const overflowX = Math.max(0, deltaX);
   const overflowY = Math.max(0, deltaY);
   const spaceX = Math.max(0, -deltaX);
-  const spaceY = Math.max(0, -deltaY);
+  // Center stays fixed; even a frame-height image can move up and down.
+  const rangeY = Math.max(Math.abs(deltaY), frameH);
+  const offsetY = -deltaY / 2 + (0.5 - layout.positionY) * rangeY;
+  const visibleHeight = Math.max(0, Math.min(frameH, offsetY + renderHeight) - Math.max(0, offsetY));
+  const spaceY = frameH - visibleHeight;
   const rangeX = Math.abs(deltaX);
-  const rangeY = Math.abs(deltaY);
+
 
   return {
     style: {
       width: `${renderWidth}px`,
       height: `${renderHeight}px`,
       left: `${-deltaX * layout.positionX}px`,
-      top: `${-deltaY * layout.positionY}px`,
+      top: `${offsetY}px`,
     },
     metrics: {
       frameWidth: frameW,
@@ -87,11 +91,12 @@ export function customerThemeImageLayout(image, variant, frameWidth, frameHeight
       deltaY,
       rangeX,
       rangeY,
+      offsetY,
       minimumZoom,
       canMoveX: rangeX > 0.5,
       canMoveY: rangeY > 0.5,
       croppedSourceWidth: Math.max(0, width - (frameW / renderWidth) * width),
-      croppedSourceHeight: Math.max(0, height - (frameH / renderHeight) * height),
+      croppedSourceHeight: Math.max(0, height - (visibleHeight / renderHeight) * height),
       zoom: visualZoom,
       storedZoom: layout.zoom,
     },

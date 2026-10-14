@@ -202,3 +202,18 @@ functional result: passed — user-confirmed cancellation preserves the open vis
 - 遅い再読み込みの調査で、客席画面のテーマ・注意事項・来店状態がそれぞれ独立したSSE購読を作る実装と、ChromeからQA Web originへの6接続維持を確認。購読を1本へ共有する修正を反映し、関連テスト46/46、Vite build、Sites 4/4を確認。QA bundleはschema v20環境へ反映し、DB・登録情報を保持。
 - QA runtime停止: PID 23188と使い捨てDB、Web 55262／API 55263のlistener所有PIDを照合。記録済みterminal sessionへのCtrl+Cを試したが、PIDと両listenerが残り、正常停止を確認できていない。強制終了は行っていない。QA資材・DB・登録情報は保持。
 - 今回の利用者手動PASSは画面viewport／表示速度の受入や、管理者編集後の再確認に関するPASSを意味しない。
+
+## 季節画像Y可動幅改善 2026-10-14
+
+- 旧Y範囲が画像高と枠高の差だけで決まり、枠に近い画像でほぼ動かず、同じ高さで無効になる原因を修正。Yは中央50%を基準に、端から端の距離を `max(abs(renderHeight-frameHeight), frameHeight)` とする。小さい画像/枠に合う画像も上下移動でき、移動による余白・切り抜きを許容する。
+- 保存値0〜1、倍率、手入力プロンプト/メモを自動書換しない。X計算は維持。中央以外の既存Yの見た目は新範囲に応じて変わる。従来の縦はみ出しが枠高以上の巨大画像では旧Y表示と一致。
+- 客席・管理プレビュー・A90条件モデルの共有layout、両プレビューのドラッグ、配置枠overlay、生成プロンプトの位置・クリップ座標を揃えた。Y0%で下、100%で上。画像を完全に隠す設定にはならない。
+- 限定検証16件PASS（Y/layout/display/prompt 15件、既存placement 1件）。HEAD 104d174由来のprototype/shared分離コピーに関連srcのみを反映し、Web build 1回PASS（4649 modules）。Android保留差分と未追跡の旧保管画像はbuildに含めていない。
+- 既存QAの管理画面でYスライダー両端・最小/最大倍率・X操作を確認。A90条件の下drag40px、管理条件の下drag30px（CSS top48.3871px、縮尺0.62と一致）、管理条件の右drag20pxでYを維持するX回帰を確認。プロンプトが変更後の座標へ追従し、手入力指示を保持。
+- CSS viewport実測1280×800／1637×602、DPR実測1.0000000079283635（約1）。無加工viewport JPEGの1280条件は1280×800。1637条件は画像1636×602となり、指定画像寸法一致の受入は未達。PNG出力や全テーマ/全構図の受入をPASSに含めない。
+- A90条件モデルは既存のviewport1313×820、DPR約1.4625の再現。利用者の2026-10-14 16:44:32のA90写真でテーブル99・椿画像の下方向移動を確認。画像上端約180画面pxは試験Y35%の約123CSS pxの計算と整合。写真に「隔離QA」文字は見えず、その文字の表示PASSとはしない。全倍率の実機操作・指定viewport/DPR1実機受入は未実施。
+- 試験前QA設定を記録し、使用theme standard→camelliaとcamellia.positionY 0.5→0.35だけを保存して既存QAアプリで確認。終了後にこの2項目だけを既存APIで戻し、全theme値が試験前と一致。versionは正常増分で5。QAの注文2件を操作せず、運用設定は保存していない。
+- 証拠・分離build・QA設定snapshot: `C:\Users\user\AppData\Local\Temp\warun-theme-y-20261014-62e0031d`。`qa-a90-condition-y35-1280x800.jpg`、`qa-management-fit-1637x602.jpg`、`qa-management-drag-1637x602.jpg`、`qa-management-x-drag-1637x602.jpg`（後3枚の実画像幅は1636px）。
+- backend更新/migration不要。実DB・注文・会計・来店・確認記録・認証情報・Android保留差分・旧画像を保持。運用Webへの配置とソースcommitの対応は運用handoffの2026-10-14追記に記録する。
+
+functional result: passed — expanded Y slider/drag range, zoom response, X regression, shared coordinates and user-supplied A90 image display evidence. Full seasonal image acceptance and exact exported 1637-pixel image width remain unverified.

@@ -2547,7 +2547,7 @@ function customerThemePaletteStyle(theme) {
 function CustomerThemePlacementOverlay({ frames, metrics, image, variant }) {
   if (!frames || !metrics || !image) return null;
   const x = value => value * metrics.renderWidth / image.width - metrics.deltaX * variant.positionX;
-  const y = value => value * metrics.renderHeight / image.height - metrics.deltaY * variant.positionY;
+  const y = value => value * metrics.renderHeight / image.height + metrics.offsetY;
   return Object.entries({title:'文字全体の配置枠',subject:'主役全体の配置枠'}).map(([key,label])=>frames[key] ? <div key={key} className="customer-theme-placement-frame" style={{left:x(frames[key].left),top:y(frames[key].top),width:(frames[key].right-frames[key].left)*metrics.renderWidth/image.width,height:(frames[key].bottom-frames[key].top)*metrics.renderHeight/image.height}}><span>{label}</span></div> : null);
 }
 
@@ -2617,7 +2617,7 @@ function CustomerThemePreview({ theme, variant, imageSize, placementFrames, coll
   const onPointerMove = (event) => {
     if (!dragRef.current || !railRef.current) return;
     const deltaX = metrics?.deltaX ?? 0;
-    const deltaY = metrics?.deltaY ?? 0;
+    const deltaY = metrics?.rangeY ?? 0;
     onChangePosition({
       positionX: customerThemePositionAfterDrag(dragRef.current.positionX, event.clientX - dragRef.current.x, deltaX, CUSTOMER_THEME_PREVIEW_SCALE),
       positionY: customerThemePositionAfterDrag(dragRef.current.positionY, event.clientY - dragRef.current.y, deltaY, CUSTOMER_THEME_PREVIEW_SCALE),
@@ -2662,7 +2662,7 @@ function A90CustomerThemePreview({ definition, variant, model, collapsed, onChan
   if (!model || collapsed) return <p className="customer-theme-preview__hint">{collapsed ? "A90の折り畳み配置は未再現。画像座標は使用しません。" : "実画像寸法の読込待ち"}</p>;
   const scale = CUSTOMER_THEME_PREVIEW_SCALE;
   const pointerDown = event => { if (event.button !== 0) return;event.currentTarget.setPointerCapture(event.pointerId);drag.current={x:event.clientX,y:event.clientY,positionX:variant.positionX,positionY:variant.positionY}; };
-  const pointerMove = event => { if (!drag.current) return;onChangePosition({positionX:customerThemePositionAfterDrag(drag.current.positionX,event.clientX-drag.current.x,model.layout.metrics.deltaX,scale),positionY:customerThemePositionAfterDrag(drag.current.positionY,event.clientY-drag.current.y,model.layout.metrics.deltaY,scale)}); };
+  const pointerMove = event => { if (!drag.current) return;onChangePosition({positionX:customerThemePositionAfterDrag(drag.current.positionX,event.clientX-drag.current.x,model.layout.metrics.deltaX,scale),positionY:customerThemePositionAfterDrag(drag.current.positionY,event.clientY-drag.current.y,model.layout.metrics.rangeY,scale)}); };
   const stop = () => {drag.current=null;};
   return <div className="customer-theme-a90-stage" style={{width:A90_THEME_CONDITION.frameWidth*scale,height:A90_THEME_CONDITION.frameHeight*scale}}><div className="customer-theme-a90-rail" data-customer-theme={definition.id} style={{...customerThemePaletteStyle(definition.id),width:A90_THEME_CONDITION.frameWidth,height:A90_THEME_CONDITION.frameHeight,transform:'scale('+scale+')'}} onPointerDown={pointerDown} onPointerMove={pointerMove} onPointerUp={stop} onPointerCancel={stop}>
     <img src={definition.assetPath} alt={definition.label+'のA90実測矩形プレビュー'} draggable="false" style={{position:'absolute',...model.layout.style}} />
@@ -2863,7 +2863,7 @@ function CustomerThemeEditor({ adminApiMode }) {
         {!previewCollapsed ? <div className="customer-theme-editor__position-controls">
           <label>ズーム <output>{visualZoom.toFixed(2)}×</output><input aria-label="テーマ画像ズーム" type="range" min={minimumZoom} max={MAX_CUSTOMER_THEME_ZOOM} step="0.01" value={visualZoom} disabled={!adminApiMode || state.loading || state.saving || !actualSize || !activeMetrics} onChange={(event) => setSelectedVariant({ zoom: customerThemeStoredZoomForVisualZoom(Number(event.target.value), minimumZoom) })} /><small>1.00×は枠いっぱい、最小{minimumZoom.toFixed(2)}×は画像全体が収まる倍率です。</small></label>
           <label>横位置 X <output>{Math.round(selectedVariant.positionX * 100)}%</output><input aria-label="テーマ画像の横位置" type="range" min="0" max="1" step="0.005" value={selectedVariant.positionX} disabled={!adminApiMode || state.loading || state.saving || !activeMetrics?.canMoveX} onChange={(event) => setSelectedVariant({ positionX: Number(event.target.value) })} /><small>{activeMetrics?.canMoveX ? `${activeMetrics.overflowX > 0 ? "切り抜き" : "余白"}範囲で左右に最大${Math.round(activeMetrics.rangeX)}px移動できます。` : "この方向は枠に一致しているため移動不要です。"}</small></label>
-          <label>縦位置 Y <output>{Math.round(selectedVariant.positionY * 100)}%</output><input aria-label="テーマ画像の縦位置" type="range" min="0" max="1" step="0.005" value={selectedVariant.positionY} disabled={!adminApiMode || state.loading || state.saving || !activeMetrics?.canMoveY} onChange={(event) => setSelectedVariant({ positionY: Number(event.target.value) })} /><small>{activeMetrics?.canMoveY ? `${activeMetrics.overflowY > 0 ? "切り抜き" : "余白"}範囲で上下に最大${Math.round(activeMetrics.rangeY)}px移動できます。` : "この方向は枠に一致しているため移動不要です。"}</small></label>
+          <label>縦位置 Y <output>{Math.round(selectedVariant.positionY * 100)}%</output><input aria-label="テーマ画像の縦位置" type="range" min="0" max="1" step="0.005" value={selectedVariant.positionY} disabled={!adminApiMode || state.loading || state.saving || !activeMetrics?.canMoveY} onChange={(event) => setSelectedVariant({ positionY: Number(event.target.value) })} /><small>{activeMetrics?.canMoveY ? `中央50%を基準に上下へ移動できます。端から端まで${Math.round(activeMetrics.rangeY)}px。位置によって余白や切り抜きができます。` : "画像と表示枠の計測待ちです。"}</small></label>
           <div className="customer-theme-editor__fit-actions"><span>中央位置はX・Yとも50%です。</span><button type="button" className="button button--quiet" onClick={() => setSelectedVariant({ positionX: 0.5, positionY: 0.5, zoom: 0.5 })} disabled={!adminApiMode || state.loading || state.saving}>画像全体を表示</button><button type="button" className="button button--quiet" onClick={() => setSelectedVariant({ positionX: 0.5, positionY: 0.5, zoom: MIN_CUSTOMER_THEME_ZOOM })} disabled={!adminApiMode || state.loading || state.saving}>枠いっぱいに表示</button></div>
         </div> : null}
       </div>

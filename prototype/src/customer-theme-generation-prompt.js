@@ -30,6 +30,7 @@ export function buildCustomerThemeGenerationPrompt({ definition, variant, measur
     lines.push(visible?.status === 'overlap' ? `【現在画像が表示される範囲】${coordinates(visible)}。重要な文字・主役の輪郭全体を、この表示範囲の端から余裕を取って配置してください。` : visible?.status === 'none' ? '現在、クリップ枠内に画像の表示部分がありません。表示範囲を推測しないでください。' : '画像の表示範囲は計測待ちです。座標を推測しないでください。');
     if (visible?.status === 'overlap') lines.push(`現在の切り抜き量：左${number(visible.left)}・上${number(visible.top)}・右${number(width - visible.right)}・下${number(height - visible.bottom)}画像px。`);
     lines.push(`枠側の余白合計：横${number(measurement.spaceX)}・縦${number(measurement.spaceY)} CSS px。移動範囲：横${number(measurement.rangeX)}・縦${number(measurement.rangeY)} CSS px。これらは表示枠側の値で、元画像内に描く余白の寸法ではありません。`);
+    lines.push('縦位置Yは中央50%を基準に、0%で画像を下へ、100%で上へ移動します。移動範囲は端から端までの距離です。枠に画像が収まる倍率でも上下へ移動でき、余白や切り抜きが発生します。以下の画像座標は現在の位置でクリップした実表示部分です。');
     lines.push('【UIが重なる領域】以下の領域は、重要な文字や主役の配置を極力避けてください。背景模様や脇役の一部が重なることは許容します。UIの文字が読みやすいよう、該当領域は描き込みや強いコントラストを抑えてください。');
     for (const region of measurement.regions) lines.push(`${region.label}：${region.status === 'overlap' ? coordinates(region) : region.status === 'none' ? '現在の画像との交差なし' : region.status === 'hidden' ? '現在は非表示・座標なし' : '計測待ち・座標なし'}。`);
     lines.push('カテゴリ領域にはボタン上側の余白も含まれます。案内ボタンなど現在非表示の要素について、将来の表示位置や座標を仮定しないでください。');

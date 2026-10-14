@@ -141,11 +141,10 @@ test("customer theme placement supports cover and full-image fit with shared dra
           const left = parseFloat(layout.style.left);
           const top = parseFloat(layout.style.top);
           assert.ok(left >= Math.min(0, -layout.metrics.deltaX) - 1e-8 && left <= Math.max(0, -layout.metrics.deltaX) + 1e-8);
-          assert.ok(top >= Math.min(0, -layout.metrics.deltaY) - 1e-8 && top <= Math.max(0, -layout.metrics.deltaY) + 1e-8);
+          assert.ok(Math.abs(top + layout.metrics.deltaY / 2) <= layout.metrics.rangeY / 2 + 1e-8);
           if (layout.metrics.deltaX >= 0) assert.ok(left <= 0 && left + layout.metrics.renderWidth >= 328 - 1e-8);
           else assert.ok(left >= 0 && left + layout.metrics.renderWidth <= 328 + 1e-8);
-          if (layout.metrics.deltaY >= 0) assert.ok(top <= 0 && top + layout.metrics.renderHeight >= 800 - 1e-8);
-          else assert.ok(top >= 0 && top + layout.metrics.renderHeight <= 800 + 1e-8);
+          assert.ok(top < 800 && top + layout.metrics.renderHeight > 0);
           assert.ok(layout.metrics.zoom >= layout.metrics.minimumZoom);
         }
       }
@@ -158,7 +157,7 @@ test("customer theme placement supports cover and full-image fit with shared dra
   assert.ok(fit.metrics.renderWidth <= 328 + 1e-8);
   assert.ok(fit.metrics.renderHeight <= 602 + 1e-8);
   assert.equal(fit.style.left, `${fit.metrics.spaceX / 2}px`);
-  assert.equal(fit.style.top, `${fit.metrics.spaceY / 2}px`);
+  assert.ok(Math.abs(parseFloat(fit.style.top) - fit.metrics.spaceY / 2) < 1e-8);
   assert.equal(customerThemePositionAfterDrag(0.5, 10, -80, 0.5), 0.75);
   assert.equal(customerThemePositionAfterDrag(0.5, 10, 80, 0.5), 0.25);
   assert.equal(customerThemePositionAfterDrag(0.5, 10, 0, 0.5), 0.5);
@@ -166,7 +165,7 @@ test("customer theme placement supports cover and full-image fit with shared dra
   assert.equal(customerThemePositionAfterDrag(0.5, -10, 80, 0.5), 0.75);
   const wide = customerThemeImageLayout(CUSTOMER_THEME_DEFINITIONS["moon-susuki"].image, { zoom: 1, positionX: 0.5, positionY: 0.5 }, 328, 800);
   assert.equal(wide.metrics.canMoveX, true);
-  assert.equal(wide.metrics.canMoveY, false);
+  assert.equal(wide.metrics.canMoveY, true);
   const zoomed = customerThemeImageLayout(CUSTOMER_THEME_DEFINITIONS.camellia.image, { zoom: 1.5, positionX: 0.5, positionY: 0.5 }, 328, 800);
   assert.equal(zoomed.metrics.canMoveX, true);
   assert.equal(zoomed.metrics.canMoveY, true);

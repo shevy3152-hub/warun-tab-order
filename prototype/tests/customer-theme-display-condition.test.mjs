@@ -26,7 +26,7 @@ test('condition, zoom and positions drive the same layout, coordinates and gener
 test('A90 UI uses measured individual button rectangles instead of PC placement',()=>{
  assert.equal(A90_THEME_REGIONS.find(r=>r.key==='category-1').rect.top,216.987183);
  assert.equal(A90_THEME_REGIONS.find(r=>r.key==='categories').backgroundOnly,true);
- const m=build();const f=frames(m.measurement,image);assert.ok(f.title);assert.ok(f.subject);
+ const m=build({...variant,positionY:.5});const f=frames(m.measurement,image);assert.ok(f.title);assert.ok(f.subject);
  for(const box of [f.title,f.subject]) {
   assert.ok(box.left>m.measurement.visibleImage.left);assert.ok(box.right<m.measurement.visibleImage.right);
   for(const r of m.measurement.regions.filter(r=>r.status==='overlap'&&!r.backgroundOnly)) assert.ok(box.bottom<=r.top||box.top>=r.bottom||box.right<=r.left||box.left>=r.right);
