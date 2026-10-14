@@ -5,7 +5,7 @@ import { DatabaseSync } from 'node:sqlite';
 
 export const LEGACY_SCHEMA_VERSION = 1;
 export const SESSION_SCHEMA_VERSION = 2;
-export const SCHEMA_VERSION = 21;
+export const SCHEMA_VERSION = 22;
 
 export const REQUIRED_TABLES = Object.freeze([
   'system_state',
@@ -164,6 +164,9 @@ export const DEFAULT_V20_MIGRATION_PATH = resolve(
 );
 export const DEFAULT_V21_MIGRATION_PATH = resolve(
   moduleDirectory, '..', '..', '..', 'docs', 'schema-v21-migration.sql',
+);
+export const DEFAULT_V22_MIGRATION_PATH = resolve(
+  moduleDirectory, '..', '..', '..', 'docs', 'schema-v22-migration.sql',
 );
 
 export class DatabaseInitializationError extends Error {
@@ -633,6 +636,14 @@ function migrateSchemaV20ToV21(database, migrationPath) {
   }
 }
 
+function migrateSchemaV21ToV22(database, migrationPath) {
+  try { database.exec(readFileSync(migrationPath, 'utf8')); }
+  catch (error) {
+    try { if (database.isTransaction) database.exec('ROLLBACK;'); } catch {}
+    throw new DatabaseInitializationError('MIGRATION_FAILED', 'The staff-call session-link migration failed.', { cause: error });
+  }
+}
+
 function migrateSchemaV1ToV2(database) {
   let transactionOpen = false;
   try {
@@ -826,6 +837,8 @@ function validateSchema(database) {
   assertRequiredNames(schemaObjectNames(database, 'table'), ['customer_order_start_notice_settings'], 'tables');
   assertRequiredNames(schemaObjectNames(database, 'index'), REQUIRED_INDEXES, 'indexes');
   assertRequiredNames(schemaObjectNames(database, 'trigger'), REQUIRED_TRIGGERS, 'triggers');
+  assertRequiredNames(schemaObjectNames(database, 'index'), ['idx_staff_calls_session_created'], 'staff call session indexes');
+  assertRequiredNames(schemaObjectNames(database, 'trigger'), ['trg_staff_calls_session_valid_insert', 'trg_staff_calls_session_immutable_origin'], 'staff call session triggers');
   assertRequiredNames(schemaObjectNames(database, 'trigger'), ['trg_order_item_cancellation_events_immutable_update', 'trg_order_item_cancellation_events_immutable_delete'], 'cancellation history triggers');
   assertRequiredNames(schemaObjectNames(database, 'table'), ['order_item_price_adjustments'], 'tables');
   assertRequiredNames(schemaObjectNames(database, 'table'), ['order_item_cancellation_events'], 'tables');
@@ -838,6 +851,7 @@ function validateSchema(database) {
   assertRequiredNames(tableColumns(database, 'order_items'), ['is_cancelled'], 'order_items cancellation columns');
   assertRequiredNames(tableColumns(database, 'order_items'), ['quantity_reduced'], 'order_items quantity columns');
   assertRequiredNames(tableColumns(database, 'orders'), ['order_origin', 'created_by_device_id'], 'order origin columns');
+  assertRequiredNames(tableColumns(database, 'staff_calls'), ['table_session_id'], 'staff call session columns');
   assertRequiredNames(schemaObjectNames(database, 'trigger'), ['trg_order_item_quantity_events_immutable_update', 'trg_order_item_quantity_events_immutable_delete'], 'quantity history triggers');
   assertRequiredNames(tableColumns(database, 'order_item_quantity_events'), ['quantity_event_id', 'operation_id', 'order_id', 'order_item_id', 'action', 'quantity_delta', 'previous_billable_quantity', 'next_billable_quantity', 'related_order_id', 'related_order_item_id', 'actor_device_id', 'actor_label_snapshot', 'occurred_at_ms', 'is_served_snapshot', 'served_at_ms_snapshot', 'served_by_device_id_snapshot'], 'order item quantity event columns');
   assertRequiredNames(tableColumns(database, 'order_item_cancellation_events'), ['cancellation_event_id', 'order_id', 'order_item_id', 'action', 'actor_device_id', 'actor_label_snapshot', 'occurred_at_ms', 'reason', 'is_served_snapshot', 'served_at_ms_snapshot', 'served_by_device_id_snapshot', 'operation_id'], 'order item cancellation event columns');
@@ -985,6 +999,7 @@ export function initializeDatabase({
   v19MigrationPath = DEFAULT_V19_MIGRATION_PATH,
   v20MigrationPath = DEFAULT_V20_MIGRATION_PATH,
   v21MigrationPath = DEFAULT_V21_MIGRATION_PATH,
+  v22MigrationPath = DEFAULT_V22_MIGRATION_PATH,
 } = {}) {
   const resolvedDatabasePath = resolveFilePath(databasePath, 'databasePath');
   const resolvedSchemaPath = resolveFilePath(schemaPath, 'schemaPath');
@@ -1007,6 +1022,7 @@ export function initializeDatabase({
   const resolvedV19MigrationPath = resolveFilePath(v19MigrationPath, 'v19MigrationPath');
   const resolvedV20MigrationPath = resolveFilePath(v20MigrationPath, 'v20MigrationPath');
   const resolvedV21MigrationPath = resolveFilePath(v21MigrationPath, 'v21MigrationPath');
+  const resolvedV22MigrationPath = resolveFilePath(v22MigrationPath, 'v22MigrationPath');
 
   mkdirSync(dirname(resolvedDatabasePath), { recursive: true });
 
@@ -1124,6 +1140,11 @@ export function initializeDatabase({
     }
     if (currentVersion === 20) {
       migrateSchemaV20ToV21(database, resolvedV21MigrationPath);
+      enableWriteAheadLogging(database);
+      currentVersion = 21;
+    }
+    if (currentVersion === 21) {
+      migrateSchemaV21ToV22(database, resolvedV22MigrationPath);
       enableWriteAheadLogging(database);
       currentVersion = SCHEMA_VERSION;
     }

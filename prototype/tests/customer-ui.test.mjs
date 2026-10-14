@@ -8,6 +8,7 @@ import { MIN_CUSTOMER_THEME_ZOOM, customerThemeImageLayout, customerThemeImageMi
 const appSource = await readFile(new URL("../src/App.jsx", import.meta.url), "utf8");
 const styles = await readFile(new URL("../src/styles.css", import.meta.url), "utf8");
 const customerScreen = appSource.slice(appSource.indexOf("function CustomerScreen"), appSource.indexOf("const staffNavItems"));
+const visitConfigRefreshSource = await readFile(new URL("../src/customer-visit-config-refresh.js", import.meta.url), "utf8");
 
 test("CustomerScreen renders menu prices but no cart or customer-history totals", () => {
   assert.match(customerScreen, /PriceDisplay/);
@@ -343,16 +344,29 @@ test("API cart pins the first visit context and keeps stale cart contents availa
 test("customer refreshes menu and device context after session invalidations and reconnect", () => {
   assert.match(customerScreen, /resource === "deviceConfig"\) void refreshVisitState\(\)/);
   assert.match(customerScreen, /onReconnect: refreshVisitState/);
-  assert.match(customerScreen, /orderClient\.getDeviceConfig\(\)/);
+  assert.match(customerScreen, /getConfig: \(options\) => orderClient\.getDeviceConfig\(options\)/);
   assert.match(customerScreen, /onCustomerDeviceConfigChange\?\.\(\{ \.\.\.currentConfig, deviceId: customerDeviceConfig\?\.deviceId \}\)/);
   assert.match(customerScreen, /currentConfig\.visitContextId !== pinnedVisitContextId/);
   assert.match(customerScreen, /setCartContextStale\(true\)/);
   assert.match(customerScreen, /setMenuRefreshKey\(\(current\) => current \+ 1\)/);
 });
 
+test("API customer staff call submits an idempotent request and shows success only after acknowledgement", () => {
+  const callStart = customerScreen.indexOf("const callStaff = async () =>");
+  const callEnd = customerScreen.indexOf("const noticeKind", callStart);
+  const callHandler = customerScreen.slice(callStart, callEnd);
+  assert.match(callHandler, /await orderClient\.createStaffCall\(\{ clientCallId \}\)/);
+  assert.match(callHandler, /staffCallSubmitLock\.current/);
+  assert.match(callHandler, /warun-pending-staff-call-id/);
+  const apiCallHandler = callHandler.slice(callHandler.indexOf("staffCallSubmitLock.current = true"));
+  assert.ok(apiCallHandler.indexOf("await orderClient.createStaffCall") < apiCallHandler.indexOf("スタッフを呼び出しました"));
+  assert.match(callHandler, /呼出を保存できませんでした。呼出画面を開いたまま再試行してください。/);
+  assert.match(customerScreen, /disabled=\{staffCallSubmitting\}/);
+});
+
 test("revoked customer authorization keeps the cart visible and blocks enqueue until discard", () => {
   assert.match(customerScreen, /onAuthorizationFailure: blockCartAfterAuthenticationFailure/);
-  assert.match(customerScreen, /currentConfig\?\.status === "unauthorized"/);
+  assert.match(visitConfigRefreshSource, /config\?\.status === "unauthorized"/);
   assert.match(customerScreen, /contextCheck\?\.status === "unauthorized"/);
   assert.match(customerScreen, /setCartAuthorizationRequired\(true\)/);
   assert.match(customerScreen, /端末の接続を確認できません。カート内容は保持しています。注文を停止しています。スタッフへ確認してください。/);

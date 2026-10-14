@@ -8,10 +8,11 @@ function fixture({ storage, activate, loadBaseline, ...options } = {}) {
   const values = new Map();
   const store = storage || { getItem: key => values.get(key), setItem: (key, value) => values.set(key, value) };
   let plays = 0, stops = 0, clock = 10;
+  const playKinds = [];
   const changes = [];
-  const engine = { activate: activate || (async () => {}), play: () => { plays++; }, stop: () => { stops++; }, dispose: () => { stops++; } };
+  const engine = { activate: activate || (async () => {}), play: kind => { plays++; playKinds.push(kind ?? "order"); }, stop: () => { stops++; }, dispose: () => { stops++; } };
   const controller = createKitchenOrderSound({ storage: store, storageKey: "test", engine, loadBaseline, now: () => clock, onChange: state => changes.push(state), ...options });
-  return { controller, engine, store, plays: () => plays, stops: () => stops, advance: value => { clock = value; }, changes };
+  return { controller, engine, store, plays: () => plays, playKinds, stops: () => stops, advance: value => { clock = value; }, changes };
 }
 test("initial OFF and first successful snapshot never replay existing orders", async () => {
   const f = fixture();
@@ -41,6 +42,40 @@ test("one sound per new order, with duplicates, served updates and reconnects si
   f.controller.observe([order("c", "completed")], { requestStartedAt: 50 });
   assert.equal(f.plays(), 2);
 });
+test("new staff calls use their own sound, suppress baseline and reconnect calls, and deduplicate IDs", async () => {
+  const f = fixture({ loadBaseline: async () => ({ orders: [], staffCalls: [{ staffCallId: "call-old", status: "open", createdAtMs: 1 }] }) });
+  f.controller.observe([]);
+  await f.controller.enable();
+  f.controller.observe([], { staffCalls: [{ staffCallId: "call-old", status: "open", createdAtMs: 1 }], requestStartedAt: 20 });
+  assert.equal(f.plays(), 0);
+  const nextCall = { id: "call-new", status: "open", createdAtMs: 21 };
+  f.controller.observe([], { staffCalls: [nextCall], requestStartedAt: 30 });
+  f.controller.observe([], { staffCalls: [nextCall], requestStartedAt: 40 });
+  assert.deepEqual(f.playKinds, ["staffCall"]);
+  assert.deepEqual(JSON.parse(f.store.getItem("test")).seenCallIds, ["call-old", "call-new"]);
+  const reconnectedCall = { id: "call-during-reconnect", status: "open", createdAtMs: 31 };
+  f.controller.observe([], { staffCalls: [reconnectedCall], suppressStaffCalls: true, requestStartedAt: 50 });
+  f.controller.observe([], { staffCalls: [reconnectedCall], requestStartedAt: 60 });
+  assert.deepEqual(f.playKinds, ["staffCall"]);
+});
+test("staff calls received while notifications are OFF stay silent after enabling", async () => {
+  const f = fixture();
+  f.controller.observe([]);
+  const call = { id: "call-off", status: "open", createdAtMs: 10 };
+  f.controller.observe([], { staffCalls: [call], requestStartedAt: 11 });
+  assert.equal(f.plays(), 0);
+  await f.controller.enable();
+  f.controller.observe([], { staffCalls: [call], requestStartedAt: 20 });
+  assert.equal(f.plays(), 0);
+});
+test("an order and staff call arriving together are queued in sequence", async () => {
+  const f = fixture();
+  f.controller.observe([]);
+  await f.controller.enable();
+  f.controller.observe([], { requestStartedAt: 10 });
+  f.controller.observe([order("simultaneous-order")], { staffCalls: [{ id: "simultaneous-call", status: "open", createdAtMs: 20 }], requestStartedAt: 20 });
+  assert.deepEqual(f.playKinds, ["order", "staffCall"]);
+});
 test("OFF observations and requests started before ON are not played later", async () => {
   const f = fixture();
   f.controller.observe([order("before")]);
@@ -63,7 +98,9 @@ test("reload preserves known IDs but requires a new activation click", async () 
   f.controller.observe([]);
   await f.controller.enable();
   f.controller.observe([], { requestStartedAt: 10 });
-  f.controller.observe([order("notified")], { requestStartedAt: 20 });
+  const knownCall = { id: "call-before-reload", status: "open", createdAtMs: 20 };
+  f.controller.observe([order("notified")], { staffCalls: [knownCall], requestStartedAt: 20 });
+  assert.deepEqual(f.playKinds, ["order", "staffCall"]);
   f.controller.dispose();
   const reloaded = fixture({ storage: f.store });
   assert.equal(reloaded.controller.getState().status, "off");
@@ -71,7 +108,7 @@ test("reload preserves known IDs but requires a new activation click", async () 
   reloaded.controller.observe([]);
   await reloaded.controller.enable();
   reloaded.controller.observe([], { requestStartedAt: 10 });
-  reloaded.controller.observe([order("notified"), order("next")], { requestStartedAt: 20 });
+  reloaded.controller.observe([order("notified"), order("next")], { staffCalls: [knownCall], requestStartedAt: 20 });
   assert.equal(reloaded.plays(), 1);
 });
 test("OFF cancels a late activation or test without scheduling a sound", async () => {
@@ -106,7 +143,7 @@ test("activation and playback failures stop audio and do not retry on incoming o
   playback.engine.play = () => { throw new Error("suspended"); };
   playback.controller.observe([order("a")], { requestStartedAt: 20 });
   assert.equal(playback.controller.getState().status, "blocked");
-  assert.match(playback.controller.getState().message, /注文表示は続きます/);
+  assert.match(playback.controller.getState().message, /注文とスタッフ呼出の画面表示は続きます/);
 });
 test("test while OFF does not enable new-order sounds; audio suspension shows a blocked state", async () => {
   const f = fixture();
@@ -153,10 +190,30 @@ test("sound engine stops every scheduled oscillator on OFF", async () => {
   assert.equal(context.state, "closed");
   await assert.rejects(createKitchenSoundEngine({ env: {} }).activate());
 });
+test("staff-call double tone is distinct and queued after the order tone without overlap", async () => {
+  const oscillators = [];
+  class Context {
+    constructor() { this.state = "suspended"; this.currentTime = 0; this.destination = {}; }
+    async resume() { this.state = "running"; }
+    async close() {}
+    createOscillator() { const node = { frequency: { setValueAtTime(value, at) { node.frequencyValues.push([value, at]); } }, frequencyValues: [], connect() {}, disconnect() {}, start(at) { this.startTime = at; }, stop(at) { this.stopTime = at; } }; oscillators.push(node); return node; }
+    createGain() { return { gain: { setValueAtTime() {}, linearRampToValueAtTime() {}, exponentialRampToValueAtTime() {} }, connect() {}, disconnect() {} }; }
+  }
+  const engine = createKitchenSoundEngine({ env: { AudioContext: Context } });
+  await engine.activate();
+  engine.play("order");
+  engine.play("staffCall");
+  assert.deepEqual(oscillators.map((node) => node.startTime), [0, 0.42, 0.61]);
+  assert.deepEqual(oscillators.map((node) => node.frequencyValues[0][0]), [880, 523, 659]);
+  for (let index = 1; index < oscillators.length; index++) assert.ok(oscillators[index].startTime >= oscillators[index - 1].stopTime);
+  engine.dispose();
+});
 test("sound controls belong only to kitchen and use snapshot request timing", async () => {
   const app = await readFile(new URL("../src/App.jsx", import.meta.url), "utf8");
   const kitchen = app.slice(app.indexOf("function KitchenScreen"));
   assert.match(kitchen, /<KitchenOrderSound orders=\{liveOrders\}/);
+  assert.match(kitchen, /staffCalls=\{activeCalls\}/);
+  assert.match(app, /onReconnect: \(\) => \{ suppressStaffCallsUntilSnapshot = true; void load\(\); \}/);
   assert.equal((app.match(/<KitchenOrderSound /g) || []).length, 1);
   assert.match(app, /notificationRequestStartedAt: snapshot.notificationRequestStartedAt/);
   assert.match(app, /playCheckoutBell\(checkoutAudioRef\)/);
@@ -229,7 +286,7 @@ test("activation progress distinguishes audio waiting from baseline waiting", as
   assert.equal(f.controller.getState().status, "enabling");
   assert.equal(f.controller.getState().audioStatus, "ready");
   assert.equal(f.controller.getState().baselineStatus, "pending");
-  assert.match(f.controller.getState().message, /注文一覧の取得を待って/);
+  assert.match(f.controller.getState().message, /厨房の新着一覧取得を待って/);
   baselineReady([]);
   await enabling;
   assert.equal(f.controller.getState().status, "on");
@@ -260,7 +317,7 @@ test("pending activation times out once, aborts baseline and ignores late comple
   [...timers.values()][0]();
   await enabling;
   assert.equal(f.controller.getState().status, "blocked");
-  assert.match(f.controller.getState().message, /注文一覧の取得が8秒/);
+  assert.match(f.controller.getState().message, /厨房の新着一覧取得が8秒/);
   assert.equal(signal.aborted, true);
   assert.equal(timers.size, 0);
   release([]);

@@ -15,6 +15,7 @@ import {
   requestCustomerCheckout,
   fetchCustomerOrderHistory,
   fetchCustomerOrderStartNotice,
+  postCustomerStaffCall,
   resolveOrderApiConfig,
   retryDelayForAttempt,
   subscribeCustomerInvalidations,
@@ -26,6 +27,31 @@ const ITEM_ID = "edamame";
 function uuid(value = 1) {
   return `00000000-0000-4000-8000-${String(value).padStart(12, "0")}`;
 }
+
+test("staff call client posts only the idempotency key and visit context, and does not report failed sends as success", async () => {
+  const calls = [];
+  const clientCallId = uuid(77);
+  const visitContextId = `v1_${"a".repeat(64)}`;
+  const config = { enabled: true, baseUrl: "http://localhost:8787/v1", token: "test-token" };
+  const response = {
+    status: 201,
+    headers: { get: (name) => name === "Idempotency-Result" ? "created" : null },
+    async json() { return { clientCallId, callType: "staff", status: "open", idempotencyResult: "created" }; },
+  };
+  const result = await postCustomerStaffCall({
+    config, clientCallId, visitContextId, env: { navigator: { onLine: true } },
+    fetchImpl: async (...args) => { calls.push(args); return response; },
+  });
+  assert.equal(result.idempotencyResult, "created");
+  assert.equal(calls[0][0], "http://localhost:8787/v1/staff-calls");
+  assert.equal(calls[0][1].method, "POST");
+  assert.equal(calls[0][1].headers.Authorization, "Bearer test-token");
+  assert.deepEqual(JSON.parse(calls[0][1].body), { clientCallId, visitContextId });
+  await assert.rejects(() => postCustomerStaffCall({
+    config, clientCallId, visitContextId, env: { navigator: { onLine: true } },
+    fetchImpl: async () => ({ status: 503, headers: { get: () => null }, async json() { return { error: { code: "SERVICE_UNAVAILABLE" } }; } }),
+  }), /呼出を保存できませんでした/);
+});
 
 function successfulTransport(result = "created", calls = []) {
   return {

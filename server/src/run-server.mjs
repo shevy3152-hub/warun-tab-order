@@ -20,6 +20,7 @@ import { createSseHub } from "./events/sse-hub.mjs";
 import { createSnapshotService } from "./events/snapshot-service.mjs";
 import { createHttpServer } from "./http/http-server.mjs";
 import { createOrderRepository } from "./orders/order-repository.mjs";
+import { createStaffCallRepository } from "./staff-calls/staff-call-repository.mjs";
 import { createPairingService } from "./pairing/pairing-service.mjs";
 import {
   classifyDatabaseTarget,
@@ -119,6 +120,7 @@ export function createWarunServer({ databasePath, runtimeInfo = undefined, now =
   const checkout = createCheckoutRepository({ database, now });
   const eventRepository = createEventRepository({ database });
   const orderRepository = createOrderRepository({ database, now });
+  const staffCallRepository = createStaffCallRepository({ database, now });
   const pairingService = createPairingService({ database, now });
   const snapshotService = createSnapshotService({ catalog, eventRepository });
   const sseHub = createSseHub({ eventRepository });
@@ -142,6 +144,7 @@ export function createWarunServer({ databasePath, runtimeInfo = undefined, now =
     sessionMenuAccess,
     eventRepository,
     orderRepository,
+    staffCallRepository,
     snapshotService,
     sseHub,
     now,
@@ -169,6 +172,7 @@ export function createWarunServer({ databasePath, runtimeInfo = undefined, now =
     checkout.close();
     eventRepository.close();
     orderRepository.close();
+    staffCallRepository.close();
     snapshotService.close?.();
     connection.close();
   };

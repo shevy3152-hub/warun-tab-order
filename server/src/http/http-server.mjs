@@ -42,6 +42,7 @@ import {
   ORDER_ERROR_CODES,
   isOrderRepositoryError,
 } from '../orders/order-errors.mjs';
+import { isStaffCallRepositoryError, STAFF_CALL_ERROR_CODES } from '../staff-calls/staff-call-errors.mjs';
 import {
   CHECKOUT_ERROR_CODES,
   isCheckoutRepositoryError,
@@ -70,6 +71,7 @@ import {
   mapMenuResponse,
   mapOrderHistoryResponse,
   mapOrderReceiptResponse,
+  mapStaffCallWriteResponse,
   mapTableSessionCloseResponse,
   mapCheckoutPublicResponse,
   mapCheckoutStaffResponse,
@@ -97,6 +99,8 @@ const ROUTE_METHODS = new Map([
   ['/v1/device/config', 'GET'],
   ['/v1/menu', 'GET'],
   ['/v1/orders', 'POST'],
+  ['/v1/staff-calls', 'POST'],
+  ['/v1/kitchen/staff-calls/resolve', 'POST'],
   ['/v1/kitchen/orders', 'POST'],
   ['/v1/customer/order-history', 'GET'],
   ['/v1/customer/checkout-requests', 'POST'],
@@ -675,6 +679,19 @@ function mapApplicationError(error) {
     return createHttpError(HTTP_ERROR_CODES.INTERNAL_ERROR);
   }
 
+  if (isStaffCallRepositoryError(error)) {
+    if (error.code === STAFF_CALL_ERROR_CODES.DEVICE_NOT_REGISTERED) return authenticationFailed();
+    if ([STAFF_CALL_ERROR_CODES.DEVICE_NOT_AUTHORIZED, STAFF_CALL_ERROR_CODES.DEVICE_NOT_ASSIGNED].includes(error.code)) {
+      return createHttpError(HTTP_ERROR_CODES.AUTHORIZATION_FAILED);
+    }
+    if (error.code === STAFF_CALL_ERROR_CODES.INVALID_REQUEST) return createHttpError(HTTP_ERROR_CODES.INVALID_STAFF_CALL_REQUEST);
+    if (error.code === STAFF_CALL_ERROR_CODES.VISIT_CONTEXT_STALE) return createHttpError(HTTP_ERROR_CODES.VISIT_CONTEXT_STALE);
+    if (error.code === STAFF_CALL_ERROR_CODES.CALL_CONFLICT) return createHttpError(HTTP_ERROR_CODES.STAFF_CALL_CONFLICT);
+    if (error.code === STAFF_CALL_ERROR_CODES.CALL_NOT_FOUND) return createHttpError(HTTP_ERROR_CODES.STAFF_CALL_NOT_FOUND);
+    if (error.code === STAFF_CALL_ERROR_CODES.DATABASE_FAILURE && hasBusyCause(error)) return createHttpError(HTTP_ERROR_CODES.SERVICE_UNAVAILABLE);
+    return createHttpError(HTTP_ERROR_CODES.INTERNAL_ERROR);
+  }
+
   if (isCheckoutRepositoryError(error)) {
     if (error.code === CHECKOUT_ERROR_CODES.INVALID_CHECKOUT_REQUEST) return createHttpError(HTTP_ERROR_CODES.INVALID_CHECKOUT_REQUEST);
     if (error.code === CHECKOUT_ERROR_CODES.CHECKOUT_CONFLICT) return createHttpError(HTTP_ERROR_CODES.CHECKOUT_CONFLICT);
@@ -891,6 +908,7 @@ function createConfiguredHttpServer({
   authenticator,
   catalog,
   orderRepository = undefined,
+  staffCallRepository = undefined,
   eventRepository = undefined,
   snapshotService = undefined,
   sseHub = undefined,
@@ -1335,6 +1353,52 @@ function createConfiguredHttpServer({
         writeJsonResponse(response, {
           statusCode: result.idempotencyResult === 'created' ? 201 : 200,
           body: receipt,
+          requestId,
+          headers: { 'Idempotency-Result': result.idempotencyResult },
+        });
+        return;
+      }
+
+      if (target.path === '/v1/staff-calls') {
+        authorizeDeviceRole(principal, ['customer']);
+        const body = await readJsonBody(request);
+        if (!body || typeof body !== 'object' || Array.isArray(body)
+          || Object.keys(body).length !== 2
+          || Object.keys(body).some((key) => !['clientCallId', 'visitContextId'].includes(key))) {
+          throw createHttpError(HTTP_ERROR_CODES.INVALID_STAFF_CALL_REQUEST);
+        }
+        const result = requireService(staffCallRepository, 'createStaffCall').createStaffCall({
+          principal,
+          clientCallId: body.clientCallId,
+          visitContextId: body.visitContextId,
+        });
+        await notifyCommittedSafely(sseHub, result);
+        writeJsonResponse(response, {
+          statusCode: result.idempotencyResult === 'created' ? 201 : 200,
+          body: mapStaffCallWriteResponse(result),
+          requestId,
+          headers: { 'Idempotency-Result': result.idempotencyResult },
+        });
+        return;
+      }
+
+      if (target.path === '/v1/kitchen/staff-calls/resolve') {
+        authorizeDeviceRole(principal, ['kitchen', 'admin']);
+        const body = await readJsonBody(request);
+        if (!body || typeof body !== 'object' || Array.isArray(body)
+          || Object.keys(body).length !== 2
+          || Object.keys(body).some((key) => !['staffCallId', 'expectedVersion'].includes(key))) {
+          throw createHttpError(HTTP_ERROR_CODES.INVALID_STAFF_CALL_REQUEST);
+        }
+        const result = requireService(staffCallRepository, 'resolveStaffCall').resolveStaffCall({
+          principal,
+          staffCallId: body.staffCallId,
+          expectedVersion: body.expectedVersion,
+        });
+        await notifyCommittedSafely(sseHub, result);
+        writeJsonResponse(response, {
+          statusCode: 200,
+          body: mapStaffCallWriteResponse(result),
           requestId,
           headers: { 'Idempotency-Result': result.idempotencyResult },
         });

@@ -29,27 +29,33 @@ export function createKitchenSoundEngine({ env = globalThis, onStateChange = () 
     },
     setVolume(value) { volume = normalizeKitchenSoundVolume(value); if (volume === 0) this.stop(); },
     isRunning() { return context?.state === "running"; },
-    play() {
+    play(kind = "order") {
       if (context?.state !== "running") throw new Error("Audio not running");
       if (volume === 0) return;
       const peak = KITCHEN_NOTIFICATION_GAIN * volume / DEFAULT_KITCHEN_SOUND_VOLUME;
-      const oscillator = context.createOscillator();
-      const gain = context.createGain();
       const start = Math.max(context.currentTime, nextStart);
       nextStart = start + 0.42;
-      nodes.add(oscillator);
-      oscillator.type = "sine";
-      oscillator.frequency.setValueAtTime(880, start);
-      oscillator.frequency.setValueAtTime(1174, start + 0.14);
-      gain.gain.setValueAtTime(0, start);
-      gain.gain.linearRampToValueAtTime(peak, start + 0.015);
-      gain.gain.setValueAtTime(peak, start + 0.20);
-      gain.gain.exponentialRampToValueAtTime(0.001, start + 0.32);
-      oscillator.connect(gain);
-      gain.connect(context.destination);
-      oscillator.onended = () => { nodes.delete(oscillator); oscillator.disconnect(); gain.disconnect(); };
-      oscillator.start(start);
-      oscillator.stop(start + 0.34);
+      const notes = kind === "staffCall"
+        ? [{ frequency: 523, at: 0, duration: 0.12, holdAt: 0.075 }, { frequency: 659, at: 0.19, duration: 0.12, holdAt: 0.075 }]
+        : [{ frequency: 880, at: 0, endFrequency: 1174, sweepAt: 0.14, duration: 0.34, holdAt: 0.20 }];
+      for (const note of notes) {
+        const oscillator = context.createOscillator();
+        const gain = context.createGain();
+        const noteStart = start + note.at;
+        nodes.add(oscillator);
+        oscillator.type = "sine";
+        oscillator.frequency.setValueAtTime(note.frequency, noteStart);
+        if (note.endFrequency) oscillator.frequency.setValueAtTime(note.endFrequency, noteStart + note.sweepAt);
+        gain.gain.setValueAtTime(0, noteStart);
+        gain.gain.linearRampToValueAtTime(peak, noteStart + 0.015);
+        gain.gain.setValueAtTime(peak, noteStart + note.holdAt);
+        gain.gain.exponentialRampToValueAtTime(0.001, noteStart + note.duration);
+        oscillator.connect(gain);
+        gain.connect(context.destination);
+        oscillator.onended = () => { nodes.delete(oscillator); oscillator.disconnect(); gain.disconnect(); };
+        oscillator.start(noteStart);
+        oscillator.stop(noteStart + note.duration);
+      }
     },
     stop() {
       for (const oscillator of nodes) { try { oscillator.stop(); oscillator.disconnect(); } catch { /* Already ended. */ } }
@@ -69,6 +75,7 @@ export function createKitchenOrderSound({ storage, storageKey, engine, loadBasel
   try { stored = JSON.parse(storage?.getItem(storageKey) || "{}"); } catch { storageAvailable = false; }
   if (!stored || typeof stored !== "object") stored = {};
   const seen = new Set(Array.isArray(stored.seenIds) ? stored.seenIds.filter((id) => typeof id === "string") : []);
+  const seenCallIds = new Set(Array.isArray(stored.seenCallIds) ? stored.seenCallIds.filter((id) => typeof id === "string") : []);
   let volume = normalizeKitchenSoundVolume(stored.volume);
   engine.setVolume?.(volume);
   let requestedOn = stored.requestedOn === true;
@@ -103,7 +110,7 @@ export function createKitchenOrderSound({ storage, storageKey, engine, loadBasel
     if (!storageAvailable) return;
     try {
       if (!storage?.setItem) throw new Error("Storage unavailable");
-      storage.setItem(storageKey, JSON.stringify({ requestedOn, seenIds: [...seen], volume }));
+      storage.setItem(storageKey, JSON.stringify({ requestedOn, seenIds: [...seen], seenCallIds: [...seenCallIds], volume }));
     } catch { storageAvailable = false; publish(); }
   };
   const fail = (error = {}, stage = error.stage || "audio") => {
@@ -119,12 +126,12 @@ export function createKitchenOrderSound({ storage, storageKey, engine, loadBasel
         : error.message === "Audio unavailable" ? "このブラウザーは音声機能に対応していません"
         : error.name === "NotAllowedError" ? "ブラウザーが音声の有効化を拒否しました"
         : "音声を実行中にできませんでした（停止・再生失敗）"
-      : error.code === "TIMEOUT" ? "注文一覧の取得が8秒以内に完了しませんでした"
-        : error.code === "API_UNAVAILABLE" ? "注文APIの接続先または認証設定がありません"
-        : error.status ? `注文一覧の取得に失敗しました（HTTP ${error.status}）`
-        : error.code === "INVALID_RESPONSE" ? "注文一覧の応答形式が不正です"
-        : "注文一覧を取得できませんでした（通信・応答エラー）";
-    message = `${reason}。通知音はOFFです。注文表示は続きます。スイッチをONにして再度有効化してください。`;
+      : error.code === "TIMEOUT" ? "厨房の新着一覧取得が8秒以内に完了しませんでした"
+        : error.code === "API_UNAVAILABLE" ? "厨房APIの接続先または認証設定がありません"
+        : error.status ? `厨房の新着一覧取得に失敗しました（HTTP ${error.status}）`
+        : error.code === "INVALID_RESPONSE" ? "厨房の新着一覧応答形式が不正です"
+        : "厨房の新着一覧を取得できませんでした（通信・応答エラー）";
+    message = `${reason}。通知音はOFFです。注文とスタッフ呼出の画面表示は続きます。スイッチをONにして再度有効化してください。`;
     publish();
   };
   return {
@@ -148,14 +155,14 @@ export function createKitchenOrderSound({ storage, storageKey, engine, loadBasel
       baselineStatus = "pending";
       enabledAt = Infinity;
       const activationStartedAt = now();
-      message = "有効化中：音声と注文一覧を確認しています。クリックで中止できます。";
+      message = "有効化中：音声と厨房の新着一覧を確認しています。クリックで中止できます。";
       publish();
       const progress = (stage) => {
         if (disposed || attempt !== generation) return;
         if (stage === "audio") audioStatus = "ready";
         else baselineStatus = "ready";
         message = audioStatus !== "ready" ? "有効化中：音声の有効化を待っています。クリックで中止できます。"
-          : baselineStatus !== "ready" ? "有効化中：音声は準備済み、注文一覧の取得を待っています。クリックで中止できます。"
+          : baselineStatus !== "ready" ? "有効化中：音声は準備済み、厨房の新着一覧取得を待っています。クリックで中止できます。"
           : "有効化中：ONを確定しています。";
         publish();
       };
@@ -163,7 +170,7 @@ export function createKitchenOrderSound({ storage, storageKey, engine, loadBasel
         // Both operations start in the click handler; only a completed baseline can confirm ON.
         const activation = bounded(engine.activate(), "audio", signal).then(() => progress("audio"));
         const baselineRead = bounded(loadBaseline({ signal }), "baseline", signal).then(baseline => {
-          if (!Array.isArray(baseline)) throw { stage: "baseline", code: "INVALID_RESPONSE" };
+          if (!Array.isArray(baseline) && (!baseline || !Array.isArray(baseline.orders) || !Array.isArray(baseline.staffCalls ?? []))) throw { stage: "baseline", code: "INVALID_RESPONSE" };
           progress("baseline");
           return baseline;
         });
@@ -171,12 +178,18 @@ export function createKitchenOrderSound({ storage, storageKey, engine, loadBasel
         if (disposed || attempt !== generation) return;
         if (engine.isRunning?.() === false) throw { stage: "audio", message: "Audio not running" };
         pending = null;
-        for (const order of baseline) if (typeof order?.id === "string" && order.id) seen.add(order.id);
+        const baselineOrders = Array.isArray(baseline) ? baseline : baseline.orders;
+        const baselineCalls = Array.isArray(baseline) ? [] : baseline.staffCalls ?? [];
+        for (const order of baselineOrders) if (typeof order?.id === "string" && order.id) seen.add(order.id);
+        for (const call of baselineCalls) {
+          const id = call?.id ?? call?.staffCallId;
+          if (typeof id === "string" && id) seenCallIds.add(id);
+        }
         initialized = true;
         status = "on";
         requestedOn = true;
         enabledAt = activationStartedAt;
-        message = "通知音ON：新規注文を受信すると鳴ります。";
+        message = "通知音ON：新着注文またはスタッフ呼出を受信すると鳴ります。";
         persist();
         publish();
       } catch (error) { if (!disposed && attempt === generation) fail(error); }
@@ -212,22 +225,37 @@ export function createKitchenOrderSound({ storage, storageKey, engine, loadBasel
         publish();
       }
     },
-    observe(orders, { ready = true, requestStartedAt, allowUnversioned = false } = {}) {
-      if (disposed || !ready || !Array.isArray(orders)) return;
+    observe(orders, { staffCalls = [], suppressStaffCalls = false, ready = true, requestStartedAt, allowUnversioned = false } = {}) {
+      if (disposed || !ready || !Array.isArray(orders) || !Array.isArray(staffCalls)) return;
       const first = !initialized;
       initialized = true;
-      const added = [];
+      const addedOrders = [];
+      const addedCalls = [];
       for (const order of orders) {
         if (typeof order?.id !== "string" || !order.id || seen.has(order.id)) continue;
         seen.add(order.id);
-        added.push(order);
+        addedOrders.push(order);
       }
-      if (added.length) persist();
+      for (const call of staffCalls) {
+        const id = call?.id ?? call?.staffCallId;
+        if (typeof id !== "string" || !id || seenCallIds.has(id) || call.status === "resolved") continue;
+        seenCallIds.add(id);
+        if (!suppressStaffCalls) addedCalls.push(call);
+      }
+      if (addedOrders.length || addedCalls.length) persist();
       if (first || status !== "on" || !Number.isFinite(requestStartedAt) || requestStartedAt < enabledAt) return;
-      for (const order of added) {
+      const notifications = [];
+      for (const order of addedOrders) {
         // An unseen restored/edited order is not a newly created order.
         if (!["new", "active"].includes(order.status) || (order.version !== 1 && !(allowUnversioned && order.version == null))) continue;
-        try { if (volume > 0) engine.play(); } catch { fail(); break; }
+        notifications.push("order");
+      }
+      for (const call of addedCalls) {
+        if (!Number.isFinite(Number(call.createdAtMs ?? (call.createdAt ? Date.parse(call.createdAt) : NaN)))) continue;
+        notifications.push("staffCall");
+      }
+      for (const notification of notifications) {
+        try { if (volume > 0) engine.play(notification); } catch { fail(); break; }
       }
     },
     audioStateChanged(value) { if (!disposed && status === "on" && value !== "running") fail(); },

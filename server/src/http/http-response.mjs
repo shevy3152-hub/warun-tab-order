@@ -50,7 +50,7 @@ const EVENT_TYPES_BY_ROLE = Object.freeze({
     'customer_order_start_notice.updated',
   ]),
 });
-const SUPPORTED_SCHEMA_VERSION = 21;
+const SUPPORTED_SCHEMA_VERSION = 22;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const OPAQUE_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
 
@@ -874,6 +874,14 @@ export function mapOrderReceiptResponse(result) {
     status: requireOneOf(order.status, ORDER_STATUSES),
     acceptedAtMs: requireInteger(order.acceptedAtMs),
     idempotencyResult,
+  };
+}
+
+export function mapStaffCallWriteResponse(result) {
+  requireObject(result);
+  return {
+    ...mapStaffCall(result.staffCall),
+    idempotencyResult: requireOneOf(result.idempotencyResult, new Set(['created', 'replayed'])),
   };
 }
 

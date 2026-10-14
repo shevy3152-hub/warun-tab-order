@@ -29,7 +29,7 @@ import { createClientOrderId, createCustomerOrderClient, CustomerCheckoutError, 
 import { claimCustomerDevice, createIndexedDbCredentialStore, loadOrCreateCustomerDevice, pairingClaimErrorMessage, runtimeForCustomerCredentials } from "./device-credentials.js";
 import { customerOrderErrorCategory, customerOrderNoticeFromOutboxEvent } from "./customer-order-notice.js";
 import { AdminPairingError, configuredAdminToken, createAdminRideGuidanceContact, deleteAdminRideGuidanceContact, fetchAdminBusinessHours, fetchAdminCheckoutRequests, fetchAdminCustomerOrderStartNotice, fetchAdminCustomerThemeConfig, fetchAdminDiagnostics, fetchAdminMenu, fetchAdminSessionMenuAccess, allowAdminSessionMenuItem, confirmAndCloseAdminEmptySession, revokeAdminSessionMenuItem, fetchAdminOrderHistory, fetchAdminPaymentHistory, fetchAdminPairingPreflight, fetchAdminRideGuidance, issueCustomerPairingCode, revokeAdminDevice, saveAdminBusinessHours, saveAdminCustomerOrderStartNotice, saveAdminCustomerThemeConfig, saveAdminImageLayouts, saveAdminCategory, saveAdminMenuItem, saveAdminMenuOrdering, saveAdminRideGuidanceOrdering, saveAdminRideGuidancePickup, updateAdminRideGuidanceContact, voidAdminPayment } from "./admin-pairing.js";
-import { adjustKitchenItemUnitPrice, adjustKitchenOrderItemQuantity as adjustKitchenItemQuantityRequest, cancelKitchenCheckout, cancelKitchenOrderItem, closeKitchenTableSession, createKitchenOrder, fetchKitchenCheckoutRequests, fetchKitchenOrderHistory, fetchKitchenPaymentHistory, fetchKitchenSnapshot, kitchenAdditionRequestItem, kitchenApiConfigured, KitchenApiError, markKitchenItemServed, payKitchenCheckout, readyKitchenCheckout, restoreKitchenOrderItem, saveKitchenCheckoutAdjustments, subscribeKitchenInvalidations, voidKitchenPayment } from "./kitchen-api.js";
+import { adjustKitchenItemUnitPrice, adjustKitchenOrderItemQuantity as adjustKitchenItemQuantityRequest, cancelKitchenCheckout, cancelKitchenOrderItem, closeKitchenTableSession, createKitchenOrder, fetchKitchenCheckoutRequests, fetchKitchenOrderHistory, fetchKitchenPaymentHistory, fetchKitchenSnapshot, kitchenAdditionRequestItem, kitchenApiConfigured, KitchenApiError, markKitchenItemServed, payKitchenCheckout, readyKitchenCheckout, resolveKitchenStaffCall, restoreKitchenOrderItem, saveKitchenCheckoutAdjustments, subscribeKitchenInvalidations, voidKitchenPayment } from "./kitchen-api.js";
 import { buildKitchenTableGroups } from "./kitchen-order-board.js";
 import { bootstrapCustomerOrderClient } from "./customer-bootstrap.js";
 import { createCustomerVisitConfigRefresher } from "./customer-visit-config-refresh.js";
@@ -934,6 +934,9 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
   const [checkoutRefreshKey, setCheckoutRefreshKey] = useState(0);
   const [submitting, setSubmitting] = useState(false);
   const submitLock = useRef(false);
+  const staffCallSubmitLock = useRef(false);
+  const staffCallIdRef = useRef(null);
+  const [staffCallSubmitting, setStaffCallSubmitting] = useState(false);
   const checkoutRequestIdRef = useRef(null);
   const checkoutPreviousRef = useRef(null);
   const checkoutAudioRef = useRef(null);
@@ -1310,10 +1313,37 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
     }
   };
 
-  const callStaff = () => {
-    updateState((current) => ({ ...current, staffCalls: [...current.staffCalls, { id: makeId("call"), tableId: device.tableId, type: "staff", createdAt: new Date().toISOString(), resolvedAt: null }] }));
-    setModal(null);
-    setNotice("スタッフを呼び出しました。少々お待ちください。");
+  const callStaff = async () => {
+    if (staffCallSubmitLock.current) return;
+    if (!apiMode) {
+      updateState((current) => ({ ...current, staffCalls: [...current.staffCalls, { id: makeId("call"), tableId: device.tableId, type: "staff", createdAt: new Date().toISOString(), resolvedAt: null }] }));
+      setModal(null);
+      setNotice("スタッフを呼び出しました。少々お待ちください。");
+      return;
+    }
+    staffCallSubmitLock.current = true;
+    setStaffCallSubmitting(true);
+    let clientCallId = staffCallIdRef.current;
+    try {
+      if (!clientCallId) {
+        try { clientCallId = window.sessionStorage.getItem("warun-pending-staff-call-id"); } catch { /* session storage may be unavailable */ }
+      }
+      if (!clientCallId || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(clientCallId)) {
+        clientCallId = createClientOrderId();
+      }
+      staffCallIdRef.current = clientCallId;
+      try { window.sessionStorage.setItem("warun-pending-staff-call-id", clientCallId); } catch { /* server idempotency remains active for in-page retries */ }
+      await orderClient.createStaffCall({ clientCallId });
+      staffCallIdRef.current = null;
+      try { window.sessionStorage.removeItem("warun-pending-staff-call-id"); } catch { /* best effort cleanup */ }
+      setModal(null);
+      setNotice("スタッフを呼び出しました。少々お待ちください。");
+    } catch {
+      setNotice({ kind: "failed", message: "呼出を保存できませんでした。呼出画面を開いたまま再試行してください。" });
+    } finally {
+      staffCallSubmitLock.current = false;
+      setStaffCallSubmitting(false);
+    }
   };
   const noticeKind = typeof notice === "string" ? (online ? "success" : "pending") : notice?.kind;
   const noticeMessage = typeof notice === "string" ? notice : notice?.message;
@@ -1628,7 +1658,7 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
           <div className="modal-actions"><button className="button button--quiet" onClick={() => { setSakeSelection(null); setSakeSelectionError(""); }}>キャンセル</button><button className="button button--primary button--large" onClick={addSakeSelection}><Plus size={24} weight="bold" />追加</button></div>
         </div>
       </Modal> : null}
-      {modal === "staff" ? <Modal title="スタッフを呼びますか？" onClose={() => setModal(null)}><p className="modal-lead">テーブル {device.tableId} からスタッフへお知らせします。</p><div className="modal-actions"><button className="button button--quiet" onClick={() => setModal(null)}>やめる</button><button className="button button--primary button--large" onClick={callStaff}><Bell size={22} weight="bold" /> 呼び出す</button></div></Modal> : null}
+      {modal === "staff" ? <Modal title="スタッフを呼びますか？" onClose={() => { if (!staffCallSubmitting) setModal(null); }}><p className="modal-lead">テーブル {device.tableId} からスタッフへお知らせします。</p><div className="modal-actions"><button className="button button--quiet" disabled={staffCallSubmitting} onClick={() => setModal(null)}>やめる</button><button className="button button--primary button--large" disabled={staffCallSubmitting} onClick={callStaff}><Bell size={22} weight="bold" /> {staffCallSubmitting ? "送信中" : "呼び出す"}</button></div></Modal> : null}
       {modal === "feature" ? <Modal title="確認" onClose={() => setModal(null)}><p className="modal-lead">この機能は次の実装段階で接続します。</p><div className="modal-actions"><button className="button button--primary" onClick={() => setModal(null)}>閉じる</button></div></Modal> : null}
       {modal === "history" ? <Modal title="これまでのご注文" onClose={() => setModal(null)} wide><div className="customer-history">{apiMode && apiHistoryState.loading ? <div className="empty-state"><ClipboardText size={42} /><p>注文履歴を読み込んでいます。</p></div> : apiMode && apiHistoryState.error ? <div className="empty-state"><ClipboardText size={42} /><p>注文履歴を取得できません。</p></div> : customerHistory.length ? customerHistory.map((order) => <article key={order.id}><header><b>{formatTime(order.createdAt)} のご注文</b><span className={`status-chip status-${order.status}`}>{customerTransportLabel(order)}</span></header>{order.items.map((item) => <div key={item.id}><span>{selectionDisplayName({ name: item.nameSnapshot }, item)}</span><b>{item.quantity}点</b></div>)}</article>) : <div className="empty-state"><ClipboardText size={42} /><p>注文履歴はまだありません。</p></div>}</div></Modal> : null}
       {detailItem ? <Modal title={detailItem.name} titleExtra={detailItem.detail?.reading ? <span className="modal__title-reading">{detailItem.detail.reading}</span> : null} onClose={() => setDetailItem(null)} wide className="modal--product-detail" footer={<div className="modal-actions product-detail__actions"><button className="button button--quiet" onClick={() => setDetailItem(null)}>一覧へ戻る</button>{detailItem.categoryId === "shochu" && detailItem.servingOptions?.length ? <button className="button button--primary button--large" onClick={() => chooseShochuFromDetail(detailItem)}>これにする</button> : null}</div>}><div className="product-detail">{detailItem.detail?.imageUri || detailItem.imageUri ? <div className="product-detail__image"><img src={detailItem.detail?.imageUri || detailItem.imageUri} alt={detailItem.name} style={imageLayoutStyle(detailItem, "detail")} /></div> : null}<div>{detailItem.detail?.itemType ? <span className="category-tag">{detailItem.detail.itemType}</span> : null}<p className="product-detail__description">{detailItem.detail?.description || detailItem.description}</p><dl>{[["産地", "origin"], ["蔵元", "producer"], ["味の特徴", "taste"], ["香り", "aroma"], ["甘辛", "sweetness"], ["キレ", "finish"]].filter(([, key]) => detailItem.detail?.[key]).map(([label, key]) => <div key={key}><dt>{label}</dt><dd>{detailItem.detail[key]}</dd></div>)}</dl>{detailItem.detail?.recommendation ? <blockquote>{detailItem.detail.recommendation}</blockquote> : null}</div></div></Modal> : null}
@@ -1802,6 +1832,8 @@ function KitchenScreen({ state, updateState, apiState, checkoutState, onServe, o
   const demoMode = window.WARUN_ORDER_MODE === "demo" || new URLSearchParams(window.location.search).get("demo") === "1";
   const [callPanel, setCallPanel] = useState(false);
   const [callPanelTableId, setCallPanelTableId] = useState(null);
+  const [resolvingCallId, setResolvingCallId] = useState(null);
+  const [callResolutionError, setCallResolutionError] = useState("");
   const [priceTarget, setPriceTarget] = useState(null);
   const [priceDraft, setPriceDraft] = useState("");
   const [priceBusy, setPriceBusy] = useState(false);
@@ -1820,7 +1852,7 @@ function KitchenScreen({ state, updateState, apiState, checkoutState, onServe, o
     { sessionId: "demo-session-2", tableId: "2", openedAt: "2026-09-25T08:40:00.000Z" },
   ] : [];
   const activeCheckouts = (checkoutState?.checkouts || []).filter((checkout) => checkout.status === "requested" || checkout.status === "ready");
-  const activeCalls = state.staffCalls.filter((call) => !call.resolvedAt);
+  const activeCalls = (apiMode ? apiState.staffCalls ?? [] : state.staffCalls).filter((call) => call.status !== "resolved" && !call.resolvedAt);
   const activeCallGroups = Object.values(activeCalls.reduce((groups, call) => {
     const tableId = String(call.tableId);
     const group = groups[tableId] || { tableId, calls: [] };
@@ -1874,7 +1906,7 @@ function KitchenScreen({ state, updateState, apiState, checkoutState, onServe, o
   const liveOrders = apiMode ? apiState.orders : state.orders.filter((order) => order.status === "new" || order.status === "active");
   const boardOrders = [...liveOrders, ...historyOrders].map((order) => demoMode && order.tableId === "1" ? { ...order, sessionId: "demo-session-1" } : demoMode && order.tableId === "2" ? { ...order, sessionId: "demo-session-2" } : order);
   const activeOrders = liveOrders.filter((order) => order.status === "new" || order.status === "active");
-  const tables = buildKitchenTableGroups({ orders: boardOrders, sessions, menuItems: state.menuItems, drinkCategoryIds: CUSTOMER_DRINK_CATEGORY_IDS, checkouts: activeCheckouts, staffCalls: state.staffCalls });
+  const tables = buildKitchenTableGroups({ orders: boardOrders, sessions, menuItems: state.menuItems, drinkCategoryIds: CUSTOMER_DRINK_CATEGORY_IDS, checkouts: activeCheckouts, staffCalls: activeCalls });
 
   const submitKitchenAddition = async ({ tableId, sessionId, item }) => {
     const clientOrderId = createKitchenOperationId();
@@ -2114,13 +2146,28 @@ function KitchenScreen({ state, updateState, apiState, checkoutState, onServe, o
     setCancellationTarget(null);
   };
 
-  const resolveCall = (callId) => updateState((current) => ({ ...current, staffCalls: current.staffCalls.map((call) => call.id === callId ? { ...call, resolvedAt: new Date().toISOString() } : call) }));
+  const resolveCall = async (call) => {
+    if (!apiMode) {
+      updateState((current) => ({ ...current, staffCalls: current.staffCalls.map((entry) => entry.id === call.id ? { ...entry, resolvedAt: new Date().toISOString() } : entry) }));
+      return;
+    }
+    if (resolvingCallId) return;
+    setResolvingCallId(call.id);
+    setCallResolutionError("");
+    try {
+      await resolveKitchenStaffCall({ env: window, staffCallId: call.id, expectedVersion: call.version });
+    } catch {
+      setCallResolutionError("呼出を対応済みにできませんでした。厨房の接続を確認してください。");
+    } finally {
+      setResolvingCallId(null);
+    }
+  };
   const openCallPanel = (tableId = null) => { setCallPanelTableId(tableId); setCallPanel(true); };
   const closeCallPanel = () => { setCallPanel(false); setCallPanelTableId(null); };
   const displayedCalls = callPanelTableId === null ? activeCalls : activeCalls.filter((call) => String(call.tableId) === callPanelTableId);
   return <StaffShell route="/kitchen" title="新着注文" subtitle="未提供の注文をテーブルごとに表示します。提供完了後も来店・注文履歴は保持されます。" state={state} newOrderCount={activeOrders.length} clock={<time className="kitchen-clock" aria-label={`現在時刻 ${formatTime(new Date())}`}>{formatTime(new Date())}</time>} status={<div className="staff-topbar__right"><div className="staff-call-rail"><button type="button" className="staff-call-button" aria-label="スタッフ呼出" title="スタッフ呼出" onClick={() => openCallPanel()}><Bell size={26} weight="fill" /><span className="kitchen-sidebar__call-label">スタッフ呼出</span> {activeCalls.length ? <b>{activeCalls.length}</b> : null}</button></div>{activeCallGroups.length ? <div className="staff-call-rail__list" aria-label="未対応のスタッフ呼び出し一覧">{activeCallGroups.map((group) => <button type="button" className="staff-call-rail__item" key={group.tableId} aria-label={`テーブル ${group.tableId} のスタッフ呼び出し ${group.calls.length}件を確認`} onClick={() => openCallPanel(group.tableId)}><span>T{group.tableId}</span></button>)}</div> : null}<ConnectionBadge online announceStatus /></div>}>
     <section className="kitchen-content">
-      <KitchenOrderSound orders={liveOrders} ready={demoMode || (apiMode && !apiState.loading && !apiState.error)} requestStartedAt={apiState?.notificationRequestStartedAt} demoMode={demoMode} />
+      <KitchenOrderSound orders={liveOrders} staffCalls={activeCalls} suppressStaffCalls={apiState?.suppressStaffCalls} ready={demoMode || (apiMode && !apiState.loading && !apiState.error)} requestStartedAt={apiState?.notificationRequestStartedAt} demoMode={demoMode} />
       {apiMode && apiState.loading ? <div className="kitchen-empty"><p>注文を読み込み中です。</p></div> : null}
       {apiMode && apiState.error ? <div className="kitchen-empty" role="alert"><p>注文情報を取得できません。</p></div> : null}
       {!apiMode && !tables.length ? <div className="kitchen-empty"><CheckCircle size={54} weight="thin" /><h2>すべて提供済みです</h2><p>新しい注文が届くと、テーブルごとに表示されます。</p></div> : null}
@@ -2200,7 +2247,7 @@ function KitchenScreen({ state, updateState, apiState, checkoutState, onServe, o
     </Modal> : null}
     {cancellationTarget ? <OrderItemCancellationModal key={`${cancellationTarget.action}-${cancellationTarget.orderId}-${cancellationTarget.item.id}`} target={cancellationTarget} onClose={() => setCancellationTarget(null)} onSave={saveCancellation} /> : null}
     {additionTarget ? <KitchenAdditionModal target={additionTarget} menuItems={state.menuItems} busy={false} onClose={() => setAdditionTarget(null)} onSubmit={(item) => submitKitchenAddition({ ...additionTarget, item }).then(() => setAdditionTarget(null))} /> : null}
-    {callPanel ? <Modal title={callPanelTableId === null ? "スタッフ呼び出し" : `テーブル ${callPanelTableId} のスタッフ呼び出し`} onClose={closeCallPanel} wide><div className="call-list">{displayedCalls.length ? displayedCalls.map((call) => <article key={call.id}><Bell size={28} weight="fill" /><div><b>テーブル {call.tableId}</b><span>{formatTime(call.createdAt)} に呼び出し</span></div><button type="button" className="button button--primary" onClick={() => resolveCall(call.id)}>対応完了</button></article>) : <div className="empty-state"><Bell size={42} /><p>未対応の呼び出しはありません。</p></div>}</div></Modal> : null}
+    {callPanel ? <Modal title={callPanelTableId === null ? "スタッフ呼び出し" : `テーブル ${callPanelTableId} のスタッフ呼び出し`} onClose={closeCallPanel} wide><div className="call-list">{callResolutionError ? <p className="checkout-feedback checkout-feedback--error" role="alert">{callResolutionError}</p> : null}{displayedCalls.length ? displayedCalls.map((call) => <article key={call.id}><Bell size={28} weight="fill" /><div><b>テーブル {call.tableId}</b><span>{formatTime(call.createdAt)} に呼び出し</span></div><button type="button" className="button button--primary" disabled={Boolean(resolvingCallId)} onClick={() => void resolveCall(call)}>{resolvingCallId === call.id ? "保存中" : "対応完了"}</button></article>) : <div className="empty-state"><Bell size={42} /><p>未対応の呼び出しはありません。</p></div>}</div></Modal> : null}
   </StaffShell>;
 }
 
@@ -4011,19 +4058,27 @@ export function App() {
       return undefined;
     }
     let cancelled = false;
+    let suppressStaffCallsUntilSnapshot = false;
+    let kitchenSnapshotRequest = 0;
     const load = async () => {
+      const requestNumber = ++kitchenSnapshotRequest;
+      const suppressStaffCalls = suppressStaffCallsUntilSnapshot;
       try {
         const [snapshot, checkouts] = await Promise.all([fetchKitchenSnapshot({ env: window }), fetchKitchenCheckoutRequests({ env: window })]);
-        if (!cancelled) setKitchenApiState({ loading: false, error: false, orders: snapshot.orders, sessions: snapshot.sessions, notificationRequestStartedAt: snapshot.notificationRequestStartedAt });
-        if (!cancelled) setKitchenCheckoutState({ loading: false, error: false, checkouts });
+        if (cancelled || requestNumber !== kitchenSnapshotRequest) return;
+        if (suppressStaffCalls) suppressStaffCallsUntilSnapshot = false;
+        setKitchenApiState({ loading: false, error: false, orders: snapshot.orders, staffCalls: snapshot.staffCalls, suppressStaffCalls, sessions: snapshot.sessions, notificationRequestStartedAt: snapshot.notificationRequestStartedAt });
+        setKitchenCheckoutState({ loading: false, error: false, checkouts });
       } catch {
-        if (!cancelled) setKitchenApiState({ loading: false, error: true, orders: [], sessions: [] });
+        if (requestNumber !== kitchenSnapshotRequest) return;
+        suppressStaffCallsUntilSnapshot = true;
+        if (!cancelled) setKitchenApiState({ loading: false, error: true, orders: [], staffCalls: [], sessions: [] });
         if (!cancelled) setKitchenCheckoutState((current) => current ? { ...current, loading: false, error: true } : { loading: false, error: true, checkouts: [] });
       }
     };
     setKitchenApiState({ loading: true, error: false, orders: [], sessions: [] });
     void load();
-    const unsubscribe = subscribeKitchenInvalidations({ env: window, onEvent: (event) => { if (event?.resource === "checkout" || String(event?.type || "").startsWith("checkout.")) void load(); } });
+    const unsubscribe = subscribeKitchenInvalidations({ env: window, onEvent: (event) => { if (event?.resource === "checkout" || event?.resource === "staffCalls" || String(event?.type || "").startsWith("checkout.") || String(event?.type || "").startsWith("staff_call.")) void load(); }, onReconnect: () => { suppressStaffCallsUntilSnapshot = true; void load(); } });
     const timer = window.setInterval(load, 2_000);
     return () => { cancelled = true; window.clearInterval(timer); unsubscribe(); };
   }, [route]);
@@ -4032,7 +4087,7 @@ export function App() {
     try {
       await markKitchenItemServed({ env: window, orderId, orderItemId });
       const snapshot = await fetchKitchenSnapshot({ env: window });
-      setKitchenApiState({ loading: false, error: false, orders: snapshot.orders, sessions: snapshot.sessions, notificationRequestStartedAt: snapshot.notificationRequestStartedAt });
+      setKitchenApiState({ loading: false, error: false, orders: snapshot.orders, staffCalls: snapshot.staffCalls, sessions: snapshot.sessions, notificationRequestStartedAt: snapshot.notificationRequestStartedAt });
     } catch {
       setKitchenApiState((current) => current ? { ...current, error: true } : current);
     }
@@ -4041,14 +4096,14 @@ export function App() {
   const saveKitchenItemPrice = async (orderId, orderItemId, unitPriceYen) => {
     await adjustKitchenItemUnitPrice({ env: window, orderId, orderItemId, unitPriceYen });
     const [snapshot, checkouts] = await Promise.all([fetchKitchenSnapshot({ env: window }), fetchKitchenCheckoutRequests({ env: window })]);
-    setKitchenApiState({ loading: false, error: false, orders: snapshot.orders, sessions: snapshot.sessions, notificationRequestStartedAt: snapshot.notificationRequestStartedAt });
+    setKitchenApiState({ loading: false, error: false, orders: snapshot.orders, staffCalls: snapshot.staffCalls, sessions: snapshot.sessions, notificationRequestStartedAt: snapshot.notificationRequestStartedAt });
     setKitchenCheckoutState({ loading: false, error: false, checkouts });
   };
 
   const adjustKitchenItemQuantity = async (operation) => {
     await adjustKitchenItemQuantityRequest({ env: window, ...operation });
     const [snapshot, checkouts] = await Promise.all([fetchKitchenSnapshot({ env: window }), fetchKitchenCheckoutRequests({ env: window })]);
-    setKitchenApiState({ loading: false, error: false, orders: snapshot.orders, sessions: snapshot.sessions, notificationRequestStartedAt: snapshot.notificationRequestStartedAt });
+    setKitchenApiState({ loading: false, error: false, orders: snapshot.orders, staffCalls: snapshot.staffCalls, sessions: snapshot.sessions, notificationRequestStartedAt: snapshot.notificationRequestStartedAt });
     setKitchenCheckoutState({ loading: false, error: false, checkouts });
   };
 
@@ -4057,7 +4112,7 @@ export function App() {
     const result = await change({ env: window, orderId, orderItemId, reason });
     if (kitchenApiConfigured(window)) {
       const [snapshot, checkouts] = await Promise.all([fetchKitchenSnapshot({ env: window }), fetchKitchenCheckoutRequests({ env: window })]);
-      setKitchenApiState({ loading: false, error: false, orders: snapshot.orders, sessions: snapshot.sessions, notificationRequestStartedAt: snapshot.notificationRequestStartedAt });
+      setKitchenApiState({ loading: false, error: false, orders: snapshot.orders, staffCalls: snapshot.staffCalls, sessions: snapshot.sessions, notificationRequestStartedAt: snapshot.notificationRequestStartedAt });
       setKitchenCheckoutState({ loading: false, error: false, checkouts });
     }
     return result;
@@ -4091,7 +4146,7 @@ export function App() {
     const result = await payKitchenCheckout({ env: window, checkoutRequestId: checkout.checkoutRequestId, expectedVersion: checkout.version, paymentMethod });
     await refreshKitchenCheckouts();
     const snapshot = await fetchKitchenSnapshot({ env: window });
-    setKitchenApiState({ loading: false, error: false, orders: snapshot.orders, sessions: snapshot.sessions, notificationRequestStartedAt: snapshot.notificationRequestStartedAt });
+    setKitchenApiState({ loading: false, error: false, orders: snapshot.orders, staffCalls: snapshot.staffCalls, sessions: snapshot.sessions, notificationRequestStartedAt: snapshot.notificationRequestStartedAt });
     return result;
   };
 
@@ -4103,7 +4158,7 @@ export function App() {
   const closeKitchenSession = async ({ tableId, sessionId }) => {
     await closeKitchenTableSession({ env: window, tableId, sessionId });
     const snapshot = await fetchKitchenSnapshot({ env: window });
-    setKitchenApiState({ loading: false, error: false, orders: snapshot.orders, sessions: snapshot.sessions, notificationRequestStartedAt: snapshot.notificationRequestStartedAt });
+    setKitchenApiState({ loading: false, error: false, orders: snapshot.orders, staffCalls: snapshot.staffCalls, sessions: snapshot.sessions, notificationRequestStartedAt: snapshot.notificationRequestStartedAt });
   };
 
   useEffect(() => {

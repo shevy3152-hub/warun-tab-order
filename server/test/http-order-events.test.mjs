@@ -16,7 +16,11 @@ import { createSseHub } from '../src/events/sse-hub.mjs';
 import { createHttpServer } from '../src/http/http-server.mjs';
 import { ORDER_JSON_BODY_LIMIT_BYTES } from '../src/http/json-body.mjs';
 import { createOrderRepository } from '../src/orders/order-repository.mjs';
+import { createStaffCallRepository } from '../src/staff-calls/staff-call-repository.mjs';
 import { createCustomerVisitContextId } from '../src/orders/visit-context.mjs';
+import { fetchKitchenSnapshot } from '../../prototype/src/kitchen-api.js';
+import { createKitchenOrderSound } from '../../prototype/src/kitchen-order-sound.js';
+import { postCustomerStaffCall } from '../../prototype/src/order-outbox.js';
 
 const uuid = (number) => `00000000-0000-4000-8000-${String(number).padStart(12, '0')}`;
 const tokenFor = (byte) => Buffer.alloc(32, byte).toString('base64url');
@@ -130,6 +134,7 @@ async function withFixture(run, options = {}) {
   let authenticator;
   let catalog;
   let orders;
+  let staffCalls;
   let events;
   let hub;
   try {
@@ -143,6 +148,7 @@ async function withFixture(run, options = {}) {
       idFactory: () => uuid(generatedOrder++),
       now: () => acceptedAtMs++,
     });
+    staffCalls = createStaffCallRepository({ database: connection.database, now: () => 1_800_000_000_100 });
     events = createEventRepository({ database: connection.database });
     const snapshots = createSnapshotService({ catalog, eventRepository: events });
     const realHub = createSseHub({
@@ -156,6 +162,7 @@ async function withFixture(run, options = {}) {
       authenticator,
       catalog,
       orderRepository: orders,
+      staffCallRepository: staffCalls,
       eventRepository: events,
       snapshotService: snapshots,
       sseHub: hub,
@@ -171,6 +178,7 @@ async function withFixture(run, options = {}) {
       authenticator,
       catalog,
       orders,
+      staffCalls,
       events,
       hub: realHub,
       closeServer: () => closeServer(server),
@@ -186,6 +194,7 @@ async function withFixture(run, options = {}) {
     }
     events?.close();
     orders?.close();
+    staffCalls?.close();
     catalog?.close();
     authenticator?.close();
     try {
@@ -245,6 +254,17 @@ function postOrder(port, token, body, headers = {}) {
     method: 'POST',
     headers: { ...bearer(token), ...JSON_HEADERS, ...headers },
     body: encoded,
+  });
+}
+
+function postStaffCall(port, token, body, headers = {}) {
+  attachCurrentVisitContext(port, token, body);
+  return request({
+    port,
+    path: '/v1/staff-calls',
+    method: 'POST',
+    headers: { ...bearer(token), ...JSON_HEADERS, ...headers },
+    body: JSON.stringify(body),
   });
 }
 
@@ -428,6 +448,112 @@ test('created order is safely acknowledged, committed atomically, and then wakes
       stream.text,
       /token|hash|price|unitPrice|totalAmount|kitchenAlias|formalName/i,
     );
+    stream.close();
+  });
+});
+
+test('customer staff call is authenticated, visit-session bound, idempotent, committed to SSE, and sounds in kitchen snapshot', async () => {
+  await withFixture(async ({ port, database }) => {
+    const stream = await openSse({ port, token: KITCHEN_TOKEN });
+    const unauthenticated = await request({
+      port, path: '/v1/staff-calls', method: 'POST', headers: JSON_HEADERS,
+      body: JSON.stringify({ clientCallId: uuid(1_160), visitContextId: 'v1_' + 'a'.repeat(64) }),
+    });
+    assertError(unauthenticated, 401, 'AUTHENTICATION_FAILED');
+    assert.equal(count(database, 'staff_calls'), 0);
+
+    const foreignTableAttempt = await postStaffCall(port, CUSTOMER_A_TOKEN, {
+      clientCallId: uuid(1_161), tableId: 2,
+    });
+    assertError(foreignTableAttempt, 400, 'INVALID_STAFF_CALL_REQUEST');
+    assert.equal(count(database, 'staff_calls'), 0);
+
+    const deviceConfig = await request({ port, path: '/v1/device/config', headers: bearer(CUSTOMER_A_TOKEN) });
+    assert.equal(deviceConfig.statusCode, 200);
+    const clientCallId = uuid(1_162);
+    const created = await postCustomerStaffCall({
+      config: { enabled: true, baseUrl: `http://127.0.0.1:${port}/v1`, token: CUSTOMER_A_TOKEN },
+      clientCallId,
+      visitContextId: deviceConfig.json.visitContextId,
+      env: { navigator: { onLine: true }, fetch },
+    });
+    assert.equal(created.idempotencyResult, 'created');
+    assert.equal(created.callType, 'staff');
+    assert.equal(created.tableId, 1);
+    await waitForSse(stream, /event: staff_call\.created/, 'committed staff call event');
+
+    const stored = database.prepare(`
+      SELECT client_call_id, customer_device_id, table_id, table_number_snapshot,
+             call_type, status, table_session_id
+      FROM staff_calls WHERE client_call_id = ?
+    `).get(clientCallId);
+    assert.deepEqual({ ...stored }, {
+      client_call_id: clientCallId,
+      customer_device_id: CUSTOMER_A_ID,
+      table_id: 1,
+      table_number_snapshot: 1,
+      call_type: 'staff',
+      status: 'open',
+      table_session_id: database.prepare('SELECT session_id FROM table_sessions WHERE table_id = 1 AND closed_at_ms IS NULL').get().session_id,
+    });
+    assert.equal(count(database, 'event_log'), 1);
+
+    const replayBody = { clientCallId, visitContextId: deviceConfig.json.visitContextId };
+    const replay = await postStaffCall(port, CUSTOMER_A_TOKEN, replayBody);
+    assert.equal(replay.statusCode, 200);
+    assert.equal(replay.headers['idempotency-result'], 'replayed');
+    assert.equal(count(database, 'staff_calls'), 1);
+    assert.equal(count(database, 'event_log'), 1);
+
+    const kitchenEnv = {
+      WARUN_API_BASE: `http://127.0.0.1:${port}/v1`,
+      WARUN_RUNTIME_CONFIG: { kitchenToken: KITCHEN_TOKEN },
+      location: { origin: `http://127.0.0.1:${port}` },
+      performance: { now: () => 200 },
+      fetch,
+    };
+    const kitchenSnapshot = await fetchKitchenSnapshot({ env: kitchenEnv });
+    assert.equal(kitchenSnapshot.staffCalls.length, 1);
+    assert.equal(kitchenSnapshot.staffCalls[0].id, created.staffCallId);
+    assert.equal(kitchenSnapshot.staffCalls[0].tableId, '1');
+
+    const played = [];
+    const sound = createKitchenOrderSound({
+      storage: { getItem: () => null, setItem() {} },
+      storageKey: 'isolated-staff-call-test',
+      engine: { async activate() {}, play: (kind) => played.push(kind), stop() {}, dispose() {} },
+      loadBaseline: async () => ({ orders: [], staffCalls: [] }),
+      now: () => 100,
+    });
+    await sound.enable();
+    sound.observe(kitchenSnapshot.orders, {
+      staffCalls: kitchenSnapshot.staffCalls,
+      requestStartedAt: 200,
+    });
+    assert.deepEqual(played, ['staffCall']);
+
+    const resolved = await request({
+      port,
+      path: '/v1/kitchen/staff-calls/resolve',
+      method: 'POST',
+      headers: { ...bearer(KITCHEN_TOKEN), ...JSON_HEADERS },
+      body: JSON.stringify({ staffCallId: created.staffCallId, expectedVersion: 1 }),
+    });
+    assert.equal(resolved.statusCode, 200);
+    assert.equal(resolved.json.status, 'resolved');
+    await waitForSse(stream, /event: staff_call\.resolved/, 'committed staff call resolution event');
+    assert.equal(database.prepare('SELECT status FROM staff_calls WHERE staff_call_id = ?').get(created.staffCallId).status, 'resolved');
+    assert.equal(count(database, 'event_log'), 2);
+    const replayResolution = await request({
+      port,
+      path: '/v1/kitchen/staff-calls/resolve',
+      method: 'POST',
+      headers: { ...bearer(KITCHEN_TOKEN), ...JSON_HEADERS },
+      body: JSON.stringify({ staffCallId: created.staffCallId, expectedVersion: 1 }),
+    });
+    assert.equal(replayResolution.headers['idempotency-result'], 'replayed');
+    assert.equal(count(database, 'event_log'), 2);
+    sound.dispose();
     stream.close();
   });
 });

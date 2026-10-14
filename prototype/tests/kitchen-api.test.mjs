@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { adjustKitchenItemUnitPrice, adjustKitchenOrderItemQuantity, cancelKitchenCheckout, cancelKitchenOrderItem, closeKitchenTableSession, fetchKitchenCheckoutRequests, fetchKitchenOrderHistory, fetchKitchenOrders, fetchKitchenPaymentHistory, fetchKitchenSnapshot, kitchenAdditionRequestItem, kitchenApiConfigured, markKitchenItemServed, payKitchenCheckout, readyKitchenCheckout, restoreKitchenOrderItem, saveKitchenCheckoutAdjustments, voidKitchenPayment } from "../src/kitchen-api.js";
+import { adjustKitchenItemUnitPrice, adjustKitchenOrderItemQuantity, cancelKitchenCheckout, cancelKitchenOrderItem, closeKitchenTableSession, fetchKitchenCheckoutRequests, fetchKitchenOrderHistory, fetchKitchenOrders, fetchKitchenPaymentHistory, fetchKitchenSnapshot, kitchenAdditionRequestItem, kitchenApiConfigured, markKitchenItemServed, payKitchenCheckout, readyKitchenCheckout, resolveKitchenStaffCall, restoreKitchenOrderItem, saveKitchenCheckoutAdjustments, subscribeKitchenInvalidations, voidKitchenPayment } from "../src/kitchen-api.js";
 
 const TOKEN = "fixture-kitchen-runtime-token";
 
@@ -179,6 +179,7 @@ test("kitchen snapshot exposes open sessions and close uses the runtime token", 
         async json() {
           return {
             activeOrders: [],
+            openStaffCalls: [{ staffCallId: "00000000-0000-4000-8000-000000000778", clientCallId: "00000000-0000-4000-8000-000000000779", tableId: 3, callType: "staff", status: "open", createdAtMs: 1786786940837, version: 1 }],
             openSessions: [{ sessionId, tableId: 3, openedAtMs: 1786786940836, version: 1 }],
           };
         },
@@ -191,6 +192,17 @@ test("kitchen snapshot exposes open sessions and close uses the runtime token", 
   });
 
   const snapshot = await fetchKitchenSnapshot({ env });
+  assert.deepEqual(snapshot.staffCalls, [{
+    id: "00000000-0000-4000-8000-000000000778",
+    staffCallId: "00000000-0000-4000-8000-000000000778",
+    clientCallId: "00000000-0000-4000-8000-000000000779",
+    tableId: "3",
+    type: "staff",
+    status: "open",
+    createdAtMs: 1786786940837,
+    createdAt: new Date(1786786940837).toISOString(),
+    version: 1,
+  }]);
   assert.deepEqual(snapshot.sessions, [{
     sessionId,
     tableId: "3",
@@ -202,6 +214,52 @@ test("kitchen snapshot exposes open sessions and close uses the runtime token", 
   assert.equal(calls[1].url, "http://192.168.1.10:5173/v1/tables/sessions/close");
   assert.equal(calls[1].options.headers.Authorization, `Bearer ${TOKEN}`);
   assert.deepEqual(JSON.parse(calls[1].options.body), { tableId: 3, sessionId });
+});
+
+test("kitchen call completion uses authenticated call identity and expected version", async () => {
+  const callId = "00000000-0000-4000-8000-000000000712";
+  const calls = [];
+  const env = environment(async (url, options) => {
+    calls.push({ url, options });
+    return {
+      ok: true,
+      async json() { return { staffCallId: callId, callType: "staff", status: "resolved", version: 2, idempotencyResult: "created" }; },
+    };
+  });
+  const resolved = await resolveKitchenStaffCall({ env, staffCallId: callId, expectedVersion: 1 });
+  assert.equal(resolved.status, "resolved");
+  assert.equal(calls[0].url, `${env.location.origin}/v1/kitchen/staff-calls/resolve`);
+  assert.equal(calls[0].options.headers.Authorization, `Bearer ${TOKEN}`);
+  assert.deepEqual(JSON.parse(calls[0].options.body), { staffCallId: callId, expectedVersion: 1 });
+});
+
+test("kitchen invalidation reconnect requests a silent staff-call baseline", async () => {
+  let attempts = 0;
+  let reconnects = 0;
+  let retry;
+  const env = {
+    location: { origin: "https://qa.example.test" },
+    WARUN_KITCHEN_API_TOKEN: TOKEN,
+    setTimeout(callback) { retry = callback; return 1; },
+    clearTimeout() {},
+  };
+  const unsubscribe = subscribeKitchenInvalidations({
+    env,
+    onEvent() {},
+    onReconnect() { reconnects++; },
+    fetchImpl: async () => {
+      attempts++;
+      return { ok: true, body: { getReader: () => ({ async read() { return { done: true }; } }) } };
+    },
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(attempts, 1);
+  assert.equal(reconnects, 0);
+  retry();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(attempts, 2);
+  assert.equal(reconnects, 1);
+  unsubscribe();
 });
 
 test("kitchen history uses the kitchen runtime token and SQLite API route", async () => {

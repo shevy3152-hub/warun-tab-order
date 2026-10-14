@@ -481,6 +481,47 @@ export async function fetchCustomerOrderStartNotice({ config, fetchImpl = global
   return { heading: body.heading, body: body.body };
 }
 
+export async function postCustomerStaffCall({ config, clientCallId, visitContextId, env = globalThis, fetchImpl = env.fetch } = {}) {
+  if (!config?.enabled || !config.baseUrl || !config.token || typeof fetchImpl !== "function") {
+    throw new CustomerCheckoutError("スタッフ呼出APIが設定されていません。", { code: config?.reason || "API_UNAVAILABLE" });
+  }
+  if (env?.navigator?.onLine === false) throw new CustomerCheckoutError("通信がオフラインです。", { code: "OFFLINE" });
+  if (typeof clientCallId !== "string" || !UUID_V4_PATTERN.test(clientCallId)
+    || typeof visitContextId !== "string" || !/^v1_[0-9a-f]{64}$/.test(visitContextId)) {
+    throw new CustomerCheckoutError("スタッフ呼出情報が不正です。", { code: "INVALID_REQUEST" });
+  }
+  let response;
+  try {
+    response = await fetchImpl(`${config.baseUrl.replace(/\/+$/, "")}/staff-calls`, {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${config.token}`,
+      },
+      body: JSON.stringify({ clientCallId, visitContextId }),
+    });
+  } catch {
+    throw new CustomerCheckoutError("呼出を送信できませんでした。通信状態を確認して再試行してください。", { code: "NETWORK_ERROR" });
+  }
+  const idempotencyResult = response.headers?.get?.("Idempotency-Result")?.toLowerCase();
+  if ((response.status !== 201 && response.status !== 200)
+    || (idempotencyResult !== "created" && idempotencyResult !== "replayed")) {
+    let code = `HTTP_${response.status}`;
+    try { code = (await response.json())?.error?.code || code; } catch { /* keep status code */ }
+    throw new CustomerCheckoutError("スタッフ呼出を保存できませんでした。もう一度お試しください。", { status: response.status, code });
+  }
+  let body;
+  try { body = await response.json(); } catch {
+    throw new CustomerCheckoutError("スタッフ呼出の応答が不正です。", { status: response.status, code: "INVALID_RESPONSE" });
+  }
+  if (body?.clientCallId !== clientCallId || body?.callType !== "staff"
+    || body?.status !== "open" || body?.idempotencyResult !== idempotencyResult) {
+    throw new CustomerCheckoutError("スタッフ呼出の応答が不正です。", { status: response.status, code: "INVALID_RESPONSE" });
+  }
+  return body;
+}
+
 export class CustomerCheckoutError extends Error {
   constructor(message, { status = 0, code = "CHECKOUT_API_ERROR" } = {}) {
     super(message);
@@ -971,6 +1012,7 @@ export function createCustomerOrderClient({
         return { clientOrderId, payload, state: result.idempotencyResult === "created" ? OUTBOX_STATES.SYNCED : OUTBOX_STATES.PENDING };
       },
       async flush({ clientOrderId } = {}) { return { state: OUTBOX_STATES.SYNCED, clientOrderId, idempotencyResult: "created" }; },
+      async createStaffCall() { throw new CustomerCheckoutError("スタッフ呼出APIはデモモードでは利用できません。", { code: "DEMO_MODE" }); },
       async start() {},
       async stop() {},
       subscribe() { return () => {}; },
@@ -1033,6 +1075,22 @@ export function createCustomerOrderClient({
     async getVisitContextId() {
       const current = await readCurrentVisitContext();
       return current.status === "available" ? current.visitContextId : visitContextId || null;
+    },
+    async createStaffCall({ clientCallId }) {
+      const current = await readCurrentVisitContext();
+      if (current.status !== "available") {
+        throw new CustomerCheckoutError("現在の来店情報を確認できません。通信を確認して再試行してください。", {
+          status: current.status === "unauthorized" ? 401 : 0,
+          code: current.errorCode || "VISIT_CONTEXT_UNAVAILABLE",
+        });
+      }
+      return postCustomerStaffCall({
+        config,
+        clientCallId,
+        visitContextId: current.visitContextId,
+        env: global,
+        fetchImpl: options.fetchImpl || global.fetch,
+      });
     },
     async getDeviceConfig({ signal } = {}) {
       const fetchImpl = options.fetchImpl || global.fetch;

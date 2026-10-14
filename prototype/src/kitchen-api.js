@@ -136,13 +136,14 @@ export async function voidKitchenPayment({ env = globalThis, paymentRecordId, ex
   return body;
 }
 
-export function subscribeKitchenInvalidations({ env = globalThis, fetchImpl = env.fetch, onEvent } = {}) {
+export function subscribeKitchenInvalidations({ env = globalThis, fetchImpl = env.fetch, onEvent, onReconnect = () => {} } = {}) {
   const base = apiBase(env);
   const requestHeaders = headers(env);
   if (!base || !requestHeaders || typeof fetchImpl !== "function" || typeof onEvent !== "function") return () => {};
   let stopped = false;
   let controller = null;
   let retryTimer = null;
+  let connectionAttempts = 0;
   let eventEpoch = null;
   let lastEventId = 0;
   const schedule = () => {
@@ -150,6 +151,7 @@ export function subscribeKitchenInvalidations({ env = globalThis, fetchImpl = en
   };
   const connect = async () => {
     if (stopped) return;
+    const attempt = ++connectionAttempts;
     controller = typeof AbortController === "function" ? new AbortController() : null;
     const eventHeaders = { ...requestHeaders, Accept: "text/event-stream" };
     if (eventEpoch) { eventHeaders["X-Event-Epoch"] = eventEpoch; eventHeaders["Last-Event-ID"] = String(lastEventId); }
@@ -157,6 +159,7 @@ export function subscribeKitchenInvalidations({ env = globalThis, fetchImpl = en
       const response = await fetchImpl(`${base}/events`, { headers: eventHeaders, ...(controller ? { signal: controller.signal } : {}) });
       if (response.status === 410) { eventEpoch = null; lastEventId = 0; }
       if (response.ok && response.body?.getReader) {
+        if (attempt > 1) { try { onReconnect(); } catch { /* A refresh callback must not interrupt the event stream. */ } }
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
         let buffer = "";
@@ -239,6 +242,17 @@ export async function fetchKitchenSnapshot({ env = globalThis, fetchImpl = env.f
         quantityHistory: Array.isArray(item.quantityHistory) ? item.quantityHistory : [],
       })),
     })),
+    staffCalls: (Array.isArray(body.openStaffCalls) ? body.openStaffCalls : []).map((call) => ({
+      id: call.staffCallId,
+      staffCallId: call.staffCallId,
+      clientCallId: call.clientCallId,
+      tableId: String(call.tableId),
+      type: call.callType,
+      status: call.status,
+      createdAtMs: call.createdAtMs,
+      createdAt: new Date(call.createdAtMs).toISOString(),
+      version: call.version,
+    })),
     sessions: (Array.isArray(body.openSessions) ? body.openSessions : []).map((session) => ({
       sessionId: session.sessionId,
       tableId: String(session.tableId),
@@ -246,6 +260,24 @@ export async function fetchKitchenSnapshot({ env = globalThis, fetchImpl = env.f
       version: session.version,
     })),
   };
+}
+
+export async function resolveKitchenStaffCall({ env = globalThis, staffCallId, expectedVersion, fetchImpl = env.fetch } = {}) {
+  const { base, requestHeaders } = checkoutBase(env, fetchImpl);
+  if (typeof staffCallId !== "string" || !staffCallId.trim() || !Number.isSafeInteger(expectedVersion) || expectedVersion < 1) {
+    throw new KitchenApiError("スタッフ呼出の更新情報が不正です。", { code: "INVALID_STAFF_CALL_REQUEST" });
+  }
+  const response = await fetchImpl(`${base}/kitchen/staff-calls/resolve`, {
+    method: "POST",
+    headers: { ...requestHeaders, "Content-Type": "application/json" },
+    body: JSON.stringify({ staffCallId, expectedVersion }),
+  });
+  if (!response.ok) throw await responseError(response, "スタッフ呼出を対応済みにできません。");
+  const call = await response.json();
+  if (call?.staffCallId !== staffCallId || call.status !== "resolved" || !Number.isSafeInteger(call.version)) {
+    throw new KitchenApiError("スタッフ呼出の応答が不正です。", { code: "INVALID_RESPONSE" });
+  }
+  return call;
 }
 
 export async function fetchKitchenOrders(options = {}) {
