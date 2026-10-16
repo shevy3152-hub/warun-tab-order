@@ -815,6 +815,22 @@ test("admin menu thumbnails apply the saved thumbnail layout in the same portrai
   assert.match(customerScreen, /imageLayoutStyle\(detailItem, "detail"\)/);
 });
 
+test("inline menu editing uploads and saves the detail image URI without replacing list URI or detail settings", () => {
+  const inlineEditorStart = appSource.indexOf('className="admin-menu-inline-editor"');
+  assert.notEqual(inlineEditorStart, -1);
+  const inlineEditorEnd = appSource.indexOf("</form>", inlineEditorStart);
+  const inlineEditor = appSource.slice(inlineEditorStart, inlineEditorEnd);
+  assert.match(inlineEditor, /<ProductImageUriField name="detailImageUri" label="詳細画像URI" initialUri=\{item\.detail\?\.imageUri \?\? ""\} fallbackUri=\{item\.imageUri \?\? ""\} \/>/);
+  assert.doesNotMatch(inlineEditor, /<ProductImageLocation uri=\{item\.detail\?\.imageUri\}/);
+
+  const inlineSaveStart = appSource.indexOf("const saveInlineMenu =");
+  const inlineSaveEnd = appSource.indexOf("const refreshAdminCatalog =", inlineSaveStart);
+  const inlineSave = appSource.slice(inlineSaveStart, inlineSaveEnd);
+  assert.match(inlineSave, /\.\.\.item,/);
+  assert.match(inlineSave, /imageUri: form\.get\("imageUri"\)\?\.toString\(\)\.trim\(\) \|\| null,/);
+  assert.match(inlineSave, /detail: \{\s*\.\.\.\(item\.detail \?\? \{\}\),\s*imageUri: form\.get\("detailImageUri"\)\?\.toString\(\)\.trim\(\) \|\| null,\s*\},/);
+  assert.doesNotMatch(inlineSave, /imageLayouts\s*:/);
+});
 test("admin detail editing covers every displayed tasting field", () => {
   assert.match(appSource, /name="aroma"/);
   assert.match(appSource, /name="sweetness"/);
