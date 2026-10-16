@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { CUSTOMER_THEMES, CUSTOMER_TEST_THEME, normalizeCustomerTheme } from "../src/customer-theme.js";
+import { adminMenuAvailability } from "../src/admin-menu-status.js";
 import { CUSTOMER_THEME_DEFINITIONS, isAvailableCustomerTheme } from "../../shared/customer-theme-definitions.mjs";
 import { MIN_CUSTOMER_THEME_ZOOM, customerThemeImageLayout, customerThemeImageMinimumZoom, customerThemePositionAfterDrag, customerThemeStoredZoomForVisualZoom, normalizeCustomerThemeLayout, resolveCustomerThemeZoom } from "../src/customer-theme-layout.js";
 
@@ -954,4 +955,14 @@ test('session limited menu administration separates item mode from current visit
   assert.match(appSource, /expectedMenuItemIds: table\.openSession\.menuItemIds/);
   assert.match(adminApi, /admin\/session-menu-access\/grants/);
   assert.match(adminApi, /confirmAndCloseAdminEmptySession/);
+});
+
+
+test("admin menu availability label distinguishes hidden, sold out, and available states", () => {
+  assert.deepEqual(adminMenuAvailability({ isActive: false, isSoldOut: false }), { label: "客席非表示", className: "is-inactive" });
+  assert.deepEqual(adminMenuAvailability({ isActive: true, isSoldOut: true }), { label: "売り切れ", className: "is-soldout" });
+  assert.deepEqual(adminMenuAvailability({ isActive: true, isSoldOut: false }), { label: "販売中", className: "" });
+  assert.deepEqual(adminMenuAvailability({ isActive: false, isSoldOut: true }), { label: "客席非表示", className: "is-inactive" });
+  assert.ok(appSource.includes("adminMenuAvailability(item).label"));
+  assert.equal((appSource.match(/name="isActive"[^>]*\/> 客席に表示/g) ?? []).length, 2);
 });
