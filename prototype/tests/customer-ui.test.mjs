@@ -619,6 +619,7 @@ test("shochu uses a zero-based multi-quantity serving popup", () => {
   assert.match(customerScreen, /addSelection\(shochuSelectionItem, \{ servingOption: option \}, quantity\)/);
   assert.match(customerScreen, /onClose=\{\(\) => setShochuSelection\(null\)\}/);
   assert.match(customerScreen, /onClick=\{\(\) => setShochuSelection\(null\)\}>キャンセル/);
+  assert.match(customerScreen, /className="modal--shochu" footer=\{<div className="shochu-selection-footer">/);
   assert.match(customerScreen, /className="shochu-serving-button"/);
   assert.match(customerScreen, /className="shochu-quantity-control"/);
   const adjustBlock = customerScreen.slice(customerScreen.indexOf("const adjustShochuQuantity"), customerScreen.indexOf("const commitShochuSelection"));
@@ -629,6 +630,9 @@ test("shochu uses a zero-based multi-quantity serving popup", () => {
   assert.doesNotMatch(customerScreen, /shochu-serving-status|shochuSelections|expandedShochuId/);
   assert.doesNotMatch(customerScreen, /addSelection\(item, \{ servingOption: option \}\)/);
   assert.match(styles, /\.modal--shochu \{[^}]*overflow: visible/);
+  assert.match(styles, /\.modal--shochu:not\(\.modal--kushikatsu\) \{ width: min\(800px, 94vw\);[\s\S]*overflow: hidden; display: flex/);
+  assert.match(styles, /\.modal--shochu:not\(\.modal--kushikatsu\) \.modal__body \{[\s\S]*overflow-y: auto/);
+  assert.match(styles, /\.modal--shochu:not\(\.modal--kushikatsu\) \.modal__footer \{ flex: 0 0 auto/);
   assert.match(styles, /\.shochu-selection-row \{[\s\S]*grid-template-columns/);
   assert.match(styles, /\.shochu-quantity-control \{[\s\S]*min-height: 52px/);
   assert.match(styles, /\.shochu-quantity-control button \{[\s\S]*display: grid/);
@@ -646,6 +650,8 @@ test("shochu uses a zero-based multi-quantity serving popup", () => {
   assert.match(styles, /\.modal--shochu \{[\s\S]*max-height: calc\(100dvh - 16px\)/);
   assert.match(styles, /\.shochu-selection-row \{[\s\S]*min-height: 54px/);
   assert.match(styles, /\.shochu-quantity-control \{[\s\S]*min-height: 52px/);
+  assert.match(styles, /\.modal--shochu:not\(\.modal--kushikatsu\) \.shochu-quantity-control \{ grid-template-columns: 72px 1fr 72px; min-height: 68px/);
+  assert.match(styles, /\.modal--shochu:not\(\.modal--kushikatsu\) \.modal-actions \.button \{ min-height: 66px/);
   assert.doesNotMatch(styles, /user-scalable\s*=\s*no/);
 });
 
@@ -667,6 +673,13 @@ test("sake rows use one serving-method button and a direct serving-temperature p
   assert.match(appSource, /const addSelection = \(item, selection = \{\}, quantity = 1\)/);
   assert.match(customerScreen, /<PriceDisplay priceYen=\{variant\.priceYen\} \/>/);
   assert.match(customerScreen, /onClick=\{addSakeSelection\}>これにする<\/button>/);
+  assert.match(customerScreen, /className="modal--sake" footer=\{<div className="modal-actions">/);
+  assert.match(styles, /\.modal--sake\.modal--wide \{ width: min\(1060px, 94vw\)/);
+  assert.match(styles, /\.modal--sake \.modal__body \{[\s\S]*overflow-y: auto/);
+  assert.match(styles, /\.modal--sake \.modal__footer \{ flex: 0 0 auto/);
+  assert.match(styles, /\.modal--sake\.modal--wide,\s*\.modal--shochu:not\(\.modal--kushikatsu\) \{ margin-top: 8px; max-height: calc\(100dvh - 32px\)/);
+  assert.match(styles, /\.modal--sake \.sake-serving-option__heading b \{ font-size: 22px/);
+  assert.match(styles, /\.modal--sake \.sake-temperature-options button \{ min-height: 68px; font-size: 20px/);
   assert.match(customerScreen, /temperature/);
   assert.match(appSource, /const SAKE_COLD = "冷酒"/);
   assert.match(appSource, /const SAKE_WARM = "燗酒"/);

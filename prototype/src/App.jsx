@@ -1619,7 +1619,7 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
       </section>
 
       {modal === "confirm" ? <Modal title="注文内容の確認" onClose={() => { if (!submitting) setModal(null); }}><div className="confirm-list">{cartRows.map((row) => <div key={row.key}><b>{selectionDisplayName(row.item, row)}</b><span>{row.quantity}点</span></div>)}</div>{hasUnavailableCartRows ? <p className="cart-context-warning" role="alert">現在注文できない商品があります。内容をご確認ください</p> : <p className="price-hidden-note">内容をご確認のうえ、注文を送信してください。</p>}<div className="modal-actions"><button className="button button--quiet" onClick={() => setModal(null)} disabled={submitting}>戻る</button><button className="button button--primary button--large" onClick={submitOrder} disabled={submitting || hasUnavailableCartRows || cartContextStale}>{submitting ? "送信中" : online ? "注文を送信" : "送信待ちに保存"}</button></div></Modal> : null}
-      {shochuSelection && shochuSelectionItem ? <Modal title={shochuSelectionItem.name} onClose={() => setShochuSelection(null)} className="modal--shochu">
+      {shochuSelection && shochuSelectionItem ? <Modal title={shochuSelectionItem.name} onClose={() => setShochuSelection(null)} className="modal--shochu" footer={<div className="shochu-selection-footer"><div className="modal-actions"><button type="button" className="button button--quiet" onClick={() => setShochuSelection(null)}>キャンセル</button><button type="button" className="button button--primary button--large" disabled={!shochuSelectionTotal} onClick={commitShochuSelection}>{shochuSelectionTotal}点をカートに追加</button></div></div>}>
         <div className="shochu-selection-modal">
           <p className="modal-lead">飲み方と数量を選択してください。</p>
           <div className="shochu-selection-list" aria-label={`${shochuSelectionItem.name}の飲み方と数量`}>
@@ -1628,15 +1628,12 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
               return <div className="shochu-selection-row" key={option.servingOptionId}>
                 <b>{option.name}</b>
                 <div className="shochu-quantity-control" aria-label={`${option.name}の数量`}>
-                  <button type="button" onClick={() => adjustShochuQuantity(option.servingOptionId, -1)} disabled={quantity === 0} aria-label={`${option.name}を1点減らす`}><Minus size={22} weight="bold" /></button>
+                  <button type="button" onClick={() => adjustShochuQuantity(option.servingOptionId, -1)} disabled={quantity === 0} aria-label={`${option.name}を1点減らす`}><Minus size={28} weight="bold" /></button>
                   <b aria-live="polite">{quantity}</b>
-                  <button type="button" onClick={() => adjustShochuQuantity(option.servingOptionId, 1)} aria-label={`${option.name}を1点増やす`}><Plus size={22} weight="bold" /></button>
+                  <button type="button" onClick={() => adjustShochuQuantity(option.servingOptionId, 1)} aria-label={`${option.name}を1点増やす`}><Plus size={28} weight="bold" /></button>
                 </div>
               </div>;
             })}
-          </div>
-          <div className="shochu-selection-footer">
-            <div className="modal-actions"><button type="button" className="button button--quiet" onClick={() => setShochuSelection(null)}>キャンセル</button><button type="button" className="button button--primary button--large" disabled={!shochuSelectionTotal} onClick={commitShochuSelection}>{shochuSelectionTotal}点をカートに追加</button></div>
           </div>
         </div>
       </Modal> : null}
@@ -1648,7 +1645,7 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
           <div className="shochu-selection-footer"><div className="modal-actions"><button type="button" className="button button--quiet" onClick={() => setKushikatsuSelection(null)}>キャンセル</button><button type="button" className="button button--primary button--large" onClick={commitKushikatsuSelection}>{kushikatsuSelection.quantity}本をカートに追加</button></div></div>
         </div>
       </Modal> : null}
-      {sakeSelection && selectedSakeItem ? <Modal title="提供方法・温度を選ぶ" onClose={() => setSakeSelection(null)} wide className="modal--sake">
+      {sakeSelection && selectedSakeItem ? <Modal title="提供方法・温度を選ぶ" onClose={() => setSakeSelection(null)} wide className="modal--sake" footer={<div className="modal-actions"><button className="button button--quiet" onClick={() => { setSakeSelection(null); setSakeSelectionError(""); }}>キャンセル</button>{selectedSakeVariant && sakeSelection.temperature && sakeTemperatureOptions(selectedSakeVariant).includes(sakeSelection.temperature) ? <button className="button button--primary button--large" onClick={addSakeSelection}>これにする</button> : null}</div>}>
         <div className="sake-serving-modal">
           <p className="modal-lead">{selectedSakeItem.name}の提供形態と温度を選択してください。</p>
           <div className="sake-serving-options" aria-label={`${selectedSakeItem.name}の提供方法`}>
@@ -1663,7 +1660,6 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
             </div>)}
           </div>
           {sakeSelectionError ? <p className="sake-selection-error" role="alert">{sakeSelectionError}</p> : null}
-          <div className="modal-actions"><button className="button button--quiet" onClick={() => { setSakeSelection(null); setSakeSelectionError(""); }}>キャンセル</button>{selectedSakeVariant && sakeSelection.temperature && sakeTemperatureOptions(selectedSakeVariant).includes(sakeSelection.temperature) ? <button className="button button--primary button--large" onClick={addSakeSelection}>これにする</button> : null}</div>
         </div>
       </Modal> : null}
       {modal === "staff" ? <Modal title="スタッフを呼びますか？" onClose={() => { if (!staffCallSubmitting) setModal(null); }}><p className="modal-lead">テーブル {device.tableId} からスタッフへお知らせします。</p><div className="modal-actions"><button className="button button--quiet" disabled={staffCallSubmitting} onClick={() => setModal(null)}>やめる</button><button className="button button--primary button--large" disabled={staffCallSubmitting} onClick={callStaff}><Bell size={22} weight="bold" /> {staffCallSubmitting ? "送信中" : "呼び出す"}</button></div></Modal> : null}
