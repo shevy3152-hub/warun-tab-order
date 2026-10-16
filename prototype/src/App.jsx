@@ -38,6 +38,7 @@ import { createCustomerMenuState, customerMenuStateReducer } from "./customer-me
 import { addCustomerCartSelection, customerCartRows, removeCustomerCartSelection } from "./customer-cart.js";
 import { taxExcludedYen } from "./pricing.js";
 import { pairingCodeQrSvg } from "./qr-code.js";
+import { compareMenuItems } from "./menu-ordering.js";
 import { CUSTOMER_TEST_THEME, normalizeCustomerTheme } from "./customer-theme.js";
 import { CUSTOMER_THEME_DEFINITIONS, isAvailableCustomerTheme } from "../../shared/customer-theme-definitions.mjs";
 import { customerThemeImageLayout, customerThemePositionAfterDrag, normalizeCustomerThemeLayout, resolveCustomerThemeZoom, MIN_CUSTOMER_THEME_ZOOM, MAX_CUSTOMER_THEME_ZOOM } from "./customer-theme-layout.js";
@@ -432,20 +433,6 @@ function listImageVisible(item) {
   if (item?.categoryId === "sake") return true;
   if (Object.hasOwn(item?.detail ?? {}, "showImageInList")) return item.detail.showImageInList === true;
   return item?.categoryId === "shochu";
-}
-
-const SHOCHU_SECTION_ORDER = Object.freeze({ "芋": 0, "麦・その他": 1 });
-
-function shochuSectionRank(item) {
-  return SHOCHU_SECTION_ORDER[item?.sectionKey] ?? 2;
-}
-
-function compareMenuItems(a, b) {
-  if (a?.categoryId === "shochu" && b?.categoryId === "shochu") {
-    const sectionDifference = shochuSectionRank(a) - shochuSectionRank(b);
-    if (sectionDifference !== 0) return sectionDifference;
-  }
-  return (Number(a?.sortOrder) || 0) - (Number(b?.sortOrder) || 0) || String(a?.id ?? "").localeCompare(String(b?.id ?? ""), "ja");
 }
 
 function foodVariantDefinitions(item) {
@@ -1574,7 +1561,10 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
                 {apiMenuState.error ? <div className="cart-context-status" role="status">メニューを更新できません。通信状態を確認してください。<ConnectionBadge online={online} compact announceStatus /></div> : null}
                 {currentItems.length ? currentItems.map((item, index) => {
                 const previous = currentItems[index - 1];
-                const isOtherStart = isShochu && item.sectionKey !== "芋" && (index === 0 || previous?.sectionKey === "芋");
+                const shochuGroup = (entry) => entry?.sectionKey === "芋" ? "芋" : "麦・その他";
+                const isShochuGroupStart = isShochu && (index === 0 || shochuGroup(previous) !== shochuGroup(item));
+                const isFirstShochuImo = isShochu && item.sectionKey === "芋" && currentItems.findIndex((entry) => entry.sectionKey === "芋") === index;
+                const isFirstShochuOther = isShochu && shochuGroup(item) === "麦・その他" && currentItems.findIndex((entry) => shochuGroup(entry) === "麦・その他") === index;
                 const showListImage = listImageVisible(item) && Boolean(item.imageUri);
                 const isKushikatsu = item.isKushikatsuVirtual === true;
                 const canOpenDetail = Boolean(item.detail?.imageUri || item.imageUri);
@@ -1588,7 +1578,7 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
                     {item.orderingMode === "reservation_only" ? <div className="reservation-only-label"><b>予約限定</b></div> : <button className="sake-serve-button" onClick={() => openSakeSelection(item)} disabled={item.isSoldOut || !item.variants.length} aria-label={`${item.name}の提供方法を選ぶ`}><span>提供方法を選ぶ</span><small>グラス／徳利</small></button>}
                   </article>
                 ) : (
-                  <article className={`menu-row ${isFood ? "food-menu-row" : ""} ${isShochu ? "shochu-menu-row" : ""} ${showListImage ? "" : "menu-row--no-image"} ${item.isSoldOut ? "is-sold-out" : ""}`} key={item.id} ref={isShochu && item.sectionKey === "芋" && !previous ? imoRef : null}>
+                  <article className={`menu-row ${isFood ? "food-menu-row" : ""} ${isShochu ? "shochu-menu-row" : ""} ${showListImage ? "" : "menu-row--no-image"} ${item.isSoldOut ? "is-sold-out" : ""}`} key={item.id} ref={isFirstShochuImo ? imoRef : null}>
                     <div className="menu-row__index">{String(index + 1).padStart(2, "0")}</div>
                     {showListImage ? <button className="product-image-button" onClick={() => canOpenDetail ? setDetailItem(item) : undefined} aria-label={`${item.name}の詳細を見る`} disabled={!canOpenDetail}>{item.imageUri ? <img src={isShochu ? shochuThumbUri(item.imageUri) : item.imageUri} alt="" style={imageLayoutStyle(item, "thumbnail")} /> : <span>画像なし</span>}</button> : null}
                     <button className="menu-row__copy menu-row__copy--button" onClick={() => canOpenDetail ? setDetailItem(item) : undefined} aria-label={`${item.name}の詳細を見る`} disabled={!canOpenDetail}>{item.detail?.reading ? <small className="menu-row__reading">{item.detail.reading}</small> : null}<h2>{item.name}</h2>{foodDescription ? <small className="menu-row__food-description">{foodDescription}</small> : null}{canOpenDetail || listComment ? <small className="menu-row__detail-hint">{canOpenDetail ? <span className="menu-row__detail-hint__action">タップで明細</span> : null}{canOpenDetail && listComment ? <span className="menu-row__detail-hint__separator" aria-hidden="true">｜</span> : null}{listComment ? <span className="menu-row__comment">{listComment}</span> : null}</small> : null}</button>
@@ -1597,7 +1587,7 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
                   </article>
                 );
                 return (
-                  <div key={item.id}>{isOtherStart ? <div className="menu-section-divider" ref={otherRef}><b>麦・その他</b><span>麦焼酎・黒糖・泡盛など</span></div> : null}{row}</div>
+                  <div key={item.id} ref={isFirstShochuOther ? otherRef : null}>{isShochuGroupStart && (index > 0 || shochuGroup(item) === "麦・その他") ? <div className="menu-section-divider"><b>{shochuGroup(item)}</b><span>{shochuGroup(item) === "芋" ? "芋焼酎" : "麦焼酎・黒糖・泡盛など"}</span></div> : null}{row}</div>
                 );
                 }) : <div className="empty-state"><ListBullets size={42} /><p>このカテゴリの商品はまだありません。</p></div>}
               </>}
@@ -3300,6 +3290,9 @@ function AdminScreen({ state, updateState, section = "menu" }) {
   const adminApiMode = Boolean(configuredAdminToken(window));
   const [showAdd, setShowAdd] = useState(false);
   const [editingMenuId, setEditingMenuId] = useState(null);
+  const [menuEditorCategoryId, setMenuEditorCategoryId] = useState("");
+  const [menuEditorSortOrder, setMenuEditorSortOrder] = useState(1);
+  const [menuEditorPlacementEdge, setMenuEditorPlacementEdge] = useState(null);
   const [pairingTableId, setPairingTableId] = useState("1");
   const [pairingQr, setPairingQr] = useState(null);
   const [pairingError, setPairingError] = useState("");
@@ -3454,6 +3447,58 @@ function AdminScreen({ state, updateState, section = "menu" }) {
   }, [section, adminApiMode, diagnosticRefreshKey]);
   const categoriesById = Object.fromEntries(state.categories.map((category) => [category.id, category]));
   const editingMenu = state.menuItems.find((item) => item.id === editingMenuId) ?? null;
+  const selectedMenuCategoryId = menuEditorCategoryId || editingMenu?.categoryId || state.categories[0]?.id || "";
+  const selectedMenuCategoryItems = state.menuItems.filter((item) => item.categoryId === selectedMenuCategoryId);
+  const selectedMenuCategoryItemsForPlacement = selectedMenuCategoryItems.filter((item) => item.id !== editingMenuId);
+  const selectedMenuCategoryCount = selectedMenuCategoryItemsForPlacement.length + (editingMenu ? 1 : 0);
+  const menuPlacementValue = (edge) => {
+    if (!selectedMenuCategoryItemsForPlacement.length) return 1;
+    const orders = selectedMenuCategoryItemsForPlacement.map((item) => Number(item.sortOrder) || 0);
+    return edge === "first" ? Math.max(0, Math.min(...orders) - 1) : Math.max(...orders) + 1;
+  };
+  const setMenuEditorEdge = (edge, form) => {
+    const value = menuPlacementValue(edge);
+    setMenuEditorPlacementEdge(edge);
+    setMenuEditorSortOrder(value);
+    const input = form?.elements.namedItem("sortOrder");
+    if (input) input.value = String(value);
+  };
+  const menuIdsForPlacement = (items, categoryId, itemId, edge) => {
+    const otherIds = items.filter((item) => item.categoryId === categoryId && item.id !== itemId).sort(compareMenuItems).map((item) => item.id);
+    return edge === "first" ? [itemId, ...otherIds] : [...otherIds, itemId];
+  };
+  const persistMenuEdgePlacement = async (categoryId, itemId, edge) => {
+    const persist = async (items, categories) => {
+      const category = categories.find((entry) => entry.id === categoryId);
+      if (!category) throw new Error("商品カテゴリーを再取得してください。");
+      return saveAdminMenuOrdering({ env: window, categoryId, menuItemIds: menuIdsForPlacement(items, categoryId, itemId, edge), expectedVersion: category.version ?? 0 });
+    };
+    try {
+      await persist(state.menuItems, state.categories);
+      return true;
+    } catch {
+      try {
+        const latest = mapAdminCatalogState(await fetchAdminMenu({ env: window }));
+        await persist(latest.menuItems, latest.categories);
+        return true;
+      } catch {
+        return false;
+      }
+    }
+  };
+  const applyLocalMenuPlacement = (items, categoryId, itemId, edge) => {
+    const orderedIds = menuIdsForPlacement(items, categoryId, itemId, edge);
+    const orderById = new Map(orderedIds.map((id, index) => [id, (index + 1) * 10]));
+    return items.map((item) => orderById.has(item.id) ? { ...item, sortOrder: orderById.get(item.id) } : item);
+  };
+  const openNewMenuEditor = () => {
+    const categoryId = state.categories[0]?.id ?? "";
+    setEditingMenuId(null);
+    setMenuEditorCategoryId(categoryId);
+    setMenuEditorSortOrder(state.menuItems.filter((item) => item.categoryId === categoryId).length + 1);
+    setMenuEditorPlacementEdge(null);
+    setShowAdd(true);
+  };
   const editingMenuCategory = state.categories.find((category) => category.id === editingMenu?.categoryId);
   const editingMenuIsFood = editingMenuCategory?.sectionKey === "food" || /^(food-|special-)/.test(editingMenu?.categoryId ?? "");
   const descriptionFieldLabel = editingMenuIsFood ? "料理説明" : "商品説明／一言コメント";
@@ -3466,6 +3511,10 @@ function AdminScreen({ state, updateState, section = "menu" }) {
   const openMenuEditor = (id) => {
     rememberMenuPosition(id);
     setEditingMenuId(id);
+    const item = state.menuItems.find((entry) => entry.id === id);
+    setMenuEditorCategoryId(item?.categoryId ?? "");
+    setMenuEditorSortOrder(item?.sortOrder ?? 1);
+    setMenuEditorPlacementEdge(null);
     setShowAdd(true);
   };
   const closeMenuEditor = () => {
@@ -3575,17 +3624,18 @@ function AdminScreen({ state, updateState, section = "menu" }) {
       ...patch,
       isSoldOut: form.get("isSoldOut") === "on",
       isActive: form.get("isActive") === "on",
-      sortOrder: Number(form.get("sortOrder")) || editingMenu?.sortOrder || 1,
+      sortOrder: Number.isSafeInteger(Number(form.get("sortOrder"))) ? Number(form.get("sortOrder")) : editingMenu?.sortOrder ?? 1,
     } : {
       ...patch,
       isSoldOut: false,
       isActive: true,
-      sortOrder: state.menuItems.filter((item) => item.categoryId === form.get("categoryId")).length + 1,
+      sortOrder: Number.isSafeInteger(Number(form.get("sortOrder"))) ? Number(form.get("sortOrder")) : state.menuItems.filter((item) => item.categoryId === form.get("categoryId")).length + 1,
     };
     setCatalogState((current) => ({ ...current, saving: adminApiMode, message: "" }));
     if (adminApiMode) {
       try {
         const result = await saveAdminMenuItem({ env: window, item: nextItem, expectedVersion: editingMenu?.version ?? 0 });
+        const placementSaved = menuEditorPlacementEdge ? await persistMenuEdgePlacement(nextItem.categoryId, nextItem.id, menuEditorPlacementEdge) : true;
         const refreshedCatalog = await fetchAdminMenu({ env: window });
         const refreshedItem = refreshedCatalog.items.find((item) => item.menuItemId === nextItem.id);
         if (!refreshedItem || refreshedItem.version !== result.version) throw new Error("管理カタログの保存結果を再取得できませんでした。");
@@ -3611,13 +3661,14 @@ function AdminScreen({ state, updateState, section = "menu" }) {
           servingOptions: refreshedItem.servingOptions ?? [],
           imageLayouts: refreshedItem.imageLayouts,
         };
-        setCatalogState({ loading: false, error: false, saving: false, message: "保存しました。" });
+        setCatalogState({ loading: false, error: false, saving: false, message: placementSaved ? "保存しました。" : "商品は保存しましたが、並び順を確定できませんでした。並び替えモードで確認してください。" });
         updateState((current) => editingMenuId ? ({
           ...current,
           menuItems: current.menuItems.map((item) => item.id === editingMenuId ? refreshedPatch : item),
         }) : ({ ...current, menuItems: [...current.menuItems, refreshedPatch] }));
         setShowAdd(false);
         setEditingMenuId(null);
+        setMenuEditorPlacementEdge(null);
         return;
       } catch (error) {
         const failureDetail = error?.status
@@ -3629,13 +3680,18 @@ function AdminScreen({ state, updateState, section = "menu" }) {
     }
     updateState((current) => editingMenuId ? ({
       ...current,
-      menuItems: current.menuItems.map((item) => item.id === editingMenuId ? { ...item, ...patch } : item),
+      menuItems: menuEditorPlacementEdge
+        ? applyLocalMenuPlacement(current.menuItems.map((item) => item.id === editingMenuId ? { ...item, ...patch } : item), nextItem.categoryId, editingMenuId, menuEditorPlacementEdge)
+        : current.menuItems.map((item) => item.id === editingMenuId ? { ...item, ...patch } : item),
     }) : ({
       ...current,
-      menuItems: [...current.menuItems, { ...nextItem, ...patch }],
+      menuItems: menuEditorPlacementEdge
+        ? applyLocalMenuPlacement([...current.menuItems, { ...nextItem, ...patch }], nextItem.categoryId, nextItem.id, menuEditorPlacementEdge)
+        : [...current.menuItems, { ...nextItem, ...patch }],
     }));
     setShowAdd(false);
     setEditingMenuId(null);
+    setMenuEditorPlacementEdge(null);
   };
   const saveInlineMenu = async (event, item) => {
     event.preventDefault();
@@ -3644,6 +3700,7 @@ function AdminScreen({ state, updateState, section = "menu" }) {
     const nextItem = {
       ...item,
       categoryId: form.get("categoryId")?.toString() || item.categoryId,
+      sortOrder: Number.isSafeInteger(Number(form.get("sortOrder"))) ? Number(form.get("sortOrder")) : item.sortOrder,
       name: form.get("name")?.toString().trim() || item.name,
       kitchenAlias: form.get("kitchenAlias")?.toString().trim() || item.kitchenAlias || item.name,
       description: form.get("description")?.toString().trim() ?? item.description ?? "",
@@ -3664,17 +3721,19 @@ function AdminScreen({ state, updateState, section = "menu" }) {
       return;
     }
     setCatalogState((current) => ({ ...current, saving: adminApiMode, message: "" }));
+    let placementSaved = true;
     try {
       if (adminApiMode) {
         const result = await saveAdminMenuItem({ env: window, item: nextItem, expectedVersion: item.version ?? 0 });
+        placementSaved = menuEditorPlacementEdge ? await persistMenuEdgePlacement(nextItem.categoryId, item.id, menuEditorPlacementEdge) : true;
         const refreshedCatalog = await fetchAdminMenu({ env: window });
         const refreshedItem = refreshedCatalog.items.find((entry) => entry.menuItemId === item.id);
         if (!refreshedItem || refreshedItem.version !== result.version) throw new Error("管理カタログの保存結果を再取得できませんでした。");
         updateState((current) => ({ ...current, ...mapAdminCatalogState(refreshedCatalog) }));
       } else {
-        updateState((current) => ({ ...current, menuItems: current.menuItems.map((entry) => entry.id === item.id ? nextItem : entry) }));
+        updateState((current) => ({ ...current, menuItems: menuEditorPlacementEdge ? applyLocalMenuPlacement(current.menuItems.map((entry) => entry.id === item.id ? nextItem : entry), nextItem.categoryId, item.id, menuEditorPlacementEdge) : current.menuItems.map((entry) => entry.id === item.id ? nextItem : entry) }));
       }
-      setCatalogState({ loading: false, error: false, saving: false, message: "保存しました。" });
+      setCatalogState({ loading: false, error: false, saving: false, message: placementSaved ? "保存しました。" : "商品は保存しましたが、並び順を確定できませんでした。並び替えモードで確認してください。" });
       closeMenuEditor();
     } catch (error) {
       const message = error?.code === "CATALOG_CONFLICT"
@@ -3882,7 +3941,7 @@ function AdminScreen({ state, updateState, section = "menu" }) {
 
         {section === "menu-access" ? <SessionMenuAccessPanel adminApiMode={adminApiMode} menuItems={state.menuItems} /> : null}
         {section === "menu" ? <>
-           <div className="admin-toolbar"><div className="admin-metrics"><span>登録数 <b>{state.menuItems.length}</b> 品</span><span>売り切れ <b>{Math.max(2, state.menuItems.filter((item) => item.isSoldOut).length)}</b> 品</span></div><div className="admin-toolbar__actions"><button className="button button--outline" type="button" onClick={() => reorderMode ? cancelReorder() : beginReorder()}>{reorderMode ? "通常編集へ戻る" : "並び替えモード"}</button><button className="button button--outline button--large" onClick={() => showAdd ? resetMenuEditor() : (setEditingMenuId(null), setShowAdd(true))}><Plus size={28} weight="bold" /> {showAdd ? "編集を閉じる" : "新しいメニューを追加"}</button></div></div>
+           <div className="admin-toolbar"><div className="admin-metrics"><span>登録数 <b>{state.menuItems.length}</b> 品</span><span>売り切れ <b>{Math.max(2, state.menuItems.filter((item) => item.isSoldOut).length)}</b> 品</span></div><div className="admin-toolbar__actions"><button className="button button--outline" type="button" onClick={() => reorderMode ? cancelReorder() : beginReorder()}>{reorderMode ? "通常編集へ戻る" : "並び替えモード"}</button><button className="button button--outline button--large" onClick={() => showAdd ? resetMenuEditor() : openNewMenuEditor()}><Plus size={28} weight="bold" /> {showAdd ? "編集を閉じる" : "新しいメニューを追加"}</button></div></div>
            <div className="admin-menu-filters" aria-label="メニューカテゴリ切替">
              <div className="admin-menu-filters__row" role="tablist" aria-label="大分類">
                {[['all', 'すべて'], ...adminSectionOptions.map((id) => [id, ({ food: 'フード', drink: 'ドリンク', winter: '冬季限定', seasonal: '季節・気まぐれ' }[id] || id)])].map(([id, label]) => <button type="button" role="tab" aria-selected={adminMenuSection === id} className={adminMenuSection === id ? 'is-active' : ''} key={id} onClick={() => { setAdminMenuSection(id); setAdminMenuCategory('all'); }}>{label}</button>)}
@@ -3896,7 +3955,7 @@ function AdminScreen({ state, updateState, section = "menu" }) {
           {showAdd && !editingMenuId ? <form className="inline-form inline-form--menu menu-editor" key={editingMenuId ?? "new-menu"} onSubmit={addMenu}>
             <label>正式名<input name="name" required placeholder="例：だし巻き玉子" defaultValue={editingMenu?.name ?? ""} /></label>
             <label>厨房用の通称<input name="kitchenAlias" required placeholder="例：だし巻き" defaultValue={editingMenu?.kitchenAlias ?? DEFAULT_KITCHEN_MENU_ALIASES[editingMenu?.id] ?? ""} /></label>
-            <label>カテゴリ<select name="categoryId" defaultValue={editingMenu?.categoryId}>{state.categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}</select></label>
+            <label>カテゴリ<select name="categoryId" value={selectedMenuCategoryId} onChange={(event) => setMenuEditorCategoryId(event.target.value)}>{state.categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}</select></label>
             <label>税込マスター価格<input name="price" type="number" min="0" step="1" defaultValue={editingMenu?.price ?? 500} /></label>
             <label>客席での表示<select name="customerVisibilityMode" defaultValue={editingMenu?.customerVisibilityMode ?? "all_tables"}><option value="all_tables">全テーブル</option><option value="per_session">来店ごとに許可</option></select></label>
             <TableVisibilityFields tables={tableVisibilityTables} mode={editingMenu?.tableVisibilityMode ?? "all_tables"} selectedTableIds={editingMenu?.tableVisibilityTableIds ?? []} />
@@ -3904,7 +3963,7 @@ function AdminScreen({ state, updateState, section = "menu" }) {
             <label className="menu-editor__check"><input type="checkbox" name="isSoldOut" defaultChecked={editingMenu?.isSoldOut ?? false} /> 売り切れ</label>
             <fieldset className="menu-ordering-mode"><legend>注文方法</legend><label><input type="radio" name="orderingMode" value="normal" defaultChecked={(editingMenu?.orderingMode ?? "normal") === "normal"} /> 注文方法：通常注文</label><label><input type="radio" name="orderingMode" value="reservation_only" defaultChecked={editingMenu?.orderingMode === "reservation_only"} /> 注文方法：予約限定</label></fieldset>
             <label className="menu-editor__check"><input type="checkbox" name="isActive" defaultChecked={editingMenu?.isActive !== false} /> 客席に表示</label>
-            <label>並び順<input name="sortOrder" type="number" min="0" step="1" defaultValue={editingMenu?.sortOrder ?? 1} /></label>
+            <div className="menu-editor__sort-order"><label><span>並び順 <small>{selectedMenuCategoryCount}品</small></span><input name="sortOrder" type="number" min="0" step="1" value={menuEditorSortOrder} onChange={(event) => { setMenuEditorSortOrder(event.target.value === "" ? "" : Number(event.target.value)); setMenuEditorPlacementEdge(null); }} /></label><div className="menu-editor__sort-order-actions"><button className="button button--quiet" type="button" onClick={(event) => setMenuEditorEdge("first", event.currentTarget.form)}>最上段に追加</button><button className="button button--quiet" type="button" onClick={(event) => setMenuEditorEdge("last", event.currentTarget.form)}>最下段に追加</button></div></div>
             <ProductImageUriField name="imageUri" label="商品画像URI" initialUri={editingMenu?.imageUri ?? ""} resolveDisplayUri={editingMenu?.categoryId === "shochu" ? shochuThumbUri : undefined} />
             <label className="menu-editor__check"><input type="checkbox" name="showImageInList" defaultChecked={editingMenu?.detail?.showImageInList ?? editingMenu?.categoryId === "shochu"} /> 一覧に画像を表示（日本酒は常時表示）</label>
             <label>焼酎内の区分<select name="sectionKey" defaultValue={editingMenu?.sectionKey ?? ""}><option value="">なし</option><option value="芋">芋</option><option value="麦・その他">麦・その他</option></select></label>
@@ -3924,7 +3983,7 @@ function AdminScreen({ state, updateState, section = "menu" }) {
             <label className="menu-editor__wide">おすすめコメント<textarea name="recommendation" defaultValue={editingMenu?.detail?.recommendation ?? ""} /></label>
              <div className="menu-editor__actions"><button className="button button--quiet" type="button" onClick={resetMenuEditor} disabled={catalogState.saving}>キャンセル</button><button className="button button--primary" type="submit" disabled={catalogState.saving}>{catalogState.saving ? "保存中" : editingMenu ? "変更を保存" : "追加する"}</button></div>
            </form> : null}
-          {reorderMode ? <div className="menu-reorder-list" aria-label="商品の並び替え">{reorderDraftIds.map((id) => selectedReorderGroup?.items.find((entry) => entry.id === id)).filter(Boolean).map((item) => <div className="menu-reorder-row" key={item.id} onDragOver={(event) => event.preventDefault()} onDrop={() => { moveReorderItem(draggedMenuId, item.id); setDraggedMenuId(null); }}><button className="reorder-handle" type="button" draggable={!catalogState.saving} aria-label={`${item.name}をドラッグして並び替え`} onDragStart={() => setDraggedMenuId(item.id)}>≡</button><b>{String(reorderDraftIds.indexOf(item.id) + 1).padStart(2, "0")}</b><span>{item.name}</span><small>{item.kitchenAlias ?? item.name}</small><button type="button" className="button button--quiet" onClick={() => shiftReorderItem(item.id, -1)} disabled={catalogState.saving}>上へ</button><button type="button" className="button button--quiet" onClick={() => shiftReorderItem(item.id, 1)} disabled={catalogState.saving}>下へ</button></div>)}</div> : <div className="menu-admin-list"><div className="admin-row admin-row--header"><span>画像</span><span>カテゴリー</span><span>正式名・通称</span><span>価格（税込）</span><span>販売状況</span><span>並び順</span><span>操作</span></div>{displayedMenuGroups.map(({ category, items }) => <section className="menu-admin-group" key={category.id}><h3 className="menu-admin-group__heading"><span>{category.name}</span><small>{items.length}品</small></h3>{items.map((item) => <React.Fragment key={item.id}><div className={`admin-row ${item.isSoldOut ? "is-muted" : ""}`} ref={(node) => { if (node) menuCardRefs.current.set(item.id, node); else menuCardRefs.current.delete(item.id); }}><div className="admin-menu-card__image">{item.imageUri || item.detail?.imageUri ? <div className="admin-menu-card__image-frame"><img src={item.imageUri || item.detail.imageUri} alt="" style={imageLayoutStyle(item, "thumbnail")} /></div> : <span>画像なし</span>}</div><span className="category-tag">{category.name}</span><div className="admin-row__name"><b>{item.name}</b><small>通称：{item.kitchenAlias ?? DEFAULT_KITCHEN_MENU_ALIASES[item.id] ?? item.name}</small></div><div className="admin-menu-card__price"><small>税込</small><strong>{yen(item.price)}</strong></div><div className={`admin-menu-card__status ${adminMenuAvailability(item).className}`}><i></i>{adminMenuAvailability(item).label}</div><div className="admin-row__actions"><button className="button button--primary" type="button" onClick={() => openMenuEditor(item.id)}>{editingMenuId === item.id ? "編集中" : "編集"}</button><button className="button button--quiet" type="button" onClick={() => setMenuItem(item.id, { isSoldOut: !item.isSoldOut })}>{item.isSoldOut ? "販売再開" : "売り切れ"}</button><button className="button button--quiet" type="button" onClick={() => setImageLayoutItemId(item.id)}>画像</button></div></div>{editingMenuId === item.id && showAdd ? <form className="admin-menu-inline-editor" onSubmit={(event) => saveInlineMenu(event, item)}><div className="admin-menu-inline-editor__heading"><b>{item.name}を編集</b><span>保存・キャンセル後も元の位置を維持します。</span></div><label>正式名<input name="name" required defaultValue={item.name} /></label><label>厨房用の通称<input name="kitchenAlias" required defaultValue={item.kitchenAlias ?? DEFAULT_KITCHEN_MENU_ALIASES[item.id] ?? item.name} /></label><label>カテゴリ<select name="categoryId" defaultValue={item.categoryId}>{state.categories.map((entry) => <option key={entry.id} value={entry.id}>{entry.name}</option>)}</select></label><label>税込価格<input name="price" type="number" min="0" step="1" defaultValue={item.price} /></label><label>客席での表示<select name="customerVisibilityMode" defaultValue={item.customerVisibilityMode ?? "all_tables"}><option value="all_tables">全テーブル</option><option value="per_session">来店ごとに許可</option></select></label><TableVisibilityFields tables={tableVisibilityTables} mode={item.tableVisibilityMode ?? "all_tables"} selectedTableIds={item.tableVisibilityTableIds ?? []} /><label className="admin-menu-inline-editor__wide">説明<textarea name="description" defaultValue={item.description ?? ""} /></label><ProductImageUriField name="imageUri" label="商品画像URI" initialUri={item.imageUri ?? ""} resolveDisplayUri={item.categoryId === "shochu" ? shochuThumbUri : undefined} /><ProductImageUriField name="detailImageUri" label="詳細画像URI" initialUri={item.detail?.imageUri ?? ""} fallbackUri={item.imageUri ?? ""} /><label className="menu-editor__check"><input type="checkbox" name="isSoldOut" defaultChecked={item.isSoldOut} /> 売り切れ</label><label className="menu-editor__check"><input type="checkbox" name="isActive" defaultChecked={item.isActive !== false} /> 客席に表示</label><div className="admin-menu-inline-editor__actions"><button className="button button--quiet" type="button" onClick={closeMenuEditor} disabled={catalogState.saving}>キャンセル</button><button className="button button--primary" type="submit" disabled={catalogState.saving}>{catalogState.saving ? "保存中" : "変更を保存"}</button></div></form> : null}</React.Fragment>)}</section>)}</div>}
+          {reorderMode ? <div className="menu-reorder-list" aria-label="商品の並び替え">{reorderDraftIds.map((id) => selectedReorderGroup?.items.find((entry) => entry.id === id)).filter(Boolean).map((item) => <div className="menu-reorder-row" key={item.id} onDragOver={(event) => event.preventDefault()} onDrop={() => { moveReorderItem(draggedMenuId, item.id); setDraggedMenuId(null); }}><button className="reorder-handle" type="button" draggable={!catalogState.saving} aria-label={`${item.name}をドラッグして並び替え`} onDragStart={() => setDraggedMenuId(item.id)}>≡</button><b>{String(reorderDraftIds.indexOf(item.id) + 1).padStart(2, "0")}</b><span>{item.name}</span><small>{item.kitchenAlias ?? item.name}</small><button type="button" className="button button--quiet" onClick={() => shiftReorderItem(item.id, -1)} disabled={catalogState.saving}>上へ</button><button type="button" className="button button--quiet" onClick={() => shiftReorderItem(item.id, 1)} disabled={catalogState.saving}>下へ</button></div>)}</div> : <div className="menu-admin-list"><div className="admin-row admin-row--header"><span>画像</span><span>カテゴリー</span><span>正式名・通称</span><span>価格（税込）</span><span>販売状況</span><span>並び順</span><span>操作</span></div>{displayedMenuGroups.map(({ category, items }) => <section className="menu-admin-group" key={category.id}><h3 className="menu-admin-group__heading"><span>{category.name}</span><small>{items.length}品</small></h3>{items.map((item) => <React.Fragment key={item.id}><div className={`admin-row ${item.isSoldOut ? "is-muted" : ""}`} ref={(node) => { if (node) menuCardRefs.current.set(item.id, node); else menuCardRefs.current.delete(item.id); }}><div className="admin-menu-card__image">{item.imageUri || item.detail?.imageUri ? <div className="admin-menu-card__image-frame"><img src={item.imageUri || item.detail.imageUri} alt="" style={imageLayoutStyle(item, "thumbnail")} /></div> : <span>画像なし</span>}</div><span className="category-tag">{category.name}</span><div className="admin-row__name"><b>{item.name}</b><small>通称：{item.kitchenAlias ?? DEFAULT_KITCHEN_MENU_ALIASES[item.id] ?? item.name}</small></div><div className="admin-menu-card__price"><small>税込</small><strong>{yen(item.price)}</strong></div><div className={`admin-menu-card__status ${adminMenuAvailability(item).className}`}><i></i>{adminMenuAvailability(item).label}</div><div className="admin-row__actions"><button className="button button--primary" type="button" onClick={() => openMenuEditor(item.id)}>{editingMenuId === item.id ? "編集中" : "編集"}</button><button className="button button--quiet" type="button" onClick={() => setMenuItem(item.id, { isSoldOut: !item.isSoldOut })}>{item.isSoldOut ? "販売再開" : "売り切れ"}</button><button className="button button--quiet" type="button" onClick={() => setImageLayoutItemId(item.id)}>画像</button></div></div>{editingMenuId === item.id && showAdd ? <form className="admin-menu-inline-editor" onSubmit={(event) => saveInlineMenu(event, item)}><div className="admin-menu-inline-editor__heading"><b>{item.name}を編集</b><span>保存・キャンセル後も元の位置を維持します。</span></div><label>正式名<input name="name" required defaultValue={item.name} /></label><label>厨房用の通称<input name="kitchenAlias" required defaultValue={item.kitchenAlias ?? DEFAULT_KITCHEN_MENU_ALIASES[item.id] ?? item.name} /></label><label>カテゴリ<select name="categoryId" value={selectedMenuCategoryId} onChange={(event) => setMenuEditorCategoryId(event.target.value)}>{state.categories.map((entry) => <option key={entry.id} value={entry.id}>{entry.name}</option>)}</select></label><div className="menu-editor__sort-order"><label><span>並び順 <small>{selectedMenuCategoryCount}品</small></span><input name="sortOrder" type="number" min="0" step="1" value={menuEditorSortOrder} onChange={(event) => { setMenuEditorSortOrder(event.target.value === "" ? "" : Number(event.target.value)); setMenuEditorPlacementEdge(null); }} /></label><div className="menu-editor__sort-order-actions"><button className="button button--quiet" type="button" onClick={(event) => setMenuEditorEdge("first", event.currentTarget.form)}>最上段へ移動</button><button className="button button--quiet" type="button" onClick={(event) => setMenuEditorEdge("last", event.currentTarget.form)}>最下段へ移動</button></div></div><label>税込価格<input name="price" type="number" min="0" step="1" defaultValue={item.price} /></label><label>客席での表示<select name="customerVisibilityMode" defaultValue={item.customerVisibilityMode ?? "all_tables"}><option value="all_tables">全テーブル</option><option value="per_session">来店ごとに許可</option></select></label><TableVisibilityFields tables={tableVisibilityTables} mode={item.tableVisibilityMode ?? "all_tables"} selectedTableIds={item.tableVisibilityTableIds ?? []} /><label className="admin-menu-inline-editor__wide">説明<textarea name="description" defaultValue={item.description ?? ""} /></label><ProductImageUriField name="imageUri" label="商品画像URI" initialUri={item.imageUri ?? ""} resolveDisplayUri={item.categoryId === "shochu" ? shochuThumbUri : undefined} /><ProductImageUriField name="detailImageUri" label="詳細画像URI" initialUri={item.detail?.imageUri ?? ""} fallbackUri={item.imageUri ?? ""} /><label className="menu-editor__check"><input type="checkbox" name="isSoldOut" defaultChecked={item.isSoldOut} /> 売り切れ</label><label className="menu-editor__check"><input type="checkbox" name="isActive" defaultChecked={item.isActive !== false} /> 客席に表示</label><div className="admin-menu-inline-editor__actions"><button className="button button--quiet" type="button" onClick={closeMenuEditor} disabled={catalogState.saving}>キャンセル</button><button className="button button--primary" type="submit" disabled={catalogState.saving}>{catalogState.saving ? "保存中" : "変更を保存"}</button></div></form> : null}</React.Fragment>)}</section>)}</div>}
         </> : null}
 
         {section === "categories" ? <>

@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { CUSTOMER_THEMES, CUSTOMER_TEST_THEME, normalizeCustomerTheme } from "../src/customer-theme.js";
 import { adminMenuAvailability } from "../src/admin-menu-status.js";
+import { compareMenuItems } from "../src/menu-ordering.js";
 import { CUSTOMER_THEME_DEFINITIONS, isAvailableCustomerTheme } from "../../shared/customer-theme-definitions.mjs";
 import { MIN_CUSTOMER_THEME_ZOOM, customerThemeImageLayout, customerThemeImageMinimumZoom, customerThemePositionAfterDrag, customerThemeStoredZoomForVisualZoom, normalizeCustomerThemeLayout, resolveCustomerThemeZoom } from "../src/customer-theme-layout.js";
 
@@ -449,8 +450,21 @@ test("shochu rows keep fixed image, price, and action columns without changing t
   assert.match(appSource, /showImageInList/);
   assert.match(appSource, /listImageVisible\(item\)/);
   assert.match(appSource, /detailItem\.detail\?\.imageUri \|\| detailItem\.imageUri/);
-  assert.match(appSource, /function compareMenuItems/);
-  assert.match(appSource, /SHOCHU_SECTION_ORDER/);
+  assert.match(appSource, /import \{ compareMenuItems \} from "\.\/menu-ordering\.js"/);
+});
+
+test("shochu display honors persisted order across section groups", () => {
+  const items = [
+    { id: "mugi-first", categoryId: "shochu", sectionKey: "麦・その他", sortOrder: 10 },
+    { id: "imo-second", categoryId: "shochu", sectionKey: "芋", sortOrder: 20 },
+    { id: "imo-last-tie", categoryId: "shochu", sectionKey: "芋", sortOrder: 20 },
+  ];
+  assert.deepEqual(items.sort(compareMenuItems).map((item) => item.id), ["mugi-first", "imo-last-tie", "imo-second"]);
+  assert.match(appSource, /import \{ compareMenuItems \} from "\.\/menu-ordering\.js"/);
+  assert.match(customerScreen, /const isShochuGroupStart = isShochu && \(index === 0 \|\| shochuGroup\(previous\) !== shochuGroup\(item\)\)/);
+  assert.match(customerScreen, /<b>\{shochuGroup\(item\)\}<\/b>/);
+  assert.match(customerScreen, /ref=\{isFirstShochuImo \? imoRef : null\}/);
+  assert.match(customerScreen, /ref=\{isFirstShochuOther \? otherRef : null\}/);
 });
 
 test("customer cards show only stored readings and keep the detail hint separate", () => {
@@ -518,6 +532,22 @@ test("admin menu editing is grouped, cancellable, and keeps edit ordering data",
   assert.match(appSource, /disabled=\{catalogState\.saving\}/);
   assert.match(styles, /\.menu-admin-group__heading \{/);
   assert.match(styles, /\.menu-editor__actions \{/);
+});
+
+test("admin menu add and edit ordering controls count category items and save edge placement", () => {
+  assert.match(appSource, /const selectedMenuCategoryItems = state\.menuItems\.filter\(\(item\) => item\.categoryId === selectedMenuCategoryId\)/);
+  assert.match(appSource, /const selectedMenuCategoryCount = selectedMenuCategoryItemsForPlacement\.length \+ \(editingMenu \? 1 : 0\)/);
+  assert.match(appSource, /name="sortOrder" type="number" min="0" step="1"/);
+  assert.match(appSource, /最上段に追加/);
+  assert.match(appSource, /最下段に追加/);
+  assert.match(appSource, /最上段へ移動/);
+  assert.match(appSource, /最下段へ移動/);
+  assert.match(appSource, /setMenuEditorPlacementEdge\(edge\)/);
+  assert.match(appSource, /const persistMenuEdgePlacement = async \(categoryId, itemId, edge\)/);
+  assert.match(appSource, /saveAdminMenuOrdering\(\{ env: window, categoryId, menuItemIds: menuIdsForPlacement/);
+  assert.match(appSource, /applyLocalMenuPlacement\(/);
+  assert.match(appSource, /const openNewMenuEditor = \(\) =>/);
+  assert.match(styles, /\.menu-editor__sort-order-actions/);
 });
 
 test("admin shochu edits reuse canonical serving option IDs", () => {
