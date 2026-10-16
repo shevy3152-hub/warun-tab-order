@@ -807,6 +807,14 @@ test("image layout editor rotates only the inner image and preserves layout cont
   assert.doesNotMatch(styles, /\.image-layout-editor__frame \{[^}]*transform:/);
 });
 
+test("admin menu thumbnails apply the saved thumbnail layout in the same portrait frame as the editor", () => {
+  assert.match(appSource, /className="admin-menu-card__image">\{item\.imageUri \|\| item\.detail\?\.imageUri \? <div className="admin-menu-card__image-frame"><img src=\{item\.imageUri \|\| item\.detail\.imageUri\} alt="" style=\{imageLayoutStyle\(item, "thumbnail"\)\} \/><\/div>/);
+  assert.match(styles, /\.admin-menu-card__image-frame \{ width: 76\.1905%; height: 100%; overflow: hidden; \}/);
+  assert.match(styles, /\.image-layout-editor__frame \{[^}]*aspect-ratio: 64 \/ 84/);
+  assert.match(customerScreen, /imageLayoutStyle\(item, "thumbnail"\)/);
+  assert.match(customerScreen, /imageLayoutStyle\(detailItem, "detail"\)/);
+});
+
 test("admin detail editing covers every displayed tasting field", () => {
   assert.match(appSource, /name="aroma"/);
   assert.match(appSource, /name="sweetness"/);

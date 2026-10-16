@@ -48,7 +48,11 @@ test("both menu editors preserve their URI form fields and render separate image
   assert.match(component, /VITE_PRODUCT_IMAGE_PUBLIC_FOLDER/);
   assert.doesNotMatch(component, /VITE_CUSTOMER_THEME_IMAGE_SOURCE_FOLDER|C:\\/);
   assert.match(component, /type="button"/);
-  assert.match(component, /defaultValue=\{initialUri\}/);
+  assert.match(component, /<input name=\{name\} value=\{uri\} onChange=\{\(event\) => setUri\(event\.target\.value\)\}/);
   assert.match(component, /form\?\.addEventListener\("input", refresh\)/);
   assert.match(component, /保存先のパスをコピー/);
+  assert.doesNotMatch(component, /ファイルのアップロードは行いません/);
+  assert.match(component, /await new Promise\(\(resolve, reject\) => \{/);
+  assert.match(component, /アップロードに成功し、プレビューを更新しました/);
+  assert.match(component, /既存のURIと画像は保持しています/);
 });
