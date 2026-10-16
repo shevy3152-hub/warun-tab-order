@@ -352,6 +352,14 @@ test("customer refreshes menu and device context after session invalidations and
   assert.match(customerScreen, /setMenuRefreshKey\(\(current\) => current \+ 1\)/);
 });
 
+test("a menu refresh keeps the loaded list mounted and reports refresh failure with connection status", () => {
+  assert.match(customerScreen, /dispatchApiMenuState\(\{ type: "load-started" \}\)/);
+  assert.match(customerScreen, /apiMenuState\.loading && !apiMenu/);
+  assert.match(customerScreen, /apiMenuState\.error && !apiMenu/);
+  assert.match(customerScreen, /apiMenuState\.error \? <div className="cart-context-status" role="status">[\s\S]*ConnectionBadge online=\{online\} compact announceStatus/);
+  assert.match(customerScreen, /setMenuRefreshKey\(\(current\) => current \+ 1\)/);
+});
+
 test("API customer staff call submits an idempotent request and shows success only after acknowledgement", () => {
   const callStart = customerScreen.indexOf("const callStaff = async () =>");
   const callEnd = customerScreen.indexOf("const noticeKind", callStart);

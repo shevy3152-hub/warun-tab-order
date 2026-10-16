@@ -1,7 +1,7 @@
 import { KitchenOrderSound } from "./KitchenOrderSound.jsx";
 import { ProductImageLocation, ProductImageUriField } from "./ProductImageLocation.jsx";
 import { adminMenuAvailability } from "./admin-menu-status.js";
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from "react";
 import {
   ArrowLeft,
   ArrowRight,
@@ -34,6 +34,7 @@ import { adjustKitchenItemUnitPrice, adjustKitchenOrderItemQuantity as adjustKit
 import { buildKitchenTableGroups } from "./kitchen-order-board.js";
 import { bootstrapCustomerOrderClient } from "./customer-bootstrap.js";
 import { createCustomerVisitConfigRefresher } from "./customer-visit-config-refresh.js";
+import { createCustomerMenuState, customerMenuStateReducer } from "./customer-menu-state.js";
 import { addCustomerCartSelection, customerCartRows, removeCustomerCartSelection } from "./customer-cart.js";
 import { taxExcludedYen } from "./pricing.js";
 import { pairingCodeQrSvg } from "./qr-code.js";
@@ -878,8 +879,8 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
     ? { ...localDevice, tableId: assignedTableId, label: customerDeviceConfig.tableLabel || localDevice.label }
     : localDevice;
   const online = apiMode ? typeof navigator === "undefined" || navigator.onLine !== false : !state.offlineDevices.includes(device.deviceId);
-  const [apiMenu, setApiMenu] = useState(null);
-  const [apiMenuState, setApiMenuState] = useState({ loading: apiMode, error: false });
+  const [apiMenuState, dispatchApiMenuState] = useReducer(customerMenuStateReducer, apiMode, createCustomerMenuState);
+  const apiMenu = apiMenuState.menu;
   const [menuRefreshKey, setMenuRefreshKey] = useState(0);
   const menuItems = apiMenu
     ? apiMenu.items.map((item) => ({
@@ -980,13 +981,12 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
   useEffect(() => {
     if (!apiMode) return undefined;
     let cancelled = false;
-    setApiMenuState({ loading: true, error: false });
+    dispatchApiMenuState({ type: "load-started" });
     void orderClient.getMenu().then((menu) => {
       if (cancelled) return;
-      setApiMenu(menu);
-      setApiMenuState({ loading: false, error: false });
+      dispatchApiMenuState({ type: "load-succeeded", menu });
     }).catch(() => {
-      if (!cancelled) setApiMenuState({ loading: false, error: true });
+      if (!cancelled) dispatchApiMenuState({ type: "load-failed" });
     });
     return () => { cancelled = true; };
   }, [apiMode, orderClient, menuRefreshKey]);
@@ -1566,7 +1566,9 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
             </nav> : null}
             {isShochu ? <nav className="drink-jump-nav" aria-label="焼酎の分類"><button onClick={() => imoRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })}>芋</button><button onClick={() => otherRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })}>麦・その他</button></nav> : null}
             <div className="menu-list">
-              {apiMenuState.loading ? <div className="empty-state"><ListBullets size={42} /><p>メニューを読み込んでいます。</p></div> : apiMenuState.error ? <div className="empty-state"><ListBullets size={42} /><p>メニューを取得できません。</p></div> : currentItems.length ? currentItems.map((item, index) => {
+              {apiMenuState.loading && !apiMenu ? <div className="empty-state"><ListBullets size={42} /><p>メニューを読み込んでいます。</p></div> : apiMenuState.error && !apiMenu ? <div className="empty-state"><ListBullets size={42} /><p>メニューを取得できません。</p></div> : <>
+                {apiMenuState.error ? <div className="cart-context-status" role="status">メニューを更新できません。通信状態を確認してください。<ConnectionBadge online={online} compact announceStatus /></div> : null}
+                {currentItems.length ? currentItems.map((item, index) => {
                 const previous = currentItems[index - 1];
                 const isOtherStart = isShochu && item.sectionKey !== "芋" && (index === 0 || previous?.sectionKey === "芋");
                 const showListImage = listImageVisible(item) && Boolean(item.imageUri);
@@ -1593,7 +1595,8 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
                 return (
                   <div key={item.id}>{isOtherStart ? <div className="menu-section-divider" ref={otherRef}><b>麦・その他</b><span>麦焼酎・黒糖・泡盛など</span></div> : null}{row}</div>
                 );
-              }) : <div className="empty-state"><ListBullets size={42} /><p>このカテゴリの商品はまだありません。</p></div>}
+                }) : <div className="empty-state"><ListBullets size={42} /><p>このカテゴリの商品はまだありません。</p></div>}
+              </>}
             </div>
           </section>
 

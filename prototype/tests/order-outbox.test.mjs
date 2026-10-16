@@ -733,6 +733,7 @@ test("customer invalidation subscription refreshes on safe SSE events and preser
   assert.equal(requests[0].options.headers["X-Event-Epoch"], undefined);
   assert.equal(requests[0].options.headers["Last-Event-ID"], undefined);
   assert.equal(timers.length, 1);
+  assert.equal(timers[0].delay, 3000);
 
   timers[0].callback();
   await new Promise((resolve) => setImmediate(resolve));
