@@ -449,6 +449,27 @@ test('product image upload is admin-only, validates actual image data and size, 
       assert.match(accepted.json.uri, new RegExp(`\\.${fixture.extension}$`));
     }
 
+    const transparentExtendedWebp = await readFile(new URL('./fixtures/product-image-vpx8-alpha.webp', import.meta.url));
+    const acceptedTransparentWebp = await requestImage({
+      port, token: ADMIN_TOKEN, bytes: transparentExtendedWebp, contentType: 'image/webp',
+    });
+    assert.equal(acceptedTransparentWebp.statusCode, 201);
+    assert.match(acceptedTransparentWebp.json.uri, /\.webp$/);
+    const retrievedTransparentWebp = await new Promise((resolve, reject) => http.get({
+      host: '127.0.0.1', port, path: acceptedTransparentWebp.json.uri, agent: false,
+    }, (response) => {
+      const chunks = [];
+      response.on('data', (chunk) => chunks.push(chunk));
+      response.on('end', () => resolve({
+        statusCode: response.statusCode,
+        contentType: response.headers['content-type'],
+        bytes: Buffer.concat(chunks),
+      }));
+    }).on('error', reject));
+    assert.equal(retrievedTransparentWebp.statusCode, 200);
+    assert.equal(retrievedTransparentWebp.contentType, 'image/webp');
+    assert.deepEqual(retrievedTransparentWebp.bytes, transparentExtendedWebp);
+
     const catalogSave = await request({ port, token: ADMIN_TOKEN, body: { ...writeBody(), imageUri: uploaded.json.uri } });
     assert.equal(catalogSave.statusCode, 200);
     const customerMenu = await request({ port, token: CUSTOMER_TOKEN, method: 'GET', path: '/v1/menu' });

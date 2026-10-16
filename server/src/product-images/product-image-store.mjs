@@ -78,12 +78,45 @@ function isJpeg(bytes) {
 function isWebp(bytes) {
   if (bytes.length < 25 || bytes.toString('ascii', 0, 4) !== 'RIFF'
     || bytes.toString('ascii', 8, 12) !== 'WEBP' || bytes.readUInt32LE(4) + 8 !== bytes.length) return false;
-  const chunkType = bytes.toString('ascii', 12, 16);
-  const chunkSize = bytes.readUInt32LE(16);
-  if (20 + chunkSize + (chunkSize & 1) !== bytes.length) return false;
-  if (chunkType === 'VP8 ') return chunkSize >= 10 && bytes[23] === 0x9d && bytes[24] === 0x01 && bytes[25] === 0x2a;
-  if (chunkType === 'VP8L') return chunkSize >= 5 && bytes[20] === 0x2f;
-  if (chunkType === 'VP8X') return chunkSize >= 10;
+  let offset = 12;
+  let chunkCount = 0;
+  let extended = false;
+  let hasAlpha = false;
+  let imageType = null;
+  while (offset + 8 <= bytes.length) {
+    const chunkType = bytes.toString('ascii', offset, offset + 4);
+    const chunkSize = bytes.readUInt32LE(offset + 4);
+    const dataStart = offset + 8;
+    const dataEnd = dataStart + chunkSize;
+    const chunkEnd = dataEnd + (chunkSize & 1);
+    if (dataEnd > bytes.length || chunkEnd > bytes.length) return false;
+
+    if (chunkCount === 0) {
+      if (chunkType === 'VP8X') {
+        if (chunkSize !== 10) return false;
+        extended = true;
+      } else if (chunkType !== 'VP8 ' && chunkType !== 'VP8L') return false;
+    } else if (!extended) return false;
+
+    if (chunkType === 'VP8X' && chunkCount !== 0) return false;
+    if (chunkType === 'ALPH') {
+      if (!extended || hasAlpha || imageType !== null) return false;
+      hasAlpha = true;
+    } else if (chunkType === 'VP8 ' || chunkType === 'VP8L') {
+      if (imageType !== null) return false;
+      if (chunkType === 'VP8 ') {
+        if (chunkSize < 10 || bytes[dataStart + 3] !== 0x9d
+          || bytes[dataStart + 4] !== 0x01 || bytes[dataStart + 5] !== 0x2a) return false;
+      } else if (chunkSize < 5 || bytes[dataStart] !== 0x2f || hasAlpha) return false;
+      imageType = chunkType;
+    } else if (!['VP8X', 'ICCP', 'EXIF', 'XMP ', 'ALPH'].includes(chunkType)) return false;
+
+    offset = chunkEnd;
+    chunkCount += 1;
+    if (offset === bytes.length) {
+      return imageType !== null && (extended || chunkCount === 1);
+    }
+  }
   return false;
 }
 
