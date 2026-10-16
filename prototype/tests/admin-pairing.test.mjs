@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { confirmAndCloseAdminEmptySession, createAdminRideGuidanceContact, deleteAdminRideGuidanceContact, fetchAdminCheckoutRequests, fetchAdminCustomerTheme, fetchAdminCustomerThemeConfig, fetchAdminRideGuidance, saveAdminCustomerTheme, saveAdminCustomerThemeConfig, saveAdminRideGuidanceOrdering, saveAdminRideGuidancePickup, updateAdminRideGuidanceContact, fetchAdminBusinessHours, saveAdminBusinessHours, saveAdminCategory, saveAdminMenuItem, saveAdminMenuOrdering, fetchAdminSessionMenuAccess, allowAdminSessionMenuItem, revokeAdminSessionMenuItem, fetchAdminCustomerOrderStartNotice, saveAdminCustomerOrderStartNotice } from '../src/admin-pairing.js';
+import { confirmAndCloseAdminEmptySession, createAdminRideGuidanceContact, deleteAdminRideGuidanceContact, fetchAdminCheckoutRequests, fetchAdminCustomerTheme, fetchAdminCustomerThemeConfig, fetchAdminRideGuidance, saveAdminCustomerTheme, saveAdminCustomerThemeConfig, saveAdminRideGuidanceOrdering, saveAdminRideGuidancePickup, updateAdminRideGuidanceContact, fetchAdminBusinessHours, saveAdminBusinessHours, saveAdminCategory, saveAdminMenuItem, saveAdminMenuOrdering, fetchAdminSessionMenuAccess, allowAdminSessionMenuItem, revokeAdminSessionMenuItem, fetchAdminCustomerOrderStartNotice, saveAdminCustomerOrderStartNotice, uploadAdminProductImage } from '../src/admin-pairing.js';
 
 const env = {
   WARUN_ADMIN_API_TOKEN: 'admin-token-for-test',
@@ -141,6 +141,25 @@ test('saveAdminMenuItem exposes the safe HTTP status, code, and request ID on fa
       && error.code === 'INTERNAL_ERROR'
       && error.requestId === '00000000-0000-4000-8000-000000000003',
   );
+});
+
+test('uploadAdminProductImage sends the selected bytes with admin authorization and accepts only generated image URIs', async () => {
+  const file = new Blob([Uint8Array.from([137, 80, 78, 71])], { type: 'image/png' });
+  let captured;
+  const result = await uploadAdminProductImage({
+    env,
+    file,
+    fetchImpl: async (url, options) => {
+      captured = { url, options };
+      return { ok: true, json: async () => ({ uri: '/v1/product-images/00000000-0000-4000-8000-000000000001.png' }) };
+    },
+  });
+  assert.equal(captured.url, `${env.WARUN_API_BASE}/admin/catalog/menu-item/images`);
+  assert.equal(captured.options.method, 'POST');
+  assert.equal(captured.options.headers.Authorization, 'Bearer admin-token-for-test');
+  assert.equal(captured.options.headers['Content-Type'], 'image/png');
+  assert.equal(captured.options.body, file);
+  assert.equal(result.uri, '/v1/product-images/00000000-0000-4000-8000-000000000001.png');
 });
 
 test('admin category and ordering writes keep the authenticated batch contracts', async () => {

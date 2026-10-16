@@ -1972,6 +1972,7 @@ h1, h2, h3, p { margin: 0; }
 
 .product-image-uri-field { min-width: 0; display: grid; gap: 8px; align-content: start; }
 .product-image-uri-field > label, .product-image-location label { display: grid; gap: 6px; font-weight: 900; }
+.product-image-uri-field__preview { display: block; width: min(100%, 320px); max-height: 220px; object-fit: contain; object-position: left center; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
 .product-image-location { min-width: 0; display: grid; gap: 8px; padding: 12px; border: 1px solid var(--line); background: #fffaf3; font-size: 12px; overflow-wrap: anywhere; align-content: start; }
 .product-image-location input { width: 100%; min-width: 0; }
 .product-image-location__actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }

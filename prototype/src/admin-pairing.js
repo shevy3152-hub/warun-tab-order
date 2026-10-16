@@ -507,6 +507,30 @@ export async function saveAdminMenuItem({ env = globalThis, item, expectedVersio
   return body;
 }
 
+export async function uploadAdminProductImage({ env = globalThis, file, fetchImpl = env.fetch } = {}) {
+  const { token, base, fetchImpl: request } = assertAdminTransport({ env, fetchImpl });
+  if (!(file instanceof Blob)) throw new AdminPairingError("画像ファイルを選択してください。", { status: 400, code: "IMAGE_EMPTY" });
+  let response;
+  try {
+    response = await request(`${base}/admin/catalog/menu-item/images`, {
+      method: "POST",
+      headers: { Accept: "application/json", "Content-Type": file.type, Authorization: `Bearer ${token}` },
+      body: file,
+    });
+  } catch {
+    throw new AdminPairingError("画像をアップロードできませんでした。通信状態を確認してください。", { status: 503, code: "API_UNAVAILABLE" });
+  }
+  if (!response.ok) await responseError(response, "画像をアップロードできませんでした。");
+  let body;
+  try { body = await response.json(); } catch {
+    throw new AdminPairingError("画像アップロードの応答を確認できませんでした。", { status: 503, code: "API_UNAVAILABLE" });
+  }
+  if (typeof body?.uri !== "string" || !/^\/v1\/product-images\/[0-9a-f-]{36}\.(?:png|jpg|webp)$/.test(body.uri)) {
+    throw new AdminPairingError("画像アップロードの応答が不正です。", { status: 503, code: "API_UNAVAILABLE" });
+  }
+  return body;
+}
+
 async function saveAdminCatalogResource({ env = globalThis, path, body, fetchImpl = env.fetch, invalidMessage }) {
   const token = configuredAdminToken(env);
   const base = apiBase(env);

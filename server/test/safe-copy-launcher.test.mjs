@@ -9,6 +9,8 @@ const shortcutInstaller = await readFile(new URL('../scripts/install-safe-copy-s
 
 test('safe-copy launcher refuses production and derives LAN URL at runtime', () => {
   assert.match(script, /WARUN_ENV = 'safe-copy'/);
+  assert.match(script, /\$ProductImageStoragePath = if \(\[string\]::IsNullOrWhiteSpace\(\$env:WARUN_PRODUCT_IMAGE_STORAGE_PATH\)\) \{ Join-Path \$env:LOCALAPPDATA 'WarunTabOrder\\product-images' \} else \{ \$env:WARUN_PRODUCT_IMAGE_STORAGE_PATH \}/);
+  assert.match(script, /\$startInfo\.EnvironmentVariables\['WARUN_PRODUCT_IMAGE_STORAGE_PATH'\] = \$ProductImageStoragePath/);
   assert.match(script, /SafeCopiesRoot/);
   assert.match(script, /Refusing the production DB path/);
   assert.match(script, /Get-LanIPv4/);

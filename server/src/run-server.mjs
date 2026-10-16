@@ -22,6 +22,7 @@ import { createHttpServer } from "./http/http-server.mjs";
 import { createOrderRepository } from "./orders/order-repository.mjs";
 import { createStaffCallRepository } from "./staff-calls/staff-call-repository.mjs";
 import { createPairingService } from "./pairing/pairing-service.mjs";
+import { createProductImageStore } from "./product-images/product-image-store.mjs";
 import {
   classifyDatabaseTarget,
   createRuntimeInfo,
@@ -36,6 +37,7 @@ const DEFAULT_PORT = 8787;
 const DEFAULT_WEB_PORT = 5173;
 const SERVER_SOURCE_DIRECTORY = dirname(fileURLToPath(import.meta.url));
 export const DEFAULT_DATABASE_PATH = resolve(SERVER_SOURCE_DIRECTORY, '..', 'var', 'warun.sqlite3');
+export const DEFAULT_PRODUCT_IMAGE_STORAGE_PATH = resolve(SERVER_SOURCE_DIRECTORY, '..', 'var', 'product-images');
 export const DEFAULT_WEB_ROOT = resolve(SERVER_SOURCE_DIRECTORY, '..', '..', 'prototype', 'dist', 'client');
 const CONTENT_TYPES = Object.freeze({
   ".css": "text/css; charset=utf-8",
@@ -107,7 +109,23 @@ export function resolveOperationalPath({ value, fallback, name, requireExplicit 
   return resolve(selected);
 }
 
-export function createWarunServer({ databasePath, runtimeInfo = undefined, now = Date.now } = {}) {
+function isPathWithin(targetPath, parentPath) {
+  const pathFromParent = relative(parentPath, targetPath);
+  return pathFromParent === '' || (!pathFromParent.startsWith('..') && !isAbsolute(pathFromParent));
+}
+
+function validateProductImageStoragePath({ storagePath, repositoryRoot, productionMode }) {
+  const publicRoot = resolve(repositoryRoot, 'prototype', 'public');
+  const distRoot = resolve(repositoryRoot, 'prototype', 'dist');
+  if (isPathWithin(storagePath, publicRoot) || isPathWithin(storagePath, distRoot)) {
+    throw new Error('WARUN_PRODUCT_IMAGE_STORAGE_PATH must be outside prototype/public and prototype/dist.');
+  }
+  if (productionMode && isPathWithin(storagePath, repositoryRoot)) {
+    throw new Error('Production product images must be stored outside the release directory.');
+  }
+}
+
+export function createWarunServer({ databasePath, productImageStoragePath = DEFAULT_PRODUCT_IMAGE_STORAGE_PATH, productImageUploadsEnabled = true, runtimeInfo = undefined, now = Date.now } = {}) {
   const connection = initializeDatabase({ databasePath });
   const { database } = connection;
   const authenticator = createDeviceAuthenticator({ database });
@@ -122,6 +140,7 @@ export function createWarunServer({ databasePath, runtimeInfo = undefined, now =
   const orderRepository = createOrderRepository({ database, now });
   const staffCallRepository = createStaffCallRepository({ database, now });
   const pairingService = createPairingService({ database, now });
+  const productImageStore = createProductImageStore({ root: resolveOperationalPath({ value: productImageStoragePath, name: 'WARUN_PRODUCT_IMAGE_STORAGE_PATH' }) });
   const snapshotService = createSnapshotService({ catalog, eventRepository });
   const sseHub = createSseHub({ eventRepository });
   const pairingDiagnosticLogger = createPairingDiagnosticLogger(process.env.WARUN_PAIRING_DIAGNOSTIC_LOG_PATH);
@@ -158,6 +177,8 @@ export function createWarunServer({ databasePath, runtimeInfo = undefined, now =
     customerOrderNotice,
     rideGuidance,
     checkout,
+    productImageStore,
+    productImageUploadsEnabled,
   });
 
   const closeDependencies = () => {
@@ -244,6 +265,15 @@ async function main() {
     name: "WARUN_DB_PATH",
     requireExplicit: productionMode || safeCopyMode,
   });
+  const configuredProductImageStoragePath = process.env.WARUN_PRODUCT_IMAGE_STORAGE_PATH?.trim() || '';
+  const productImageStoragePath = resolveOperationalPath({
+    value: configuredProductImageStoragePath,
+    fallback: DEFAULT_PRODUCT_IMAGE_STORAGE_PATH,
+    name: "WARUN_PRODUCT_IMAGE_STORAGE_PATH",
+  });
+  if (configuredProductImageStoragePath) {
+    validateProductImageStoragePath({ storagePath: productImageStoragePath, repositoryRoot, productionMode });
+  }
   const runtimeInfo = createRuntimeInfo({
     databasePath,
     repositoryRoot,
@@ -256,7 +286,7 @@ async function main() {
   if (safeCopyMode && !isSafeCopyRuntime(runtimeInfo)) {
     throw new Error("WARUN_ENV=safe-copy requires a database under server/var/safe-copies and refuses production DB.");
   }
-  const application = createWarunServer({ databasePath, runtimeInfo });
+  const application = createWarunServer({ databasePath, productImageStoragePath, productImageUploadsEnabled: Boolean(configuredProductImageStoragePath), runtimeInfo });
   const webRoot = resolveOperationalPath({
     value: process.env.WARUN_WEB_ROOT,
     fallback: DEFAULT_WEB_ROOT,

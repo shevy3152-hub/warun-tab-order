@@ -88,6 +88,7 @@ import {
   readOrderJsonBody,
   readJsonBody,
 } from './json-body.mjs';
+import { ProductImageError, readProductImageRequest } from '../product-images/product-image-store.mjs';
 
 const ROUTE_METHODS = new Map([
   ['/v1/health', 'GET'],
@@ -129,6 +130,7 @@ const ROUTE_METHODS = new Map([
   ['/v1/admin/session-menu-access/grants', new Set(['POST', 'PUT'])],
   ['/v1/admin/session-menu-access/close-empty-session', 'POST'],
   ['/v1/admin/catalog/menu-item', 'PUT'],
+  ['/v1/admin/catalog/menu-item/images', 'POST'],
   ['/v1/admin/catalog/menu-item/image-layouts', 'PUT'],
   ['/v1/admin/catalog/category', 'PUT'],
   ['/v1/admin/catalog/menu-order', 'PUT'],
@@ -926,6 +928,8 @@ function createConfiguredHttpServer({
   rideGuidance = undefined,
   checkout = undefined,
   sessionMenuAccess = undefined,
+  productImageStore = undefined,
+  productImageUploadsEnabled = true,
 } = {}, { integrated }) {
   if (
     !authenticator
@@ -994,6 +998,8 @@ function createConfiguredHttpServer({
       if (!configuredMethods && integrated && /^\/v1\/(kitchen|admin)\/payment-records\/[0-9a-f-]{36}\/void$/.test(target.path)) {
         configuredMethods = 'POST';
       }
+      const productImageMatch = target.path.match(/^\/v1\/product-images\/([0-9a-f-]{36}\.(?:png|jpg|webp))$/);
+      if (!configuredMethods && productImageMatch) configuredMethods = 'GET';
       if (!configuredMethods) {
         drainRequest(request);
         throw createHttpError(HTTP_ERROR_CODES.NOT_FOUND);
@@ -1027,6 +1033,20 @@ function createConfiguredHttpServer({
           throw createHttpError(HTTP_ERROR_CODES.SERVICE_UNAVAILABLE);
         }
         writeJsonResponse(response, { statusCode: 200, body, requestId, headers: runtimeHealthHeaders(runtimeInfo) });
+        return;
+      }
+
+      if (productImageMatch) {
+        drainRequest(request);
+        const image = await requireService(productImageStore, 'read').read(productImageMatch[1]);
+        if (!image) throw createHttpError(HTTP_ERROR_CODES.NOT_FOUND);
+        response.writeHead(200, {
+          'Cache-Control': 'public, max-age=31536000, immutable',
+          'Content-Length': image.bytes.length,
+          'Content-Type': image.contentType,
+          'X-Content-Type-Options': 'nosniff',
+        });
+        response.end(image.bytes);
         return;
       }
 
@@ -1717,6 +1737,27 @@ function createConfiguredHttpServer({
         const result = writer.writeImageLayouts(principal, body);
         await notifyCommittedSafely(sseHub, { event: { eventEpoch: result.eventEpoch, eventId: result.eventId } });
         writeJsonResponse(response, { statusCode: 200, body: result, requestId });
+        return;
+      }
+
+      if (target.path === '/v1/admin/catalog/menu-item/images') {
+        authorizeDeviceRole(principal, ['admin']);
+        try {
+          if (!productImageUploadsEnabled) {
+            drainRequest(request);
+            throw new ProductImageError(503, 'IMAGE_STORAGE_NOT_CONFIGURED', '画像アップロードを利用できません。WARUN_PRODUCT_IMAGE_STORAGE_PATHが未設定です。');
+          }
+          const { bytes, format } = await readProductImageRequest(request);
+          const saved = await requireService(productImageStore, 'save').save(bytes, format);
+          writeJsonResponse(response, { statusCode: 201, body: saved, requestId });
+        } catch (error) {
+          if (!(error instanceof ProductImageError)) throw error;
+          writeJsonResponse(response, {
+            statusCode: error.statusCode,
+            body: { error: { code: error.code, message: error.message, requestId } },
+            requestId,
+          });
+        }
         return;
       }
 

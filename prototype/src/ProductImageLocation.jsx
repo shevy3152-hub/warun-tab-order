@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { uploadAdminProductImage } from "./admin-pairing.js";
 import { copyProductImageFolder, productImageLocation } from "./product-image-location.js";
 
 const publicImages = import.meta.glob("/public/menu-images/**/*.{png,jpg,jpeg,webp,avif,gif,svg}", { eager: true, query: "?url", import: "default" });
@@ -42,7 +43,39 @@ export function ProductImageLocation({ uri, label, fallback = false, fallbackUri
 
 export function ProductImageUriField({ name, label, initialUri = "", fallbackUri = "", resolveDisplayUri = (uri) => uri }) {
   const [uri, setUri] = useState(initialUri);
+  const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState("");
+  const [previewError, setPreviewError] = useState(false);
   useEffect(() => setUri(initialUri), [initialUri]);
+  useEffect(() => setPreviewError(false), [uri]);
+  const upload = async (event) => {
+    const file = event.currentTarget.files?.[0];
+    if (!file) return;
+    setUploadError("");
+    setUploading(true);
+    try {
+      const result = await uploadAdminProductImage({ env: window, file });
+      setUri(result.uri);
+    } catch (error) {
+      const messages = {
+        IMAGE_TOO_LARGE: "画像は5MB以下を選択してください。",
+        IMAGE_TYPE_UNSUPPORTED: "PNG・JPEG・WebP形式のみアップロードできます。",
+        IMAGE_DATA_INVALID: "選択した形式と画像データが一致しません。画像ファイルを確認してください。",
+        IMAGE_EMPTY: "画像データが空です。",
+        AUTHENTICATION_FAILED: "管理者認証に失敗しました。管理者として再接続してください。",
+        AUTHORIZATION_FAILED: "画像のアップロードには管理者権限が必要です。",
+      };
+      setUploadError(messages[error?.code] ?? error?.message ?? "画像をアップロードできませんでした。");
+    } finally { setUploading(false); }
+  };
   const displayUri = resolveDisplayUri(uri);
-  return <div className="product-image-uri-field"><label>{label}<input name={name} defaultValue={initialUri} onChange={(event) => setUri(event.target.value)} /></label>{displayUri !== uri ? <small>一覧表示ではURIのthumb-v1をthumb-v2へ読み替えます。</small> : null}<ProductImageLocation uri={displayUri} label={name === "detailImageUri" ? "詳細画像" : "一覧・商品画像"} fallback={name === "detailImageUri"} fallbackUri={fallbackUri} /></div>;
+  return <div className="product-image-uri-field">
+    <label>{label}<input name={name} value={uri} onChange={(event) => setUri(event.target.value)} /></label>
+    <label>{label}をアップロード<input type="file" accept="image/png,image/jpeg,image/webp" onChange={upload} disabled={uploading} /></label>
+    <small>{uploading ? "画像をアップロード中です。" : "PNG・JPEG・WebP、5MB以下。選択した画像はアップロード後にプレビューされます。商品への反映は保存ボタンを押した後です。"}</small>
+    {uploadError ? <small role="alert">{uploadError}</small> : null}
+    {displayUri && !previewError ? <img className="product-image-uri-field__preview" src={displayUri} alt={`${label}のプレビュー`} onError={() => setPreviewError(true)} /> : displayUri ? <small role="status">画像を表示できません。URIまたは配信状態を確認してください。</small> : null}
+    {displayUri !== uri ? <small>一覧表示ではURIのthumb-v1をthumb-v2へ読み替えます。</small> : null}
+    <ProductImageLocation uri={displayUri} label={name === "detailImageUri" ? "詳細画像" : "一覧・商品画像"} fallback={name === "detailImageUri"} fallbackUri={fallbackUri} />
+  </div>;
 }

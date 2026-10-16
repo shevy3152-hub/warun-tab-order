@@ -109,7 +109,7 @@ test("kitchen runtime is injected only into the admin shell", async () => {
   }
 });
 
-test("run-server stays alive until SIGINT and releases both ports", async () => {
+test("run-server starts without product image storage, rejects uploads, and releases both ports", async () => {
   const root = await mkdtemp(join(tmpdir(), "warun-lifecycle-"));
   const databasePath = join(root, "test.sqlite3");
   const adminToken = randomBytes(32).toString("base64url");
@@ -123,7 +123,7 @@ test("run-server stays alive until SIGINT and releases both ports", async () => 
   const webPort = 15173;
   const child = spawn(process.execPath, ["src/run-server.mjs"], {
     cwd: serverRoot,
-    env: { ...process.env, WARUN_DB_PATH: databasePath, WARUN_ADMIN_API_TOKEN: adminToken, WARUN_SERVER_PORT: String(apiPort), WARUN_WEB_PORT: String(webPort) },
+    env: { ...process.env, WARUN_ENV: "production", WARUN_DB_PATH: databasePath, WARUN_WEB_ROOT: DEFAULT_WEB_ROOT, WARUN_PRODUCT_IMAGE_STORAGE_PATH: "", WARUN_ADMIN_API_TOKEN: adminToken, WARUN_SERVER_PORT: String(apiPort), WARUN_WEB_PORT: String(webPort) },
     stdio: ["ignore", "pipe", "pipe"],
   });
   let output = "";
@@ -140,6 +140,15 @@ test("run-server stays alive until SIGINT and releases both ports", async () => 
     await ready;
     assert.equal((await fetch(`http://127.0.0.1:${apiPort}/v1/health`)).status, 200);
     assert.equal((await fetch(`http://127.0.0.1:${webPort}/`)).status, 200);
+    const uploadResponse = await fetch(`http://127.0.0.1:${apiPort}/v1/admin/catalog/menu-item/images`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${adminToken}`, "Content-Type": "image/png" },
+      body: Buffer.from("isolated-config-check"),
+    });
+    assert.equal(uploadResponse.status, 503);
+    const uploadFailure = await uploadResponse.json();
+    assert.equal(uploadFailure.error.code, "IMAGE_STORAGE_NOT_CONFIGURED");
+    assert.match(uploadFailure.error.message, /WARUN_PRODUCT_IMAGE_STORAGE_PATH.*未設定/);
     const adminHtmlResponse = await fetch(`http://127.0.0.1:${webPort}/admin.html`);
     assert.equal(adminHtmlResponse.status, 200);
     const adminHtml = await adminHtmlResponse.text();

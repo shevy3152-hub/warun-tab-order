@@ -37,6 +37,7 @@ $KitchenTokenPath = Join-Path $RuntimeRoot 'kitchen-token'
 $KitchenTokenProvisionScript = Join-Path $ServerRoot 'scripts\provision-safe-copy-kitchen-token.mjs'
 $PairingDiagnosticLogPath = Join-Path $LogRoot 'pairing-claims.ndjson'
 $CommunicationDiagnosticLogPath = Join-Path $LogRoot 'communication.ndjson'
+$ProductImageStoragePath = if ([string]::IsNullOrWhiteSpace($env:WARUN_PRODUCT_IMAGE_STORAGE_PATH)) { Join-Path $env:LOCALAPPDATA 'WarunTabOrder\product-images' } else { $env:WARUN_PRODUCT_IMAGE_STORAGE_PATH }
 $MenuDiagnosticLogPath = Join-Path $LogRoot 'menu-requests.ndjson'
 $MutexName = 'WarunTabOrder.SafeCopy.AdminLauncher'
 $mutex = $null
@@ -488,6 +489,7 @@ try {
     $startInfo.CreateNoWindow = $true
     $startInfo.EnvironmentVariables.Clear()
     foreach ($entry in (Get-ChildProcessEnvironment).GetEnumerator()) { $startInfo.EnvironmentVariables[$entry.Key] = $entry.Value }
+    $startInfo.EnvironmentVariables['WARUN_PRODUCT_IMAGE_STORAGE_PATH'] = $ProductImageStoragePath
     $process = [Diagnostics.Process]::new()
     $process.StartInfo = $startInfo
     $process.Start()

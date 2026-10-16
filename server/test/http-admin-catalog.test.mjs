@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import http from 'node:http';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -13,6 +13,7 @@ import { createEventRepository } from '../src/events/event-repository.mjs';
 import { createSnapshotService } from '../src/events/snapshot-service.mjs';
 import { createSseHub } from '../src/events/sse-hub.mjs';
 import { createHttpServer } from '../src/http/http-server.mjs';
+import { createProductImageStore, MAX_PRODUCT_IMAGE_BYTES } from '../src/product-images/product-image-store.mjs';
 import { createOrderRepository } from '../src/orders/order-repository.mjs';
 
 const uuid = (number) => `00000000-0000-4000-8000-${String(number).padStart(12, '0')}`;
@@ -133,8 +134,27 @@ function request({ port, token, body, method = 'PUT', path = '/v1/admin/catalog/
   });
 }
 
+function requestImage({ port, token, bytes, contentType = 'image/png' }) {
+  return new Promise((resolve, reject) => {
+    const client = http.request({
+      host: '127.0.0.1', port, path: '/v1/admin/catalog/menu-item/images', method: 'POST', agent: false,
+      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), 'Content-Type': contentType, 'Content-Length': bytes.length },
+    }, (response) => {
+      const chunks = [];
+      response.on('data', (chunk) => chunks.push(chunk));
+      response.on('end', () => {
+        const rawBody = Buffer.concat(chunks).toString('utf8');
+        resolve({ statusCode: response.statusCode, json: rawBody ? JSON.parse(rawBody) : null });
+      });
+    });
+    client.on('error', reject);
+    client.end(bytes);
+  });
+}
+
 async function withFixture(run) {
   const directory = await mkdtemp(join(tmpdir(), 'warun-admin-catalog-'));
+  const productImageStore = createProductImageStore({ root: join(directory, 'product-images') });
   const connection = initializeDatabase({ databasePath: join(directory, 'server.sqlite3') });
   let server;
   let catalog;
@@ -163,6 +183,7 @@ async function withFixture(run) {
       eventRepository: events,
       snapshotService: snapshots,
       sseHub: hub,
+      productImageStore,
       now: () => 1_800_000_001_000,
     });
     const port = await listen(server);
@@ -379,5 +400,59 @@ test('category and batch ordering endpoints enforce admin auth and optimistic ve
     assert.equal(database.prepare('SELECT sort_order FROM menu_items WHERE menu_item_id = ?').get('sake').sort_order, 10);
     const stale = await request({ port, token: ADMIN_TOKEN, path: '/v1/admin/catalog/menu-order', body: { categoryId: 'drink', menuItemIds: ['sake'], expectedVersion: 1 } });
     assert.equal(stale.statusCode, 409);
+  });
+});
+
+test('product image upload is admin-only, validates actual image data and size, then serves the saved image', async () => {
+  await withFixture(async ({ port, database }) => {
+    const validPng = await readFile(new URL('../../prototype/public/menu-images/sake/sake-fusashimaya-detail.png', import.meta.url));
+    const existingUri = '/menu-images/sake/sake-fusashimaya-detail.png';
+    database.prepare('UPDATE menu_items SET image_uri = ? WHERE menu_item_id = ?').run(existingUri, 'sake');
+    const before = await request({ port, token: ADMIN_TOKEN, method: 'GET', path: '/v1/menu' });
+    assert.equal(before.json.items.find(({ menuItemId }) => menuItemId === 'sake').imageUri, existingUri);
+    const denied = await requestImage({ port, bytes: validPng });
+    assert.equal(denied.statusCode, 401);
+
+    const invalid = await requestImage({ port, token: ADMIN_TOKEN, bytes: Buffer.from('not an image'), contentType: 'image/png' });
+    assert.equal(invalid.statusCode, 400);
+    assert.equal(invalid.json.error.code, 'IMAGE_DATA_INVALID');
+
+    const unsupported = await requestImage({ port, token: ADMIN_TOKEN, bytes: validPng, contentType: 'image/gif' });
+    assert.equal(unsupported.statusCode, 415);
+    assert.equal(unsupported.json.error.code, 'IMAGE_TYPE_UNSUPPORTED');
+
+    const oversized = await requestImage({ port, token: ADMIN_TOKEN, bytes: Buffer.alloc(MAX_PRODUCT_IMAGE_BYTES + 1) });
+    assert.equal(oversized.statusCode, 413);
+    assert.equal(oversized.json.error.code, 'IMAGE_TOO_LARGE');
+    const afterFailures = await request({ port, token: ADMIN_TOKEN, method: 'GET', path: '/v1/menu' });
+    assert.equal(afterFailures.json.items.find(({ menuItemId }) => menuItemId === 'sake').imageUri, existingUri);
+
+    const uploaded = await requestImage({ port, token: ADMIN_TOKEN, bytes: validPng });
+    assert.equal(uploaded.statusCode, 201);
+    assert.match(uploaded.json.uri, /^\/v1\/product-images\/[0-9a-f-]{36}\.png$/);
+    const image = await new Promise((resolve, reject) => http.get({ host: '127.0.0.1', port, path: uploaded.json.uri, agent: false }, (response) => {
+      const chunks = [];
+      response.on('data', (chunk) => chunks.push(chunk));
+      response.on('end', () => resolve({ statusCode: response.statusCode, contentType: response.headers['content-type'], bytes: Buffer.concat(chunks) }));
+    }).on('error', reject));
+    assert.equal(image.statusCode, 200);
+    assert.equal(image.contentType, 'image/png');
+    assert.deepEqual(image.bytes, validPng);
+
+    for (const fixture of [
+      { path: '../../prototype/public/menu-images/sake/sake-fusashimaya.jpg', contentType: 'image/jpeg', extension: 'jpg' },
+      { path: '../../prototype/public/menu-images/shochu/shochu-awamori-zanpa-white-detail-v1.webp', contentType: 'image/webp', extension: 'webp' },
+    ]) {
+      const bytes = await readFile(new URL(fixture.path, import.meta.url));
+      const accepted = await requestImage({ port, token: ADMIN_TOKEN, bytes, contentType: fixture.contentType });
+      assert.equal(accepted.statusCode, 201, fixture.contentType);
+      assert.match(accepted.json.uri, new RegExp(`\\.${fixture.extension}$`));
+    }
+
+    const catalogSave = await request({ port, token: ADMIN_TOKEN, body: { ...writeBody(), imageUri: uploaded.json.uri } });
+    assert.equal(catalogSave.statusCode, 200);
+    const customerMenu = await request({ port, token: CUSTOMER_TOKEN, method: 'GET', path: '/v1/menu' });
+    const savedItem = customerMenu.json.items.find(({ menuItemId }) => menuItemId === 'sake');
+    assert.equal(savedItem.imageUri, uploaded.json.uri);
   });
 });
