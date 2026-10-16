@@ -471,7 +471,9 @@ test("product details keep stored readings conditional and let shochu continue t
   assert.match(appSource, /titleExtra=\{detailItem\.detail\?\.reading \? <span className="modal__title-reading">\{detailItem\.detail\.reading\}<\/span> : null\}/);
   assert.doesNotMatch(appSource, /className="product-detail__reading"/);
   assert.match(appSource, /const chooseShochuFromDetail = \(item\) => \{[\s\S]*setDetailItem\(null\)[\s\S]*openShochuSelection\(item\)/);
+  assert.match(appSource, /const chooseSakeFromDetail = \(item\) => \{[\s\S]*setDetailItem\(null\)[\s\S]*openSakeSelection\(item\)/);
   assert.match(appSource, /detailItem\.categoryId === "shochu" && detailItem\.servingOptions\?\.length/);
+  assert.match(appSource, /detailItem\.categoryId === "sake" && detailItem\.variants\?\.length/);
   assert.match(appSource, />これにする<\/button>/);
   assert.match(appSource, /className="button button--quiet" onClick=\{\(\) => setDetailItem\(null\)\}>一覧へ戻る<\/button>/);
   assert.match(styles, /\.modal--product-detail \.modal__body \{[\s\S]*overflow: hidden/);
@@ -660,8 +662,11 @@ test("sake rows use one serving-method button and a direct serving-temperature p
   assert.match(customerScreen, /sakeSelectionError/);
   assert.match(customerScreen, /提供形態と温度を選択してください/);
   assert.match(customerScreen, /onClick=\{addSakeSelection\}/);
-  assert.doesNotMatch(customerScreen, /disabled=\{!selectedSakeVariant/);
-  assert.match(customerScreen, /<Plus size=\{24\} weight="bold" \/>追加/);
+  assert.match(customerScreen, /selectedSakeVariant && sakeSelection\.temperature && sakeTemperatureOptions\(selectedSakeVariant\)\.includes\(sakeSelection\.temperature\)/);
+  assert.match(appSource, /addSelection\(selectedSakeItem, \{ variant: selectedSakeVariant, temperature: sakeSelection\.temperature \}\)/);
+  assert.match(appSource, /const addSelection = \(item, selection = \{\}, quantity = 1\)/);
+  assert.match(customerScreen, /<PriceDisplay priceYen=\{variant\.priceYen\} \/>/);
+  assert.match(customerScreen, /onClick=\{addSakeSelection\}>これにする<\/button>/);
   assert.match(customerScreen, /temperature/);
   assert.match(appSource, /const SAKE_COLD = "冷酒"/);
   assert.match(appSource, /const SAKE_WARM = "燗酒"/);
@@ -681,7 +686,7 @@ test("sake variant temperature restrictions and kitchen labels are applied per v
   assert.match(customerScreen, /sakeTemperatureOptions\(variant\)\.map\(\(temperature\)/);
   assert.match(customerScreen, /sakeTemperatureLabel\(sakeTemperatureOptions\(variant\)\[0\], true\)/);
   assert.match(customerScreen, /if \(!sakeTemperatureOptions\(variant\)\.includes\(temperature\)\) return/);
-  assert.match(customerScreen, /addSelection\(selectedSakeItem, \{ variant: selectedSakeVariant, temperature: sakeSelection\.temperature \}\)/);
+  assert.match(appSource, /addSelection\(selectedSakeItem, \{ variant: selectedSakeVariant, temperature: sakeSelection\.temperature \}\)/);
   const kitchenBlock = appSource.slice(appSource.indexOf("function kitchenSakeVariantName"), appSource.indexOf("function PriceDisplay"));
   assert.match(kitchenBlock, /徳利/);
   assert.match(kitchenBlock, /\[12\]合/);
