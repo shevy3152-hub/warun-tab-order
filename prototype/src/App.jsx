@@ -29,7 +29,7 @@ import * as React from "react";
 import { createClientOrderId, createCustomerOrderClient, CustomerCheckoutError, resolveOrderApiConfig } from "./order-outbox.js";
 import { claimCustomerDevice, createIndexedDbCredentialStore, loadOrCreateCustomerDevice, pairingClaimErrorMessage, runtimeForCustomerCredentials } from "./device-credentials.js";
 import { customerOrderErrorCategory, customerOrderNoticeFromOutboxEvent } from "./customer-order-notice.js";
-import { AdminPairingError, configuredAdminToken, createAdminRideGuidanceContact, deleteAdminRideGuidanceContact, fetchAdminBusinessHours, fetchAdminCheckoutRequests, fetchAdminCustomerOrderStartNotice, fetchAdminCustomerThemeConfig, fetchAdminDiagnostics, fetchAdminMenu, fetchAdminSessionMenuAccess, allowAdminSessionMenuItem, confirmAndCloseAdminEmptySession, revokeAdminSessionMenuItem, fetchAdminOrderHistory, fetchAdminPaymentHistory, fetchAdminPairingPreflight, fetchAdminRideGuidance, issueCustomerPairingCode, revokeAdminDevice, saveAdminBusinessHours, saveAdminCustomerOrderStartNotice, saveAdminCustomerThemeConfig, saveAdminImageLayouts, saveAdminCategory, saveAdminMenuItem, saveAdminMenuOrdering, saveAdminRideGuidanceOrdering, saveAdminRideGuidancePickup, updateAdminRideGuidanceContact, voidAdminPayment } from "./admin-pairing.js";
+import { AdminPairingError, configuredAdminToken, createAdminRideGuidanceContact, deleteAdminRideGuidanceContact, fetchAdminBusinessHours, fetchAdminCheckoutRequests, fetchAdminCustomerOrderStartNotice, fetchAdminCustomerThemeConfig, fetchAdminDiagnostics, fetchAdminMenu, fetchAdminSessionMenuAccess, fetchArchivedAdminMenuItems, previewAdminMenuItemLifecycle, executeAdminMenuItemLifecycle, restoreArchivedAdminMenuItem, allowAdminSessionMenuItem, confirmAndCloseAdminEmptySession, revokeAdminSessionMenuItem, fetchAdminOrderHistory, fetchAdminPaymentHistory, fetchAdminPairingPreflight, fetchAdminRideGuidance, issueCustomerPairingCode, revokeAdminDevice, saveAdminBusinessHours, saveAdminCustomerOrderStartNotice, saveAdminCustomerThemeConfig, saveAdminImageLayouts, saveAdminCategory, saveAdminMenuItem, saveAdminMenuOrdering, saveAdminRideGuidanceOrdering, saveAdminRideGuidancePickup, updateAdminRideGuidanceContact, voidAdminPayment } from "./admin-pairing.js";
 import { adjustKitchenItemUnitPrice, adjustKitchenOrderItemQuantity as adjustKitchenItemQuantityRequest, cancelKitchenCheckout, cancelKitchenOrderItem, closeKitchenTableSession, createKitchenOrder, fetchKitchenCheckoutRequests, fetchKitchenOrderHistory, fetchKitchenPaymentHistory, fetchKitchenSnapshot, kitchenAdditionRequestItem, kitchenApiConfigured, KitchenApiError, markKitchenItemServed, payKitchenCheckout, readyKitchenCheckout, resolveKitchenStaffCall, restoreKitchenOrderItem, saveKitchenCheckoutAdjustments, subscribeKitchenInvalidations, voidKitchenPayment } from "./kitchen-api.js";
 import { buildKitchenTableGroups } from "./kitchen-order-board.js";
 import { bootstrapCustomerOrderClient } from "./customer-bootstrap.js";
@@ -3314,6 +3314,9 @@ function AdminScreen({ state, updateState, section = "menu" }) {
   const [categoryEditorId, setCategoryEditorId] = useState(null);
   const [adminMenuSection, setAdminMenuSection] = useState("all");
   const [adminMenuCategory, setAdminMenuCategory] = useState("all");
+  const [showArchivedMenuItems, setShowArchivedMenuItems] = useState(false);
+  const [archivedMenuItems, setArchivedMenuItems] = useState([]);
+  const [menuItemLifecycle, setMenuItemLifecycle] = useState(null);
   const menuCardRefs = useRef(new Map());
   const menuScrollAnchor = useRef(null);
   const [businessHoursState, setBusinessHoursState] = useState({ loading: adminApiMode && section === "hours", saving: false, error: false, message: "", messageKind: "", formal: null, draft: DEFAULT_BUSINESS_HOURS });
@@ -3701,6 +3704,55 @@ function AdminScreen({ state, updateState, section = "menu" }) {
     updateState((current) => ({ ...current, ...mapAdminCatalogState(catalog) }));
     return catalog;
   };
+  const refreshArchivedMenuItems = async () => {
+    const items = await fetchArchivedAdminMenuItems({ env: window });
+    setArchivedMenuItems(items);
+    return items;
+  };
+  const openMenuItemLifecycle = async (item) => {
+    if (!adminApiMode) {
+      setCatalogState((current) => ({ ...current, message: "削除・アーカイブは認証済み管理API接続時に利用できます。" }));
+      return;
+    }
+    setMenuItemLifecycle({ kind: "checking", item, busy: true, error: "" });
+    try {
+      const preview = await previewAdminMenuItemLifecycle({ env: window, menuItemId: item.id, expectedVersion: item.version });
+      setMenuItemLifecycle({ kind: preview.disposition, item: { ...item, name: preview.formalName }, expectedVersion: preview.version, disposition: preview.disposition, busy: false, error: "" });
+    } catch (error) {
+      setMenuItemLifecycle(null);
+      setCatalogState({ loading: false, error: false, saving: false, message: error?.status === 409 ? "商品が更新されています。管理一覧を再読込してから操作してください。" : "商品を処理できるか確認できませんでした。" });
+    }
+  };
+  const openArchivedRestore = (item) => setMenuItemLifecycle({ kind: "restore", item: { id: item.menuItemId, name: item.formalName, categoryId: item.categoryId, version: item.version }, expectedVersion: item.version, busy: false, error: "" });
+  const confirmMenuItemLifecycle = async () => {
+    if (!menuItemLifecycle || menuItemLifecycle.busy || menuItemLifecycle.kind === "checking") return;
+    const current = menuItemLifecycle;
+    setMenuItemLifecycle((value) => ({ ...value, busy: true, error: "" }));
+    try {
+      if (current.kind === "restore") {
+        await restoreArchivedAdminMenuItem({ env: window, menuItemId: current.item.id, expectedVersion: current.expectedVersion });
+      } else {
+        await executeAdminMenuItemLifecycle({ env: window, menuItemId: current.item.id, expectedVersion: current.expectedVersion, expectedDisposition: current.disposition });
+      }
+      await refreshAdminCatalog();
+      await refreshArchivedMenuItems();
+      setMenuItemLifecycle(null);
+      setCatalogState({ loading: false, error: false, saving: false, message: current.kind === "restore" ? "商品を客席非表示で復帰しました。表示する場合は通常編集から変更してください。" : current.disposition === "archive" ? "商品をアーカイブしました。注文履歴と画像ファイルは保持されています。" : "商品を削除しました。画像ファイルは保持されています。" });
+    } catch (error) {
+      setMenuItemLifecycle((value) => ({ ...value, busy: false, error: error?.status === 409 ? "確認後に商品または注文履歴が更新されました。管理一覧を再読込し、内容を確認してから再操作してください。" : "処理を完了できませんでした。商品は変更されていません。" }));
+      if (error?.status === 409) {
+        try { await refreshAdminCatalog(); await refreshArchivedMenuItems(); } catch { /* Keep the confirmation error visible. */ }
+      }
+    }
+  };
+  const toggleArchivedMenuItems = async () => {
+    const next = !showArchivedMenuItems;
+    setShowArchivedMenuItems(next);
+    if (next && adminApiMode) {
+      try { await refreshArchivedMenuItems(); }
+      catch { setCatalogState((value) => ({ ...value, message: "アーカイブ商品を取得できませんでした。" })); }
+    }
+  };
   const saveCategory = async (event) => {
     event.preventDefault();
     if (catalogState.saving) return;
@@ -3894,7 +3946,8 @@ function AdminScreen({ state, updateState, section = "menu" }) {
 
         {section === "menu-access" ? <SessionMenuAccessPanel adminApiMode={adminApiMode} menuItems={state.menuItems} /> : null}
         {section === "menu" ? <>
-           <div className="admin-toolbar"><div className="admin-metrics"><span>登録数 <b>{state.menuItems.length}</b> 品</span><span>売り切れ <b>{Math.max(2, state.menuItems.filter((item) => item.isSoldOut).length)}</b> 品</span></div><div className="admin-toolbar__actions"><button className="button button--outline" type="button" onClick={() => reorderMode ? cancelReorder() : beginReorder()}>{reorderMode ? "通常編集へ戻る" : "並び替えモード"}</button><button className="button button--outline button--large" onClick={() => showAdd ? closeMenuEditor() : openNewMenuEditor()}><Plus size={28} weight="bold" /> {showAdd ? "編集を閉じる" : "新しいメニューを追加"}</button></div></div>
+           <div className="admin-toolbar"><div className="admin-metrics"><span>登録数 <b>{state.menuItems.length}</b> 品</span><span>売り切れ <b>{Math.max(2, state.menuItems.filter((item) => item.isSoldOut).length)}</b> 品</span></div><div className="admin-toolbar__actions"><button className="button button--outline" type="button" disabled={!adminApiMode} onClick={() => void toggleArchivedMenuItems()}>{showArchivedMenuItems ? "通常の商品一覧" : "アーカイブ商品"}</button><button className="button button--outline" type="button" onClick={() => reorderMode ? cancelReorder() : beginReorder()}>{reorderMode ? "通常編集へ戻る" : "並び替えモード"}</button><button className="button button--outline button--large" onClick={() => showAdd ? closeMenuEditor() : openNewMenuEditor()}><Plus size={28} weight="bold" /> {showAdd ? "編集を閉じる" : "新しいメニューを追加"}</button></div></div>
+           {showArchivedMenuItems ? <section className="menu-archive-list" aria-label="アーカイブ商品"><h2>アーカイブ商品</h2>{archivedMenuItems.length ? archivedMenuItems.map((item) => <article key={item.menuItemId}><div><b>{item.formalName}</b><span>{categoriesById[item.categoryId]?.name ?? item.categoryId} ・ {yen(item.priceYen)} ・ {new Date(item.archivedAtMs).toLocaleString("ja-JP")}にアーカイブ</span></div><button className="button button--outline" type="button" onClick={() => openArchivedRestore(item)}>復帰</button></article>) : <p>アーカイブ商品はありません。</p>}</section> : null}
            <div className="admin-menu-filters" aria-label="メニューカテゴリ切替">
              <div className="admin-menu-filters__row" role="tablist" aria-label="大分類">
                {[['all', 'すべて'], ...adminSectionOptions.map((id) => [id, ({ food: 'フード', drink: 'ドリンク', winter: '冬季限定', seasonal: '季節・気まぐれ' }[id] || id)])].map(([id, label]) => <button type="button" role="tab" aria-selected={adminMenuSection === id} className={adminMenuSection === id ? 'is-active' : ''} key={id} onClick={() => { setAdminMenuSection(id); setAdminMenuCategory('all'); }}>{label}</button>)}
@@ -3937,7 +3990,7 @@ function AdminScreen({ state, updateState, section = "menu" }) {
             <label className="menu-editor__wide">おすすめコメント<textarea name="recommendation" defaultValue={editingMenu?.detail?.recommendation ?? ""} /></label>
              <div className="menu-editor__actions"><button className="button button--quiet" type="button" onClick={resetMenuEditor} disabled={catalogState.saving}>キャンセル</button><button className="button button--primary" type="submit" disabled={catalogState.saving}>{catalogState.saving ? "保存中" : editingMenu ? "変更を保存" : "追加する"}</button></div>
            </form> : null}
-          {reorderMode ? <div className="menu-reorder-list" aria-label="商品の並び替え">{reorderDraftIds.map((id) => selectedReorderGroup?.items.find((entry) => entry.id === id)).filter(Boolean).map((item) => <div className="menu-reorder-row" key={item.id} onDragOver={(event) => event.preventDefault()} onDrop={() => { moveReorderItem(draggedMenuId, item.id); setDraggedMenuId(null); }}><button className="reorder-handle" type="button" draggable={!catalogState.saving} aria-label={`${item.name}をドラッグして並び替え`} onDragStart={() => setDraggedMenuId(item.id)}>≡</button><b>{String(reorderDraftIds.indexOf(item.id) + 1).padStart(2, "0")}</b><span>{item.name}</span><small>{item.kitchenAlias ?? item.name}</small><button type="button" className="button button--quiet" onClick={() => shiftReorderItem(item.id, -1)} disabled={catalogState.saving}>上へ</button><button type="button" className="button button--quiet" onClick={() => shiftReorderItem(item.id, 1)} disabled={catalogState.saving}>下へ</button></div>)}</div> : <div className="menu-admin-list"><div className="admin-row admin-row--header"><span>画像</span><span>カテゴリー</span><span>正式名・通称</span><span>価格（税込）</span><span>販売状況</span><span>並び順</span><span>操作</span></div>{displayedMenuGroups.map(({ category, items }) => <section className="menu-admin-group" key={category.id}><h3 className="menu-admin-group__heading"><span>{category.name}</span><small>{items.length}品</small></h3>{items.map((item) => <React.Fragment key={item.id}><div className={`admin-row ${item.isSoldOut ? "is-muted" : ""}`} ref={(node) => { if (node) menuCardRefs.current.set(item.id, node); else menuCardRefs.current.delete(item.id); }}><div className="admin-menu-card__image">{item.imageUri || item.detail?.imageUri ? <div className="admin-menu-card__image-frame"><img src={item.imageUri || item.detail.imageUri} alt="" style={imageLayoutStyle(item, "thumbnail")} /></div> : <span>画像なし</span>}</div><span className="category-tag">{category.name}</span><div className="admin-row__name"><b>{item.name}</b><small>通称：{item.kitchenAlias ?? DEFAULT_KITCHEN_MENU_ALIASES[item.id] ?? item.name}</small></div><div className="admin-menu-card__price"><small>税込</small><strong>{yen(item.price)}</strong></div><div className={`admin-menu-card__status ${adminMenuAvailability(item).className}`}><i></i>{adminMenuAvailability(item).label}</div><div className="admin-row__actions"><button className="button button--primary" type="button" onClick={() => openMenuEditor(item.id)}>{editingMenuId === item.id ? "編集中" : "編集"}</button><button className="button button--quiet" type="button" onClick={() => setMenuItem(item.id, { isSoldOut: !item.isSoldOut })}>{item.isSoldOut ? "販売再開" : "売り切れ"}</button><button className="button button--quiet" type="button" onClick={() => setImageLayoutItemId(item.id)}>画像</button></div></div>{null}</React.Fragment>)}</section>)}</div>}
+          {reorderMode ? <div className="menu-reorder-list" aria-label="商品の並び替え">{reorderDraftIds.map((id) => selectedReorderGroup?.items.find((entry) => entry.id === id)).filter(Boolean).map((item) => <div className="menu-reorder-row" key={item.id} onDragOver={(event) => event.preventDefault()} onDrop={() => { moveReorderItem(draggedMenuId, item.id); setDraggedMenuId(null); }}><button className="reorder-handle" type="button" draggable={!catalogState.saving} aria-label={`${item.name}をドラッグして並び替え`} onDragStart={() => setDraggedMenuId(item.id)}>≡</button><b>{String(reorderDraftIds.indexOf(item.id) + 1).padStart(2, "0")}</b><span>{item.name}</span><small>{item.kitchenAlias ?? item.name}</small><button type="button" className="button button--quiet" onClick={() => shiftReorderItem(item.id, -1)} disabled={catalogState.saving}>上へ</button><button type="button" className="button button--quiet" onClick={() => shiftReorderItem(item.id, 1)} disabled={catalogState.saving}>下へ</button></div>)}</div> : <div className="menu-admin-list"><div className="admin-row admin-row--header"><span>画像</span><span>カテゴリー</span><span>正式名・通称</span><span>価格（税込）</span><span>販売状況</span><span>並び順</span><span>操作</span></div>{displayedMenuGroups.map(({ category, items }) => <section className="menu-admin-group" key={category.id}><h3 className="menu-admin-group__heading"><span>{category.name}</span><small>{items.length}品</small></h3>{items.map((item) => <React.Fragment key={item.id}><div className={`admin-row ${item.isSoldOut ? "is-muted" : ""}`} ref={(node) => { if (node) menuCardRefs.current.set(item.id, node); else menuCardRefs.current.delete(item.id); }}><div className="admin-menu-card__image">{item.imageUri || item.detail?.imageUri ? <div className="admin-menu-card__image-frame"><img src={item.imageUri || item.detail.imageUri} alt="" style={imageLayoutStyle(item, "thumbnail")} /></div> : <span>画像なし</span>}</div><span className="category-tag">{category.name}</span><div className="admin-row__name"><b>{item.name}</b><small>通称：{item.kitchenAlias ?? DEFAULT_KITCHEN_MENU_ALIASES[item.id] ?? item.name}</small></div><div className="admin-menu-card__price"><small>税込</small><strong>{yen(item.price)}</strong></div><div className={`admin-menu-card__status ${adminMenuAvailability(item).className}`}><i></i>{adminMenuAvailability(item).label}</div><div className="admin-row__actions"><button className="button button--primary" type="button" onClick={() => openMenuEditor(item.id)}>{editingMenuId === item.id ? "編集中" : "編集"}</button><button className="button button--quiet" type="button" onClick={() => setMenuItem(item.id, { isSoldOut: !item.isSoldOut })}>{item.isSoldOut ? "販売再開" : "売り切れ"}</button><button className="button button--quiet" type="button" onClick={() => setImageLayoutItemId(item.id)}>画像</button><button className="button button--quiet" type="button" onClick={() => void openMenuItemLifecycle(item)}>削除・アーカイブ</button></div></div>{null}</React.Fragment>)}</section>)}</div>}
         </> : null}
 
         {section === "categories" ? <>
@@ -4031,6 +4084,11 @@ function AdminScreen({ state, updateState, section = "menu" }) {
         </> : null}
       </section>
       {pairingQr ? <Modal title="客席端末をQRで登録" onClose={() => setPairingQr(null)} wide><div className="pairing-qr-modal"><p>A90のカメラでこのQRを読み取ってください。登録画面にコードが自動入力されます。</p><div className="pairing-qr-modal__image" dangerouslySetInnerHTML={{ __html: pairingQr.svg }} /><p>QR接続先: {pairingQr.origin}</p><p>QRには現在のLAN URLと一回限りのペアリング情報が含まれています。手入力コードは表示しません。</p><button className="button button--quiet" type="button" onClick={() => setPairingQr(null)}>閉じる</button></div></Modal> : null}
+      {menuItemLifecycle ? <Modal title={menuItemLifecycle.kind === "checking" ? "商品情報を確認しています" : menuItemLifecycle.kind === "restore" ? "アーカイブ商品を復帰しますか？" : menuItemLifecycle.disposition === "archive" ? "商品をアーカイブしますか？" : "商品を削除しますか？"} onClose={() => { if (!menuItemLifecycle.busy && menuItemLifecycle.kind !== "checking") setMenuItemLifecycle(null); }}>
+        <div className="modal-lead"><b>{menuItemLifecycle.item.name}</b>{menuItemLifecycle.kind === "checking" ? <p>商品参照を確認しています。</p> : menuItemLifecycle.kind === "restore" ? <p>この商品を通常の商品一覧へ戻します。安全のため「客席非表示」で復帰します。客席へ表示する場合は、復帰後に通常編集から変更してください。注文履歴と画像ファイルは保持されます。</p> : menuItemLifecycle.disposition === "archive" ? <p>注文履歴などの参照があるため、商品をアーカイブします。注文履歴と画像ファイルは削除しません。</p> : <p>保持対象の参照がないため、商品登録を削除します。画像ファイルは共有・履歴利用の可能性があるため削除しません。</p>}</div>
+        {menuItemLifecycle.error ? <p className="checkout-feedback checkout-feedback--error" role="alert">{menuItemLifecycle.error}</p> : null}
+        {menuItemLifecycle.kind !== "checking" ? <div className="modal-actions"><button type="button" className="button button--quiet" onClick={() => setMenuItemLifecycle(null)} disabled={menuItemLifecycle.busy}>キャンセル</button><button type="button" className="button button--primary button--large" onClick={() => void confirmMenuItemLifecycle()} disabled={menuItemLifecycle.busy}>{menuItemLifecycle.busy ? "処理中…" : menuItemLifecycle.kind === "restore" ? "客席非表示で復帰" : menuItemLifecycle.disposition === "archive" ? "アーカイブする" : "削除する"}</button></div> : null}
+      </Modal> : null}
       {imageLayoutItemId ? <ImageLayoutEditor item={state.menuItems.find((item) => item.id === imageLayoutItemId)} onClose={() => setImageLayoutItemId(null)} onSaved={(imageLayouts, version) => { updateState((current) => ({ ...current, menuItems: current.menuItems.map((item) => item.id === imageLayoutItemId ? { ...item, imageLayouts, version } : item) })); setImageLayoutItemId(null); }} /> : null}
     </StaffShell>
   );

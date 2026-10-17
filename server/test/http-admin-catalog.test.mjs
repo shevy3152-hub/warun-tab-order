@@ -242,6 +242,24 @@ function writeBody(expectedVersion = 1, tableVisibility = { tableVisibilityMode:
   };
 }
 
+function seedOrderItemReference(database, menuItemId, suffix = 0) {
+  const orderId = uuid(9_100 + suffix * 2);
+  database.prepare(`
+    INSERT INTO orders (
+      order_id, client_order_id, request_fingerprint, canonical_request_json,
+      customer_device_id, table_id, table_number_snapshot, total_amount_yen,
+      accepted_at_ms, status
+    ) VALUES (?, ?, ?, '{}', ?, 1, 1, 700, 1000, 'new')
+  `).run(orderId, uuid(9_101 + suffix * 2), 'a'.repeat(64), CUSTOMER_ID);
+  database.prepare(`
+    INSERT INTO order_items (
+      order_id, line_index, menu_item_id, formal_name_snapshot, kitchen_alias_snapshot,
+      unit_price_yen_snapshot, quantity, line_total_yen, created_at_ms, updated_at_ms
+    ) VALUES (?, 0, ?, '履歴上の正式名', '履歴上の通称', 700, 1, 700, 1000, 1000)
+  `).run(orderId, menuItemId);
+  return orderId;
+}
+
 function shochuBrowserBody(expectedVersion = 1, showImageInList = true) {
   return {
     expectedVersion,
@@ -475,5 +493,103 @@ test('product image upload is admin-only, validates actual image data and size, 
     const customerMenu = await request({ port, token: CUSTOMER_TOKEN, method: 'GET', path: '/v1/menu' });
     const savedItem = customerMenu.json.items.find(({ menuItemId }) => menuItemId === 'sake');
     assert.equal(savedItem.imageUri, uploaded.json.uri);
+  });
+});
+
+test('catalog lifecycle preview cancellation is read-only and unreferenced products delete only after admin confirmation', async () => {
+  await withFixture(async ({ port, database }) => {
+    const previewPath = '/v1/admin/catalog/menu-item/lifecycle-preview';
+    const lifecyclePath = '/v1/admin/catalog/menu-item/lifecycle';
+    const denied = await request({ port, method: 'POST', path: previewPath, body: { menuItemId: 'sake', expectedVersion: 1 } });
+    assert.equal(denied.statusCode, 401);
+    const customerDenied = await request({ port, token: CUSTOMER_TOKEN, method: 'POST', path: previewPath, body: { menuItemId: 'sake', expectedVersion: 1 } });
+    assert.equal(customerDenied.statusCode, 403);
+    const archiveListDenied = await request({ port, token: CUSTOMER_TOKEN, method: 'GET', path: '/v1/admin/catalog/menu-items/archived' });
+    assert.equal(archiveListDenied.statusCode, 403);
+
+    const sessionId = uuid(9_200);
+    database.prepare(`INSERT INTO table_sessions (session_id, table_id, opened_at_ms, closed_at_ms, version, created_at_ms, updated_at_ms) VALUES (?, 1, 1000, NULL, 1, 1000, 1000)`).run(sessionId);
+    database.prepare('INSERT INTO session_menu_item_grants (session_id, menu_item_id, granted_at_ms) VALUES (?, ?, 1000)').run(sessionId, 'sake');
+    database.prepare('INSERT INTO menu_item_table_visibility (menu_item_id, table_id) VALUES (?, 2)').run('sake');
+    database.prepare(`INSERT INTO menu_item_details (menu_item_id, detail_enabled, created_at_ms, updated_at_ms) VALUES ('sake', 1, 1000, 1000)`).run();
+    database.prepare(`INSERT INTO menu_item_variants (variant_id, menu_item_id, name, price_yen, sort_order, created_at_ms, updated_at_ms) VALUES ('sake_fixture_variant', 'sake', 'グラス', 500, 1, 1000, 1000)`).run();
+
+    const preview = await request({ port, token: ADMIN_TOKEN, method: 'POST', path: previewPath, body: { menuItemId: 'sake', expectedVersion: 1 } });
+    assert.equal(preview.statusCode, 200);
+    assert.equal(preview.json.formalName, '日本酒');
+    assert.equal(preview.json.disposition, 'delete');
+    // Cancelling the confirmation dialog makes no follow-up request.
+    assert.equal(database.prepare('SELECT COUNT(*) AS count FROM menu_items WHERE menu_item_id = ?').get('sake').count, 1);
+    assert.equal(database.prepare('SELECT COUNT(*) AS count FROM event_log WHERE event_type = ?').get('menu.updated').count, 0);
+
+    const deleted = await request({ port, token: ADMIN_TOKEN, method: 'POST', path: lifecyclePath, body: { menuItemId: 'sake', expectedVersion: 1, expectedDisposition: 'delete' } });
+    assert.equal(deleted.statusCode, 200);
+    assert.equal(deleted.json.disposition, 'delete');
+    assert.equal(database.prepare('SELECT COUNT(*) AS count FROM menu_items WHERE menu_item_id = ?').get('sake').count, 0);
+    assert.equal(database.prepare('SELECT COUNT(*) AS count FROM session_menu_item_grants WHERE menu_item_id = ?').get('sake').count, 0);
+    assert.equal(database.prepare('SELECT COUNT(*) AS count FROM menu_item_table_visibility WHERE menu_item_id = ?').get('sake').count, 0);
+    assert.equal(database.prepare('SELECT COUNT(*) AS count FROM menu_item_variants WHERE menu_item_id = ?').get('sake').count, 0);
+    const adminReload = await request({ port, token: ADMIN_TOKEN, method: 'GET', path: '/v1/menu' });
+    const customerReload = await request({ port, token: CUSTOMER_TOKEN, method: 'GET', path: '/v1/menu' });
+    assert.equal(adminReload.json.items.some(({ menuItemId }) => menuItemId === 'sake'), false);
+    assert.equal(customerReload.json.items.some(({ menuItemId }) => menuItemId === 'sake'), false);
+  });
+});
+
+test('order-referenced products archive, stay out of normal menus and restore hidden with history intact', async () => {
+  await withFixture(async ({ port, database }) => {
+    const orderId = seedOrderItemReference(database, 'sake');
+    const preview = await request({ port, token: ADMIN_TOKEN, method: 'POST', path: '/v1/admin/catalog/menu-item/lifecycle-preview', body: { menuItemId: 'sake', expectedVersion: 1 } });
+    assert.equal(preview.statusCode, 200);
+    assert.equal(preview.json.disposition, 'archive');
+    assert.equal(preview.json.orderReferenceCount, 1);
+    const archived = await request({ port, token: ADMIN_TOKEN, method: 'POST', path: '/v1/admin/catalog/menu-item/lifecycle', body: { menuItemId: 'sake', expectedVersion: 1, expectedDisposition: 'archive' } });
+    assert.equal(archived.statusCode, 200);
+    assert.equal(archived.json.disposition, 'archive');
+    assert.deepEqual({ ...database.prepare('SELECT archived_at_ms, is_active, version FROM menu_items WHERE menu_item_id = ?').get('sake') }, { archived_at_ms: 1_800_000_001_000, is_active: 0, version: 2 });
+    assert.deepEqual({ ...database.prepare('SELECT menu_item_id, formal_name_snapshot FROM order_items WHERE order_id = ?').get(orderId) }, { menu_item_id: 'sake', formal_name_snapshot: '履歴上の正式名' });
+
+    for (const token of [ADMIN_TOKEN, CUSTOMER_TOKEN]) {
+      const visible = await request({ port, token, method: 'GET', path: '/v1/menu' });
+      assert.equal(visible.json.items.some(({ menuItemId }) => menuItemId === 'sake'), false);
+      if (token === CUSTOMER_TOKEN) assert.equal(visible.json.categories.some(({ categoryId }) => categoryId === 'drink'), false);
+    }
+    const archivedList = await request({ port, token: ADMIN_TOKEN, method: 'GET', path: '/v1/admin/catalog/menu-items/archived' });
+    assert.equal(archivedList.statusCode, 200);
+    assert.equal(archivedList.json.items[0].formalName, '日本酒');
+
+    const regularUpdate = await request({ port, token: ADMIN_TOKEN, body: writeBody(2) });
+    assert.equal(regularUpdate.statusCode, 404);
+    const reorder = await request({ port, token: ADMIN_TOKEN, method: 'PUT', path: '/v1/admin/catalog/menu-order', body: { categoryId: 'drink', menuItemIds: ['sake'], expectedVersion: 1 } });
+    assert.equal(reorder.statusCode, 400);
+
+    const restored = await request({ port, token: ADMIN_TOKEN, method: 'POST', path: '/v1/admin/catalog/menu-item/restore', body: { menuItemId: 'sake', expectedVersion: 2 } });
+    assert.equal(restored.statusCode, 200);
+    assert.equal(restored.json.isActive, false);
+    const adminReload = await request({ port, token: ADMIN_TOKEN, method: 'GET', path: '/v1/menu' });
+    const customerReload = await request({ port, token: CUSTOMER_TOKEN, method: 'GET', path: '/v1/menu' });
+    const visibleAdminItem = adminReload.json.items.find(({ menuItemId }) => menuItemId === 'sake');
+    assert.equal(visibleAdminItem.isActive, false);
+    assert.equal(customerReload.json.items.some(({ menuItemId }) => menuItemId === 'sake'), false);
+    assert.equal(database.prepare('SELECT COUNT(*) AS count FROM order_items WHERE order_id = ?').get(orderId).count, 1);
+    assert.equal(database.prepare('SELECT archived_at_ms FROM menu_items WHERE menu_item_id = ?').get('sake').archived_at_ms, null);
+  });
+});
+
+test('lifecycle rechecks order references atomically after preview and refuses stale delete confirmation', async () => {
+  await withFixture(async ({ port, database }) => {
+    const previewPath = '/v1/admin/catalog/menu-item/lifecycle-preview';
+    const lifecyclePath = '/v1/admin/catalog/menu-item/lifecycle';
+    const preview = await request({ port, token: ADMIN_TOKEN, method: 'POST', path: previewPath, body: { menuItemId: 'sake', expectedVersion: 1 } });
+    assert.equal(preview.json.disposition, 'delete');
+    const orderId = seedOrderItemReference(database, 'sake', 1);
+    const staleDelete = await request({ port, token: ADMIN_TOKEN, method: 'POST', path: lifecyclePath, body: { menuItemId: 'sake', expectedVersion: 1, expectedDisposition: 'delete' } });
+    assert.equal(staleDelete.statusCode, 409);
+    assert.equal(database.prepare('SELECT archived_at_ms FROM menu_items WHERE menu_item_id = ?').get('sake').archived_at_ms, null);
+    assert.equal(database.prepare('SELECT COUNT(*) AS count FROM order_items WHERE order_id = ?').get(orderId).count, 1);
+    const refreshed = await request({ port, token: ADMIN_TOKEN, method: 'POST', path: previewPath, body: { menuItemId: 'sake', expectedVersion: 1 } });
+    assert.equal(refreshed.json.disposition, 'archive');
+    const archived = await request({ port, token: ADMIN_TOKEN, method: 'POST', path: lifecyclePath, body: { menuItemId: 'sake', expectedVersion: 1, expectedDisposition: 'archive' } });
+    assert.equal(archived.statusCode, 200);
   });
 });

@@ -479,15 +479,21 @@ export function createCatalogRepository({ database, now = Date.now } = {}) {
         SET name = ?, section_key = ?, sort_order = ?, is_visible = ?, version = version + 1, updated_at_ms = ?
         WHERE category_id = ? AND version = ?
       `),
-      findCategoryItems: database.prepare('SELECT menu_item_id, version, sort_order FROM menu_items WHERE category_id = ? ORDER BY sort_order, menu_item_id'),
+      findCategoryItems: database.prepare('SELECT menu_item_id, version, sort_order FROM menu_items WHERE category_id = ? AND archived_at_ms IS NULL ORDER BY sort_order, menu_item_id'),
       updateMenuItemOrder: database.prepare('UPDATE menu_items SET sort_order = ?, version = version + 1, updated_at_ms = ? WHERE menu_item_id = ? AND category_id = ?'),
       updateCategoryVersion: database.prepare('UPDATE categories SET version = version + 1, updated_at_ms = ? WHERE category_id = ? AND version = ?'),
       deleteItemGrants: database.prepare('DELETE FROM session_menu_item_grants WHERE menu_item_id = ?'),
       findWriteMenuItem: database.prepare(`
-        SELECT menu_item_id, version, table_visibility_mode
+        SELECT menu_item_id, version, table_visibility_mode, archived_at_ms
         FROM menu_items
         WHERE menu_item_id = ?
       `),
+      findLifecycleItem: database.prepare(`SELECT menu_item_id, category_id, formal_name, version, archived_at_ms FROM menu_items WHERE menu_item_id = ?`),
+      countOrderItemReferences: database.prepare('SELECT COUNT(*) AS reference_count FROM order_items WHERE menu_item_id = ?'),
+      archiveMenuItem: database.prepare(`UPDATE menu_items SET archived_at_ms = ?, is_active = 0, version = version + 1, updated_at_ms = ? WHERE menu_item_id = ? AND version = ? AND archived_at_ms IS NULL`),
+      restoreMenuItem: database.prepare(`UPDATE menu_items SET archived_at_ms = NULL, is_active = 0, version = version + 1, updated_at_ms = ? WHERE menu_item_id = ? AND version = ? AND archived_at_ms IS NOT NULL`),
+      deleteMenuItem: database.prepare('DELETE FROM menu_items WHERE menu_item_id = ? AND version = ? AND archived_at_ms IS NULL'),
+      findArchivedMenuItems: database.prepare(`SELECT menu_item_id, category_id, formal_name, price_yen, archived_at_ms, version FROM menu_items WHERE archived_at_ms IS NOT NULL ORDER BY archived_at_ms DESC, formal_name COLLATE NOCASE, menu_item_id`),
       findValidVisibilityTables: database.prepare(`
         SELECT table_id FROM tables WHERE table_id IN (SELECT value FROM json_each(?))
       `),
@@ -599,7 +605,7 @@ export function createCatalogRepository({ database, now = Date.now } = {}) {
           AND EXISTS (
             SELECT 1
             FROM menu_items AS m
-            WHERE m.category_id = c.category_id AND m.is_active = 1
+            WHERE m.category_id = c.category_id AND m.is_active = 1 AND m.archived_at_ms IS NULL
               AND (
                 m.table_visibility_mode = 'all_tables'
                 OR (m.table_visibility_mode = 'selected_tables' AND EXISTS (
@@ -667,6 +673,7 @@ export function createCatalogRepository({ database, now = Date.now } = {}) {
           ON d.menu_item_id = m.menu_item_id
         WHERE c.is_visible = 1
           AND m.is_active = 1
+          AND m.archived_at_ms IS NULL
           AND (
             m.table_visibility_mode = 'all_tables'
             OR (m.table_visibility_mode = 'selected_tables' AND EXISTS (
@@ -696,6 +703,7 @@ export function createCatalogRepository({ database, now = Date.now } = {}) {
           ON c.category_id = m.category_id
         WHERE c.is_visible = 1
           AND m.is_active = 1
+          AND m.archived_at_ms IS NULL
         ORDER BY c.sort_order, m.sort_order, m.menu_item_id
       `),
       findAdminMenuItems: database.prepare(`
@@ -736,11 +744,12 @@ export function createCatalogRepository({ database, now = Date.now } = {}) {
           ON c.category_id = m.category_id
         LEFT JOIN menu_item_details AS d
           ON d.menu_item_id = m.menu_item_id
+        WHERE m.archived_at_ms IS NULL
         ORDER BY c.sort_order, m.sort_order, m.menu_item_id
       `),
       findImageLayouts: database.prepare('SELECT usage, scale, position_x, position_y, rotation, fit FROM menu_item_image_layouts WHERE menu_item_id = ? ORDER BY usage'),
-      findImageLayoutItem: database.prepare('SELECT version FROM menu_items WHERE menu_item_id = ?'),
-      updateImageLayoutVersion: database.prepare('UPDATE menu_items SET version = version + 1, updated_at_ms = ? WHERE menu_item_id = ? AND version = ?'),
+      findImageLayoutItem: database.prepare('SELECT version, archived_at_ms FROM menu_items WHERE menu_item_id = ?'),
+      updateImageLayoutVersion: database.prepare('UPDATE menu_items SET version = version + 1, updated_at_ms = ? WHERE menu_item_id = ? AND version = ? AND archived_at_ms IS NULL'),
       deleteImageLayouts: database.prepare('DELETE FROM menu_item_image_layouts WHERE menu_item_id = ?'),
       upsertImageLayout: database.prepare(`INSERT INTO menu_item_image_layouts (menu_item_id, usage, scale, position_x, position_y, rotation, fit, updated_at_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(menu_item_id, usage) DO UPDATE SET scale=excluded.scale, position_x=excluded.position_x, position_y=excluded.position_y, rotation=excluded.rotation, fit=excluded.fit, updated_at_ms=excluded.updated_at_ms`),
       insertImageLayoutEvent: database.prepare('INSERT INTO event_log (event_epoch, event_type, aggregate_type, aggregate_id, actor_device_id, payload_json, created_at_ms) VALUES (?, \'menu.updated\', \'menu_item\', ?, ?, ?, ?)'),
@@ -965,6 +974,9 @@ export function createCatalogRepository({ database, now = Date.now } = {}) {
           CATALOG_ERROR_CODES.VERSION_CONFLICT,
           'The catalog item has changed since it was read.',
         );
+      }
+      if (!creating && current.archived_at_ms !== null) {
+        throw repositoryError(CATALOG_ERROR_CODES.MENU_ITEM_NOT_FOUND, 'Archived catalog items cannot be edited through the regular menu update API.');
       }
 
       const timestamp = now();
@@ -1225,6 +1237,102 @@ export function createCatalogRepository({ database, now = Date.now } = {}) {
     });
   }
 
+  function getArchivedMenuItems(principal) {
+    ensureOpen();
+    authorizeCatalogWriter(principal);
+    return runReadTransaction(() => deepFreeze(statements.findArchivedMenuItems.all().map((row) => ({
+      menuItemId: row.menu_item_id,
+      categoryId: row.category_id,
+      formalName: row.formal_name,
+      priceYen: row.price_yen,
+      archivedAtMs: row.archived_at_ms,
+      version: row.version,
+    }))));
+  }
+
+  function previewMenuItemLifecycle(principal, request = {}) {
+    ensureOpen();
+    authorizeCatalogWriter(principal);
+    const menuItemId = normalizeOpaqueId(request.menuItemId, 'menuItemId');
+    const expectedVersion = normalizeNonNegativeInteger(request.expectedVersion, 'expectedVersion');
+    return runReadTransaction(() => {
+      const item = statements.findLifecycleItem.get(menuItemId);
+      if (!item || item.archived_at_ms !== null) throw repositoryError(CATALOG_ERROR_CODES.MENU_ITEM_NOT_FOUND, 'The active catalog item was not found.');
+      if (item.version !== expectedVersion) throw repositoryError(CATALOG_ERROR_CODES.VERSION_CONFLICT, 'The catalog item has changed since it was read.');
+      const referenceCount = Number(statements.countOrderItemReferences.get(menuItemId).reference_count);
+      return deepFreeze({
+        menuItemId,
+        categoryId: item.category_id,
+        formalName: item.formal_name,
+        version: item.version,
+        disposition: referenceCount > 0 ? 'archive' : 'delete',
+        orderReferenceCount: referenceCount,
+      });
+    });
+  }
+
+  function executeMenuItemLifecycle(principal, request = {}) {
+    ensureOpen();
+    authorizeCatalogWriter(principal);
+    const menuItemId = normalizeOpaqueId(request.menuItemId, 'menuItemId');
+    const expectedVersion = normalizeNonNegativeInteger(request.expectedVersion, 'expectedVersion');
+    if (!['delete', 'archive'].includes(request.expectedDisposition)) throw invalidWrite('expectedDisposition must be delete or archive.');
+    return runWriteTransaction(() => {
+      const item = statements.findLifecycleItem.get(menuItemId);
+      if (!item || item.archived_at_ms !== null) throw repositoryError(CATALOG_ERROR_CODES.MENU_ITEM_NOT_FOUND, 'The active catalog item was not found.');
+      if (item.version !== expectedVersion) throw repositoryError(CATALOG_ERROR_CODES.VERSION_CONFLICT, 'The catalog item has changed since it was read.');
+      const referenceCount = Number(statements.countOrderItemReferences.get(menuItemId).reference_count);
+      const disposition = referenceCount > 0 ? 'archive' : 'delete';
+      if (disposition !== request.expectedDisposition) {
+        throw repositoryError(CATALOG_ERROR_CODES.VERSION_CONFLICT, 'Product history changed after confirmation. Review the updated action before continuing.');
+      }
+      const timestamp = now();
+      if (!Number.isSafeInteger(timestamp) || timestamp < 0) throw repositoryError(CATALOG_ERROR_CODES.DATABASE_FAILURE, 'The catalog write clock returned an invalid timestamp.');
+
+      if (disposition === 'archive') {
+        const updated = statements.archiveMenuItem.run(timestamp, timestamp, menuItemId, expectedVersion);
+        if (Number(updated.changes) !== 1) throw repositoryError(CATALOG_ERROR_CODES.VERSION_CONFLICT, 'The catalog item has changed since it was read.');
+      } else {
+        statements.deleteItemGrants.run(menuItemId);
+        statements.deleteItemTableVisibility.run(menuItemId);
+        const deleted = statements.deleteMenuItem.run(menuItemId, expectedVersion);
+        if (Number(deleted.changes) !== 1) throw repositoryError(CATALOG_ERROR_CODES.VERSION_CONFLICT, 'The catalog item has changed since it was read.');
+      }
+
+      const systemState = statements.findSystemState.get();
+      const payloadJson = JSON.stringify({ menuItemId, formalName: item.formal_name, operation: disposition === 'delete' ? 'deleted' : 'archived', version: disposition === 'archive' ? expectedVersion + 1 : null });
+      const event = statements.insertMenuEvent.run(systemState.event_epoch, menuItemId, principal.deviceId, payloadJson, timestamp);
+      return {
+        menuItemId,
+        formalName: item.formal_name,
+        disposition,
+        archivedAtMs: disposition === 'archive' ? timestamp : null,
+        version: disposition === 'archive' ? expectedVersion + 1 : null,
+        event: { eventEpoch: systemState.event_epoch, eventId: Number(event.lastInsertRowid), eventType: 'menu.updated', payloadJson, createdAtMs: timestamp },
+      };
+    });
+  }
+
+  function restoreArchivedMenuItem(principal, request = {}) {
+    ensureOpen();
+    authorizeCatalogWriter(principal);
+    const menuItemId = normalizeOpaqueId(request.menuItemId, 'menuItemId');
+    const expectedVersion = normalizeNonNegativeInteger(request.expectedVersion, 'expectedVersion');
+    return runWriteTransaction(() => {
+      const item = statements.findLifecycleItem.get(menuItemId);
+      if (!item || item.archived_at_ms === null) throw repositoryError(CATALOG_ERROR_CODES.MENU_ITEM_NOT_FOUND, 'The archived catalog item was not found.');
+      if (item.version !== expectedVersion) throw repositoryError(CATALOG_ERROR_CODES.VERSION_CONFLICT, 'The archived catalog item has changed since it was read.');
+      const timestamp = now();
+      if (!Number.isSafeInteger(timestamp) || timestamp < 0) throw repositoryError(CATALOG_ERROR_CODES.DATABASE_FAILURE, 'The catalog write clock returned an invalid timestamp.');
+      const updated = statements.restoreMenuItem.run(timestamp, menuItemId, expectedVersion);
+      if (Number(updated.changes) !== 1) throw repositoryError(CATALOG_ERROR_CODES.VERSION_CONFLICT, 'The archived catalog item has changed since it was read.');
+      const systemState = statements.findSystemState.get();
+      const payloadJson = JSON.stringify({ menuItemId, operation: 'restored-hidden', version: expectedVersion + 1 });
+      const event = statements.insertMenuEvent.run(systemState.event_epoch, menuItemId, principal.deviceId, payloadJson, timestamp);
+      return { menuItemId, version: expectedVersion + 1, isActive: false, event: { eventEpoch: systemState.event_epoch, eventId: Number(event.lastInsertRowid), eventType: 'menu.updated', payloadJson, createdAtMs: timestamp } };
+    });
+  }
+
   function getDeviceSettings(principal) {
     ensureOpen();
     assertAuthenticPrincipal(principal);
@@ -1271,6 +1379,7 @@ export function createCatalogRepository({ database, now = Date.now } = {}) {
     return runWriteTransaction(() => {
       const current = statements.findImageLayoutItem.get(normalized.menuItemId);
       if (!current) throw repositoryError(CATALOG_ERROR_CODES.MENU_ITEM_NOT_FOUND, 'The catalog item was not found.');
+      if (current.archived_at_ms !== null) throw repositoryError(CATALOG_ERROR_CODES.MENU_ITEM_NOT_FOUND, 'Archived catalog items cannot be edited through the image layout API.');
       if (current.version !== normalized.expectedVersion) throw repositoryError(CATALOG_ERROR_CODES.VERSION_CONFLICT, 'The catalog item has changed since it was read.');
       const timestamp = now();
       const update = statements.updateImageLayoutVersion.run(timestamp, normalized.menuItemId, normalized.expectedVersion);
@@ -1367,6 +1476,10 @@ export function createCatalogRepository({ database, now = Date.now } = {}) {
     writeCategory,
     writeMenuOrdering,
     writeImageLayouts,
+    getArchivedMenuItems,
+    previewMenuItemLifecycle,
+    executeMenuItemLifecycle,
+    restoreArchivedMenuItem,
     close() {
       closed = true;
     },

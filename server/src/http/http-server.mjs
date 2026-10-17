@@ -130,6 +130,10 @@ const ROUTE_METHODS = new Map([
   ['/v1/admin/session-menu-access/grants', new Set(['POST', 'PUT'])],
   ['/v1/admin/session-menu-access/close-empty-session', 'POST'],
   ['/v1/admin/catalog/menu-item', 'PUT'],
+  ['/v1/admin/catalog/menu-items/archived', 'GET'],
+  ['/v1/admin/catalog/menu-item/lifecycle-preview', 'POST'],
+  ['/v1/admin/catalog/menu-item/lifecycle', 'POST'],
+  ['/v1/admin/catalog/menu-item/restore', 'POST'],
   ['/v1/admin/catalog/menu-item/images', 'POST'],
   ['/v1/admin/catalog/menu-item/image-layouts', 'PUT'],
   ['/v1/admin/catalog/category', 'PUT'],
@@ -1736,6 +1740,39 @@ function createConfiguredHttpServer({
         const writer = requireService(catalog, 'writeImageLayouts');
         const result = writer.writeImageLayouts(principal, body);
         await notifyCommittedSafely(sseHub, { event: { eventEpoch: result.eventEpoch, eventId: result.eventId } });
+        writeJsonResponse(response, { statusCode: 200, body: result, requestId });
+        return;
+      }
+
+      if (target.path === '/v1/admin/catalog/menu-items/archived') {
+        authorizeDeviceRole(principal, ['admin']);
+        const items = requireService(catalog, 'getArchivedMenuItems').getArchivedMenuItems(principal);
+        writeJsonResponse(response, { statusCode: 200, body: { items }, requestId });
+        return;
+      }
+
+      if (target.path === '/v1/admin/catalog/menu-item/lifecycle-preview') {
+        authorizeDeviceRole(principal, ['admin']);
+        const body = await readJsonBody(request);
+        const preview = requireService(catalog, 'previewMenuItemLifecycle').previewMenuItemLifecycle(principal, body);
+        writeJsonResponse(response, { statusCode: 200, body: preview, requestId });
+        return;
+      }
+
+      if (target.path === '/v1/admin/catalog/menu-item/lifecycle') {
+        authorizeDeviceRole(principal, ['admin']);
+        const body = await readJsonBody(request);
+        const result = requireService(catalog, 'executeMenuItemLifecycle').executeMenuItemLifecycle(principal, body);
+        await notifyCommittedSafely(sseHub, result);
+        writeJsonResponse(response, { statusCode: 200, body: result, requestId });
+        return;
+      }
+
+      if (target.path === '/v1/admin/catalog/menu-item/restore') {
+        authorizeDeviceRole(principal, ['admin']);
+        const body = await readJsonBody(request);
+        const result = requireService(catalog, 'restoreArchivedMenuItem').restoreArchivedMenuItem(principal, body);
+        await notifyCommittedSafely(sseHub, result);
         writeJsonResponse(response, { statusCode: 200, body: result, requestId });
         return;
       }

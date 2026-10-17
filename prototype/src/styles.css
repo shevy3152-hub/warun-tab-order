@@ -1091,6 +1091,11 @@ h1, h2, h3, p { margin: 0; }
 .staff-app--admin .admin-metrics span { min-width: 215px; font-size: 17px; }
 .staff-app--admin .admin-metrics b { font-size: 42px; }
 .menu-admin-list { min-width: 1120px; border-top: 1px solid var(--ink); }
+.menu-archive-list { margin: 18px 0; padding: 18px 22px; border: 2px solid var(--line); background: var(--paper); }
+.menu-archive-list h2 { margin: 0 0 12px; font-size: 20px; }
+.menu-archive-list article { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 0; border-top: 1px solid var(--line); }
+.menu-archive-list article div { display: grid; gap: 4px; }
+.menu-archive-list article span, .menu-archive-list p { color: var(--muted); font-size: 13px; }
 .menu-admin-group + .menu-admin-group { margin-top: 18px; }
 .menu-admin-group__heading { min-height: 54px; margin: 0; padding: 0 16px; border-left: 7px solid var(--red); border-bottom: 1px solid var(--line); background: #efe5d5; display: flex; align-items: center; gap: 12px; color: var(--red); font-size: 22px; }
 .menu-admin-group__heading small { color: var(--muted); font-size: 12px; }

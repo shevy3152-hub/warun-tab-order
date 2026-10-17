@@ -560,6 +560,43 @@ export function saveAdminMenuOrdering({ env = globalThis, categoryId, menuItemId
   });
 }
 
+async function adminMenuLifecycleRequest({ env = globalThis, path, method = "GET", body, fetchImpl = env.fetch } = {}) {
+  const { token, base, fetchImpl: request } = assertAdminTransport({ env, fetchImpl });
+  let response;
+  try {
+    response = await request(`${base}${path}`, {
+      method,
+      headers: { Accept: "application/json", ...(body === undefined ? {} : { "Content-Type": "application/json" }), Authorization: `Bearer ${token}` },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    });
+  } catch {
+    throw new AdminPairingError("商品の削除・アーカイブを確認できません。", { status: 503, code: "API_UNAVAILABLE" });
+  }
+  if (!response.ok) await responseError(response, "商品の削除・アーカイブを完了できません。", "CATALOG_LIFECYCLE_FAILED");
+  try { return await response.json(); }
+  catch { throw new AdminPairingError("商品の処理APIの応答が不正です。", { status: 503, code: "API_UNAVAILABLE" }); }
+}
+
+export async function fetchArchivedAdminMenuItems({ env = globalThis, fetchImpl = env.fetch } = {}) {
+  const body = await adminMenuLifecycleRequest({ env, fetchImpl, path: "/admin/catalog/menu-items/archived" });
+  if (!Array.isArray(body?.items)) throw new AdminPairingError("アーカイブ商品の応答が不正です。", { status: 503, code: "API_UNAVAILABLE" });
+  return body.items;
+}
+
+export async function previewAdminMenuItemLifecycle({ env = globalThis, menuItemId, expectedVersion, fetchImpl = env.fetch } = {}) {
+  const body = await adminMenuLifecycleRequest({ env, fetchImpl, path: "/admin/catalog/menu-item/lifecycle-preview", method: "POST", body: { menuItemId, expectedVersion } });
+  if (body?.menuItemId !== menuItemId || !["delete", "archive"].includes(body?.disposition) || !Number.isSafeInteger(body?.version)) throw new AdminPairingError("商品の処理確認応答が不正です。", { status: 503, code: "API_UNAVAILABLE" });
+  return body;
+}
+
+export function executeAdminMenuItemLifecycle({ env = globalThis, menuItemId, expectedVersion, expectedDisposition, fetchImpl = env.fetch } = {}) {
+  return adminMenuLifecycleRequest({ env, fetchImpl, path: "/admin/catalog/menu-item/lifecycle", method: "POST", body: { menuItemId, expectedVersion, expectedDisposition } });
+}
+
+export function restoreArchivedAdminMenuItem({ env = globalThis, menuItemId, expectedVersion, fetchImpl = env.fetch } = {}) {
+  return adminMenuLifecycleRequest({ env, fetchImpl, path: "/admin/catalog/menu-item/restore", method: "POST", body: { menuItemId, expectedVersion } });
+}
+
 export async function saveAdminImageLayouts({ env = globalThis, menuItemId, expectedVersion, layouts, fetchImpl = env.fetch } = {}) {
   const token = configuredAdminToken(env);
   const base = apiBase(env);

@@ -5,7 +5,7 @@ import { DatabaseSync } from 'node:sqlite';
 
 export const LEGACY_SCHEMA_VERSION = 1;
 export const SESSION_SCHEMA_VERSION = 2;
-export const SCHEMA_VERSION = 22;
+export const SCHEMA_VERSION = 23;
 
 export const REQUIRED_TABLES = Object.freeze([
   'system_state',
@@ -167,6 +167,9 @@ export const DEFAULT_V21_MIGRATION_PATH = resolve(
 );
 export const DEFAULT_V22_MIGRATION_PATH = resolve(
   moduleDirectory, '..', '..', '..', 'docs', 'schema-v22-migration.sql',
+);
+export const DEFAULT_V23_MIGRATION_PATH = resolve(
+  moduleDirectory, '..', '..', '..', 'docs', 'schema-v23-migration.sql',
 );
 
 export class DatabaseInitializationError extends Error {
@@ -644,6 +647,14 @@ function migrateSchemaV21ToV22(database, migrationPath) {
   }
 }
 
+function migrateSchemaV22ToV23(database, migrationPath) {
+  try { database.exec(readFileSync(migrationPath, 'utf8')); }
+  catch (error) {
+    try { if (database.isTransaction) database.exec('ROLLBACK;'); } catch {}
+    throw new DatabaseInitializationError('MIGRATION_FAILED', 'The menu item archive migration failed.', { cause: error });
+  }
+}
+
 function migrateSchemaV1ToV2(database) {
   let transactionOpen = false;
   try {
@@ -859,6 +870,8 @@ function validateSchema(database) {
   assertRequiredNames(tableColumns(database, 'menu_items'), ['ordering_mode'], 'menu_items columns');
   assertRequiredNames(tableColumns(database, 'menu_items'), ['customer_visibility_mode'], 'menu_items visibility columns');
   assertRequiredNames(tableColumns(database, 'menu_items'), ['table_visibility_mode'], 'menu_items table visibility columns');
+  assertRequiredNames(tableColumns(database, 'menu_items'), ['archived_at_ms'], 'menu item archive columns');
+  assertRequiredNames(schemaObjectNames(database, 'index'), ['idx_menu_items_archived_category'], 'menu item archive indexes');
   assertRequiredNames(tableColumns(database, 'menu_item_variants'), ['temperature_options_json'], 'menu_item_variants columns');
   assertRequiredNames(tableColumns(database, 'order_items'), ['temperature_snapshot', 'adjusted_unit_price_yen'], 'order_items columns');
   assertRequiredNames(tableColumns(database, 'order_item_price_adjustments'), ['adjustment_id', 'order_id', 'order_item_id', 'previous_unit_price_yen', 'adjusted_unit_price_yen', 'quantity', 'created_at_ms', 'actor_device_id'], 'order item price adjustment columns');
@@ -1000,6 +1013,7 @@ export function initializeDatabase({
   v20MigrationPath = DEFAULT_V20_MIGRATION_PATH,
   v21MigrationPath = DEFAULT_V21_MIGRATION_PATH,
   v22MigrationPath = DEFAULT_V22_MIGRATION_PATH,
+  v23MigrationPath = DEFAULT_V23_MIGRATION_PATH,
 } = {}) {
   const resolvedDatabasePath = resolveFilePath(databasePath, 'databasePath');
   const resolvedSchemaPath = resolveFilePath(schemaPath, 'schemaPath');
@@ -1023,6 +1037,7 @@ export function initializeDatabase({
   const resolvedV20MigrationPath = resolveFilePath(v20MigrationPath, 'v20MigrationPath');
   const resolvedV21MigrationPath = resolveFilePath(v21MigrationPath, 'v21MigrationPath');
   const resolvedV22MigrationPath = resolveFilePath(v22MigrationPath, 'v22MigrationPath');
+  const resolvedV23MigrationPath = resolveFilePath(v23MigrationPath, 'v23MigrationPath');
 
   mkdirSync(dirname(resolvedDatabasePath), { recursive: true });
 
@@ -1145,6 +1160,11 @@ export function initializeDatabase({
     }
     if (currentVersion === 21) {
       migrateSchemaV21ToV22(database, resolvedV22MigrationPath);
+      enableWriteAheadLogging(database);
+      currentVersion = 22;
+    }
+    if (currentVersion === 22) {
+      migrateSchemaV22ToV23(database, resolvedV23MigrationPath);
       enableWriteAheadLogging(database);
       currentVersion = SCHEMA_VERSION;
     }
