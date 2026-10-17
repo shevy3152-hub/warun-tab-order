@@ -1,6 +1,7 @@
 import { KitchenOrderSound } from "./KitchenOrderSound.jsx";
 import { ProductImageLocation, ProductImageUriField } from "./ProductImageLocation.jsx";
 import { adminMenuAvailability } from "./admin-menu-status.js";
+import { runWithSubmissionLock } from "./admin-submit-lock.js";
 import { useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from "react";
 import {
   ArrowLeft,
@@ -3321,6 +3322,10 @@ function AdminScreen({ state, updateState, section = "menu" }) {
   const [menuLifecycleDiscardPrompt, setMenuLifecycleDiscardPrompt] = useState(null);
   const menuCardRefs = useRef(new Map());
   const menuScrollAnchor = useRef(null);
+  const menuSaveLockRef = useRef(false);
+  const menuCreateIdRef = useRef(null);
+  const menuCreateMayHaveCommittedRef = useRef(false);
+  const menuCreateAttemptRef = useRef(null);
   const [businessHoursState, setBusinessHoursState] = useState({ loading: adminApiMode && section === "hours", saving: false, error: false, message: "", messageKind: "", formal: null, draft: DEFAULT_BUSINESS_HOURS });
   useEffect(() => {
     if (!adminApiMode || !["menu", "categories", "menu-access"].includes(section)) return undefined;
@@ -3498,6 +3503,9 @@ function AdminScreen({ state, updateState, section = "menu" }) {
   };
   const openNewMenuEditor = () => {
     setMenuEditorDirty(false);
+    menuCreateIdRef.current = makeId("menu");
+    menuCreateMayHaveCommittedRef.current = false;
+    menuCreateAttemptRef.current = null;
     const categoryId = state.categories[0]?.id ?? "";
     setEditingMenuId(null);
     setMenuEditorCategoryId(categoryId);
@@ -3516,6 +3524,9 @@ function AdminScreen({ state, updateState, section = "menu" }) {
   };
   const openMenuEditor = (id) => {
     setMenuEditorDirty(false);
+    menuCreateIdRef.current = null;
+    menuCreateMayHaveCommittedRef.current = false;
+    menuCreateAttemptRef.current = null;
     rememberMenuPosition(id);
     setEditingMenuId(id);
     const item = state.menuItems.find((entry) => entry.id === id);
@@ -3526,6 +3537,8 @@ function AdminScreen({ state, updateState, section = "menu" }) {
   };
   const closeMenuEditor = () => {
     const anchor = menuScrollAnchor.current;
+    menuCreateIdRef.current = null;
+    menuCreateAttemptRef.current = null;
     setShowAdd(false);
     setMenuEditorDirty(false);
     setEditingMenuId(null);
@@ -3543,6 +3556,9 @@ function AdminScreen({ state, updateState, section = "menu" }) {
   const addMenu = async (event) => {
     event.preventDefault();
     if (catalogState.saving) return;
+    await runWithSubmissionLock(menuSaveLockRef, () => saveMenuEditor(event));
+  };
+  const saveMenuEditor = async (event) => {
     const form = new FormData(event.currentTarget);
     const name = form.get("name")?.toString().trim();
     const kitchenAlias = form.get("kitchenAlias")?.toString().trim();
@@ -3553,7 +3569,7 @@ function AdminScreen({ state, updateState, section = "menu" }) {
       setCatalogState((current) => ({ ...current, message: "指定モードでは対象テーブルを1つ以上選択してください。" }));
       return;
     }
-    const targetId = editingMenuId ?? makeId("menu");
+    const targetId = editingMenuId ?? (menuCreateIdRef.current ??= makeId("menu"));
     const variantDefinitions = [
       ["グラス", "110ml", "glassPrice", "glass", "glassCold", "glassHot"],
       ["徳利1合", "180ml", "tokuriPrice", "tokuri", "tokuriCold", "tokuriHot"],
@@ -3642,7 +3658,18 @@ function AdminScreen({ state, updateState, section = "menu" }) {
     setCatalogState((current) => ({ ...current, saving: adminApiMode, message: "" }));
     if (adminApiMode) {
       try {
-        const result = await saveAdminMenuItem({ env: window, item: nextItem, expectedVersion: editingMenu?.version ?? 0 });
+        let retryItem = null;
+        if (!editingMenuId && menuCreateMayHaveCommittedRef.current) {
+          const latest = await fetchAdminMenu({ env: window });
+          retryItem = latest.items.find((item) => item.menuItemId === targetId) ?? null;
+        }
+        let result;
+        if (!editingMenuId && retryItem && JSON.stringify(nextItem) === JSON.stringify(menuCreateAttemptRef.current)) {
+          result = { version: retryItem.version };
+        } else {
+          if (!editingMenuId) menuCreateAttemptRef.current = nextItem;
+          result = await saveAdminMenuItem({ env: window, item: nextItem, expectedVersion: editingMenu?.version ?? retryItem?.version ?? 0 });
+        }
         const placementSaved = menuEditorPlacementEdge ? await persistMenuEdgePlacement(nextItem.categoryId, nextItem.id, menuEditorPlacementEdge) : true;
         const refreshedCatalog = await fetchAdminMenu({ env: window });
         const refreshedItem = refreshedCatalog.items.find((item) => item.menuItemId === nextItem.id);
@@ -3670,15 +3697,21 @@ function AdminScreen({ state, updateState, section = "menu" }) {
           imageLayouts: refreshedItem.imageLayouts,
         };
         setCatalogState({ loading: false, error: false, saving: false, message: placementSaved ? "保存しました。" : "商品は保存しましたが、並び順を確定できませんでした。並び替えモードで確認してください。" });
-        updateState((current) => editingMenuId ? ({
+        updateState((current) => editingMenuId || retryItem ? ({
           ...current,
-          menuItems: current.menuItems.map((item) => item.id === editingMenuId ? refreshedPatch : item),
+          menuItems: current.menuItems.some((item) => item.id === targetId)
+            ? current.menuItems.map((item) => item.id === targetId ? refreshedPatch : item)
+            : [...current.menuItems, refreshedPatch],
         }) : ({ ...current, menuItems: [...current.menuItems, refreshedPatch] }));
         setShowAdd(false);
         setEditingMenuId(null);
         setMenuEditorPlacementEdge(null);
+        menuCreateMayHaveCommittedRef.current = false;
+        menuCreateIdRef.current = null;
+        menuCreateAttemptRef.current = null;
         return;
       } catch (error) {
+        if (!editingMenuId) menuCreateMayHaveCommittedRef.current = true;
         const failureDetail = error?.status
           ? `HTTP ${error.status} / ${error.code || "UNKNOWN_ERROR"}${error.requestId ? ` / request ID ${error.requestId}` : ""}`
           : "管理APIへ接続できません";
@@ -3703,6 +3736,9 @@ function AdminScreen({ state, updateState, section = "menu" }) {
     setShowAdd(false);
     setEditingMenuId(null);
     setMenuEditorPlacementEdge(null);
+    menuCreateMayHaveCommittedRef.current = false;
+    menuCreateIdRef.current = null;
+    menuCreateAttemptRef.current = null;
   };
   const refreshAdminCatalog = async () => {
     const catalog = await fetchAdminMenu({ env: window });

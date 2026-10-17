@@ -538,9 +538,9 @@ test("admin menu creation and editing share the full form and preserve the exist
   assert.match(appSource, /\{showAdd \? <form className=\{`inline-form inline-form--menu menu-editor/);
   assert.match(appSource, /onSubmit=\{addMenu\}/);
   assert.doesNotMatch(appSource, /saveInlineMenu|admin-menu-inline-editor/);
-  assert.match(appSource, /const targetId = editingMenuId \?\? makeId\("menu"\)/);
-  assert.match(appSource, /expectedVersion: editingMenu\?\.version \?\? 0/);
-  assert.match(appSource, /menuItems: current\.menuItems\.map\(\(item\) => item\.id === editingMenuId/);
+  assert.match(appSource, /const targetId = editingMenuId \?\? \(menuCreateIdRef\.current \?\?= makeId\("menu"\)\)/);
+  assert.match(appSource, /expectedVersion: editingMenu\?\.version \?\? retryItem\?\.version \?\? 0/);
+  assert.match(appSource, /updateState\(\(current\) => editingMenuId \|\| retryItem \? \(\{[\s\S]*current\.menuItems\.some\(\(item\) => item\.id === targetId\)/);
   assert.match(appSource, /\[\.\.\.current\.menuItems, \{ \.\.\.nextItem, \.\.\.patch/);
   assert.match(appSource, /const editedItems = current\.menuItems\.map\(\(item\) => item\.id === editingMenuId \? \{ \.\.\.item, \.\.\.nextItem \}/);
   assert.match(appSource, /isSoldOut: form\.get\("isSoldOut"\) === "on"/);
@@ -569,6 +569,19 @@ test("admin menu add and edit ordering controls count category items and save ed
   assert.match(appSource, /applyLocalMenuPlacement\(/);
   assert.match(appSource, /const openNewMenuEditor = \(\) =>/);
   assert.match(styles, /\.menu-editor__sort-order-actions/);
+});
+
+test("admin menu create blocks same-tick duplicate submits and retries ambiguous creates with the same id", () => {
+  assert.match(appSource, /const menuSaveLockRef = useRef\(false\)/);
+  assert.match(appSource, /import \{ runWithSubmissionLock \} from "\.\/admin-submit-lock\.js"/);
+  assert.match(appSource, /await runWithSubmissionLock\(menuSaveLockRef, \(\) => saveMenuEditor\(event\)\)/);
+  assert.match(appSource, /menuCreateIdRef\.current = makeId\("menu"\)/);
+  assert.match(appSource, /const targetId = editingMenuId \?\? \(menuCreateIdRef\.current \?\?= makeId\("menu"\)\)/);
+  assert.match(appSource, /if \(!editingMenuId && menuCreateMayHaveCommittedRef\.current\) \{[\s\S]*fetchAdminMenu\(\{ env: window \}\)[\s\S]*latest\.items\.find\(\(item\) => item\.menuItemId === targetId\)/);
+  assert.match(appSource, /retryItem && JSON\.stringify\(nextItem\) === JSON\.stringify\(menuCreateAttemptRef\.current\)[\s\S]*result = \{ version: retryItem\.version \}/);
+  assert.match(appSource, /expectedVersion: editingMenu\?\.version \?\? retryItem\?\.version \?\? 0/);
+  assert.match(appSource, /menuItems: current\.menuItems\.some\(\(item\) => item\.id === targetId\)[\s\S]*\? current\.menuItems\.map[\s\S]*: \[\.\.\.current\.menuItems, refreshedPatch\]/);
+  assert.match(appSource, /if \(!editingMenuId\) menuCreateMayHaveCommittedRef\.current = true/);
 });
 
 test("admin deletion and archive actions live only at the bottom of existing edit forms", () => {
@@ -918,10 +931,10 @@ test("shared menu editor saves the detail image URI without replacing the list U
   assert.match(appSource, /<ProductImageUriField name="detailImageUri" label="詳細画像URI" initialUri=\{editingMenu\?\.detail\?\.imageUri \?\? ""\} fallbackUri=\{editingMenu\?\.imageUri \?\? ""\} \/>/);
   assert.doesNotMatch(appSource, /<ProductImageLocation uri=\{editingMenu\?\.detail\?\.imageUri\}/);
 
-  const sharedSaveStart = appSource.indexOf("const addMenu = async");
+  const sharedSaveStart = appSource.indexOf("const saveMenuEditor = async");
   const sharedSaveEnd = appSource.indexOf("const refreshAdminCatalog =", sharedSaveStart);
   const sharedSave = appSource.slice(sharedSaveStart, sharedSaveEnd);
-  assert.match(sharedSave, /const targetId = editingMenuId \?\? makeId\("menu"\)/);
+  assert.match(sharedSave, /const targetId = editingMenuId \?\? \(menuCreateIdRef\.current \?\?= makeId\("menu"\)\)/);
   assert.match(sharedSave, /imageUri: form\.get\("imageUri"\)\?\.toString\(\)\.trim\(\) \|\| undefined,/);
   assert.match(sharedSave, /imageUri: form\.get\("detailImageUri"\)\?\.toString\(\)\.trim\(\) \|\| undefined,/);
   const menuPatch = sharedSave.slice(sharedSave.indexOf("const patch = {"), sharedSave.indexOf("const nextItem ="));

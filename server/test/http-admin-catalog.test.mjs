@@ -337,6 +337,38 @@ test('admin catalog write requires admin authentication and persists one atomic 
   });
 });
 
+test('retrying an accepted new item with its stable id updates that row instead of duplicating it', async () => {
+  await withFixture(async ({ port, database }) => {
+    const menuItemId = 'retry-product';
+    const initialBody = {
+      ...writeBody(0),
+      menuItemId,
+      formalName: '隔離再試行商品',
+      kitchenAlias: '再試行品',
+      variants: [],
+      servingOptions: [],
+    };
+    const accepted = await request({ port, token: ADMIN_TOKEN, body: initialBody });
+    assert.equal(accepted.statusCode, 200);
+    assert.equal(accepted.json.menuItemId, menuItemId);
+    assert.equal(accepted.json.version, 1);
+
+    const reread = await request({ port, token: ADMIN_TOKEN, method: 'GET', path: '/v1/menu' });
+    const savedItem = reread.json.items.find((item) => item.menuItemId === menuItemId);
+    assert.ok(savedItem);
+    const retry = await request({
+      port,
+      token: ADMIN_TOKEN,
+      body: { ...initialBody, expectedVersion: savedItem.version, formalName: '隔離再試行商品・修正版' },
+    });
+    assert.equal(retry.statusCode, 200);
+    assert.equal(retry.json.menuItemId, menuItemId);
+    assert.equal(retry.json.version, 2);
+    assert.equal(database.prepare('SELECT COUNT(*) AS count FROM menu_items WHERE menu_item_id = ?').get(menuItemId).count, 1);
+    assert.equal(database.prepare('SELECT formal_name FROM menu_items WHERE menu_item_id = ?').get(menuItemId).formal_name, '隔離再試行商品・修正版');
+  });
+});
+
 test('admin catalog write rejects stale versions without changing the catalog or event cursor', async () => {
   await withFixture(async ({ port, database }) => {
     const first = await request({ port, token: ADMIN_TOKEN, body: writeBody() });
