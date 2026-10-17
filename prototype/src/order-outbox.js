@@ -516,6 +516,7 @@ export async function postCustomerStaffCall({ config, clientCallId, visitContext
     throw new CustomerCheckoutError("スタッフ呼出の応答が不正です。", { status: response.status, code: "INVALID_RESPONSE" });
   }
   if (body?.clientCallId !== clientCallId || body?.callType !== "staff"
+    || typeof body?.staffCallId !== "string" || !UUID_V4_PATTERN.test(body.staffCallId)
     || body?.status !== "open" || body?.idempotencyResult !== idempotencyResult) {
     throw new CustomerCheckoutError("スタッフ呼出の応答が不正です。", { status: response.status, code: "INVALID_RESPONSE" });
   }
@@ -1076,12 +1077,17 @@ export function createCustomerOrderClient({
       const current = await readCurrentVisitContext();
       return current.status === "available" ? current.visitContextId : visitContextId || null;
     },
-    async createStaffCall({ clientCallId }) {
+    async createStaffCall({ clientCallId, expectedVisitContextId } = {}) {
       const current = await readCurrentVisitContext();
       if (current.status !== "available") {
         throw new CustomerCheckoutError("現在の来店情報を確認できません。通信を確認して再試行してください。", {
           status: current.status === "unauthorized" ? 401 : 0,
           code: current.errorCode || "VISIT_CONTEXT_UNAVAILABLE",
+        });
+      }
+      if (expectedVisitContextId && expectedVisitContextId !== current.visitContextId) {
+        throw new CustomerCheckoutError("来店情報が変わりました。現在の来店を確認してから呼び出してください。", {
+          code: "VISIT_CONTEXT_STALE",
         });
       }
       return postCustomerStaffCall({

@@ -35,6 +35,7 @@ import { adjustKitchenItemUnitPrice, adjustKitchenOrderItemQuantity as adjustKit
 import { buildKitchenTableGroups } from "./kitchen-order-board.js";
 import { bootstrapCustomerOrderClient } from "./customer-bootstrap.js";
 import { createCustomerVisitConfigRefresher } from "./customer-visit-config-refresh.js";
+import { CUSTOMER_STAFF_CALL_COOLDOWN_MS, customerStaffCallCooldownKey, customerStaffCallCooldownSeconds, isCustomerStaffCallSuccessNotice, isMatchingCustomerStaffCallResolution, parseCustomerStaffCallCooldown } from "./customer-staff-call.js";
 import { createCustomerMenuState, customerMenuStateReducer } from "./customer-menu-state.js";
 import { addCustomerCartSelection, customerCartRows, removeCustomerCartSelection } from "./customer-cart.js";
 import { taxExcludedYen } from "./pricing.js";
@@ -632,9 +633,9 @@ function normalizeCustomerThemeConfig(value, fallbackTheme = CUSTOMER_TEST_THEME
   return { theme, positionX, positionY, zoom };
 }
 
-function IconButton({ icon: Icon, children, badge, onClick, className = "" }) {
+function IconButton({ icon: Icon, children, badge, onClick, className = "", disabled = false }) {
   return (
-    <button className={`header-action ${className}`} onClick={onClick} type="button">
+    <button className={`header-action ${className}`} onClick={onClick} type="button" disabled={disabled}>
       <Icon size={30} weight="bold" />
       <span>{children}</span>
       {badge ? <b className="badge">{badge}</b> : null}
@@ -926,7 +927,79 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
   const submitLock = useRef(false);
   const staffCallSubmitLock = useRef(false);
   const staffCallIdRef = useRef(null);
+  const staffCallResolvedIdsRef = useRef(new Set());
   const [staffCallSubmitting, setStaffCallSubmitting] = useState(false);
+  const [staffCallCooldown, setStaffCallCooldown] = useState(null);
+  const [staffCallClock, setStaffCallClock] = useState(Date.now());
+  const staffCallVisitContextId = apiMode ? (customerDeviceConfig?.visitContextId ?? null) : "demo";
+  const staffCallStorageKey = customerStaffCallCooldownKey(customerDeviceConfig?.deviceId ?? deviceId, staffCallVisitContextId);
+  const staffCallCooldownKeyRef = useRef(null);
+  const staffCallCooldownUntilRef = useRef({ key: staffCallStorageKey, untilAtMs: 0 });
+  const staffCallCurrentStorageKeyRef = useRef(staffCallStorageKey);
+  staffCallCurrentStorageKeyRef.current = staffCallStorageKey;
+  const currentStaffCallCooldown = staffCallCooldown?.visitContextId === staffCallVisitContextId ? staffCallCooldown : null;
+  const staffCallCooldownRemainingSeconds = Math.max(
+    customerStaffCallCooldownSeconds(currentStaffCallCooldown, staffCallClock),
+    staffCallCooldownUntilRef.current.key === staffCallStorageKey
+      ? Math.max(0, Math.ceil((staffCallCooldownUntilRef.current.untilAtMs - staffCallClock) / 1000))
+      : 0,
+  );
+
+  useEffect(() => {
+    if (staffCallCooldownKeyRef.current !== staffCallStorageKey) staffCallIdRef.current = null;
+    staffCallCooldownKeyRef.current = staffCallStorageKey;
+    if (!staffCallStorageKey) {
+      staffCallCooldownUntilRef.current = { key: null, untilAtMs: 0 };
+      setStaffCallCooldown(null);
+      return;
+    }
+    let saved = null;
+    try { saved = parseCustomerStaffCallCooldown(window.localStorage.getItem(staffCallStorageKey)); } catch { /* storage may be unavailable */ }
+    staffCallCooldownUntilRef.current = { key: staffCallStorageKey, untilAtMs: saved?.untilAtMs ?? 0 };
+    setStaffCallCooldown(saved);
+    setStaffCallClock(Date.now());
+  }, [staffCallStorageKey]);
+
+  useEffect(() => {
+    if (!staffCallStorageKey) return undefined;
+    const onStorage = (event) => {
+      if (event.key !== staffCallStorageKey) return;
+      const saved = parseCustomerStaffCallCooldown(event.newValue);
+      staffCallCooldownUntilRef.current = { key: staffCallStorageKey, untilAtMs: saved?.untilAtMs ?? 0 };
+      setStaffCallCooldown(saved);
+      setStaffCallClock(Date.now());
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, [staffCallStorageKey]);
+
+  useEffect(() => {
+    if (!currentStaffCallCooldown && !(staffCallCooldownUntilRef.current.key === staffCallStorageKey && staffCallCooldownUntilRef.current.untilAtMs > Date.now())) return undefined;
+    const timer = window.setInterval(() => {
+      const now = Date.now();
+      setStaffCallClock(now);
+      if (staffCallCooldownUntilRef.current.key !== staffCallStorageKey || staffCallCooldownUntilRef.current.untilAtMs <= now) window.clearInterval(timer);
+    }, 250);
+    return () => window.clearInterval(timer);
+  }, [currentStaffCallCooldown, staffCallStorageKey]);
+
+  useEffect(() => {
+    if (!apiMode || !staffCallCooldown || !staffCallVisitContextId || !staffCallStorageKey
+      || typeof orderClient?.subscribeInvalidations !== "function"
+      || staffCallCooldown.visitContextId !== staffCallVisitContextId) return undefined;
+    return orderClient.subscribeInvalidations((event) => {
+      if (!isMatchingCustomerStaffCallResolution(event, {
+        staffCallId: staffCallCooldown.staffCallId,
+        visitContextId: staffCallVisitContextId,
+      })) return;
+      staffCallResolvedIdsRef.current.add(staffCallCooldown.staffCallId);
+      setNotice((current) => isCustomerStaffCallSuccessNotice(current, staffCallCooldown.staffCallId) ? null : current);
+    });
+  }, [apiMode, orderClient, staffCallCooldown, staffCallVisitContextId, staffCallStorageKey]);
+  useEffect(() => {
+    if (staffCallCooldownRemainingSeconds > 0 || !staffCallCooldown?.staffCallId) return;
+    setNotice((current) => isCustomerStaffCallSuccessNotice(current, staffCallCooldown.staffCallId) ? null : current);
+  }, [staffCallCooldown?.staffCallId, staffCallCooldownRemainingSeconds]);
   const checkoutRequestIdRef = useRef(null);
   const checkoutPreviousRef = useRef(null);
   const checkoutAudioRef = useRef(null);
@@ -1102,7 +1175,7 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
   }, [apiMode, orderClient]);
 
   useEffect(() => {
-    if (notice?.kind !== "success") return undefined;
+    if (notice?.kind !== "success" || notice.staffCallId) return undefined;
     const timeoutId = window.setTimeout(() => {
       setNotice((current) => current?.kind === "success" ? null : current);
     }, 4000);
@@ -1304,31 +1377,66 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
 
   const callStaff = async () => {
     if (staffCallSubmitLock.current) return;
+    if (staffCallCooldownRemainingSeconds > 0
+      || (staffCallCooldownUntilRef.current.key === staffCallStorageKey && staffCallCooldownUntilRef.current.untilAtMs > Date.now())) return;
     if (!apiMode) {
-      updateState((current) => ({ ...current, staffCalls: [...current.staffCalls, { id: makeId("call"), tableId: device.tableId, type: "staff", createdAt: new Date().toISOString(), resolvedAt: null }] }));
+      const staffCallId = makeId("call");
+      updateState((current) => ({ ...current, staffCalls: [...current.staffCalls, { id: staffCallId, tableId: device.tableId, type: "staff", createdAt: new Date().toISOString(), resolvedAt: null }] }));
+      const cooldown = { staffCallId, visitContextId: "demo", untilAtMs: Date.now() + CUSTOMER_STAFF_CALL_COOLDOWN_MS };
+      staffCallCooldownUntilRef.current = { key: staffCallStorageKey, untilAtMs: cooldown.untilAtMs };
+      try { window.localStorage.setItem(staffCallStorageKey, JSON.stringify(cooldown)); } catch { /* in-page lock still enforces the limit */ }
+      setStaffCallCooldown(cooldown);
+      setStaffCallClock(Date.now());
       setModal(null);
-      setNotice("スタッフを呼び出しました。少々お待ちください。");
+      setNotice({ kind: "success", message: "スタッフを呼び出しました。", staffCallId });
       return;
     }
     staffCallSubmitLock.current = true;
     setStaffCallSubmitting(true);
-    let clientCallId = staffCallIdRef.current;
+    let callVisitContextId = staffCallVisitContextId;
     try {
+      callVisitContextId = callVisitContextId || await orderClient.getVisitContextId?.();
+      const callStorageKey = customerStaffCallCooldownKey(customerDeviceConfig?.deviceId ?? deviceId, callVisitContextId);
+      if (!callVisitContextId || !callStorageKey) throw new Error("VISIT_CONTEXT_UNAVAILABLE");
+      let savedCooldown = null;
+      try { savedCooldown = parseCustomerStaffCallCooldown(window.localStorage.getItem(callStorageKey)); } catch { /* storage may be unavailable */ }
+      const savedCooldownSeconds = customerStaffCallCooldownSeconds(savedCooldown);
+      if (savedCooldownSeconds > 0) {
+        staffCallCooldownUntilRef.current = { key: callStorageKey, untilAtMs: savedCooldown.untilAtMs };
+        setStaffCallCooldown(savedCooldown);
+        setStaffCallClock(Date.now());
+        setModal(null);
+        return;
+      }
+      const pendingCallKey = `warun-pending-staff-call-id:${customerDeviceConfig?.deviceId ?? deviceId}:${callVisitContextId}`;
+      let clientCallId = staffCallIdRef.current;
       if (!clientCallId) {
-        try { clientCallId = window.sessionStorage.getItem("warun-pending-staff-call-id"); } catch { /* session storage may be unavailable */ }
+        try { clientCallId = window.sessionStorage.getItem(pendingCallKey); } catch { /* session storage may be unavailable */ }
       }
       if (!clientCallId || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(clientCallId)) {
         clientCallId = createClientOrderId();
       }
       staffCallIdRef.current = clientCallId;
-      try { window.sessionStorage.setItem("warun-pending-staff-call-id", clientCallId); } catch { /* server idempotency remains active for in-page retries */ }
-      await orderClient.createStaffCall({ clientCallId });
+      try { window.sessionStorage.setItem(pendingCallKey, clientCallId); } catch { /* server idempotency remains active for in-page retries */ }
+      const result = await orderClient.createStaffCall({ clientCallId, expectedVisitContextId: callVisitContextId });
       staffCallIdRef.current = null;
-      try { window.sessionStorage.removeItem("warun-pending-staff-call-id"); } catch { /* best effort cleanup */ }
+      try { window.sessionStorage.removeItem(pendingCallKey); } catch { /* best effort cleanup */ }
+      const cooldown = { staffCallId: result.staffCallId, visitContextId: callVisitContextId, untilAtMs: Date.now() + CUSTOMER_STAFF_CALL_COOLDOWN_MS };
+      try { window.localStorage.setItem(callStorageKey, JSON.stringify(cooldown)); } catch { /* the in-page lock still protects this visit */ }
+      const stillCurrentVisit = staffCallCurrentStorageKeyRef.current === callStorageKey || staffCallCurrentStorageKeyRef.current === null;
+      if (stillCurrentVisit) {
+        staffCallCooldownUntilRef.current = { key: callStorageKey, untilAtMs: cooldown.untilAtMs };
+        setStaffCallCooldown(cooldown);
+        setStaffCallClock(Date.now());
+      }
       setModal(null);
-      setNotice("スタッフを呼び出しました。少々お待ちください。");
+      if (stillCurrentVisit && !staffCallResolvedIdsRef.current.has(cooldown.staffCallId)) {
+        setNotice({ kind: "success", message: "スタッフを呼び出しました。", staffCallId: cooldown.staffCallId });
+      }
     } catch {
-      setNotice({ kind: "failed", message: "呼出を保存できませんでした。呼出画面を開いたまま再試行してください。" });
+      if (staffCallCurrentStorageKeyRef.current === customerStaffCallCooldownKey(customerDeviceConfig?.deviceId ?? deviceId, callVisitContextId)) {
+        setNotice({ kind: "failed", message: "呼出を保存できませんでした。呼出画面を開いたまま再試行してください。" });
+      }
     } finally {
       staffCallSubmitLock.current = false;
       setStaffCallSubmitting(false);
@@ -1542,7 +1650,7 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
       <section className={`customer-main ${isMenuHeaderHidden ? "customer-main--menu-active" : ""} ${notice ? "customer-main--has-notice" : ""}`}>
         <header className={`customer-header ${isMenuHeaderHidden ? "customer-header--menu-hidden" : ""}`}>
           <IconButton icon={ClipboardText} onClick={() => setModal("history")}>注文履歴</IconButton>
-          <IconButton icon={Bell} onClick={() => setModal("staff")}>スタッフを呼ぶ</IconButton>
+          <IconButton icon={Bell} disabled={staffCallSubmitting || staffCallCooldownRemainingSeconds > 0} onClick={() => { if (staffCallCooldownRemainingSeconds === 0) setModal("staff"); }}>{staffCallCooldownRemainingSeconds > 0 ? `スタッフ呼出 あと${staffCallCooldownRemainingSeconds}秒` : "スタッフを呼ぶ"}</IconButton>
           <IconButton icon={CurrencyJpy} onClick={openCheckout}>お会計</IconButton>
           <IconButton icon={Car} onClick={openRideGuidance}>タクシー・運転代行</IconButton>
           <div className="table-label">テーブル <b>{device.tableId}</b></div>
@@ -1653,7 +1761,7 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
           {sakeSelectionError ? <p className="sake-selection-error" role="alert">{sakeSelectionError}</p> : null}
         </div>
       </Modal> : null}
-      {modal === "staff" ? <Modal title="スタッフを呼びますか？" onClose={() => { if (!staffCallSubmitting) setModal(null); }}><p className="modal-lead">テーブル {device.tableId} からスタッフへお知らせします。</p><div className="modal-actions"><button className="button button--quiet" disabled={staffCallSubmitting} onClick={() => setModal(null)}>やめる</button><button className="button button--primary button--large" disabled={staffCallSubmitting} onClick={callStaff}><Bell size={22} weight="bold" /> {staffCallSubmitting ? "送信中" : "呼び出す"}</button></div></Modal> : null}
+      {modal === "staff" ? <Modal title="スタッフを呼びますか？" onClose={() => { if (!staffCallSubmitting) setModal(null); }}><p className="modal-lead">テーブル {device.tableId} からスタッフへお知らせします。</p>{staffCallCooldownRemainingSeconds > 0 ? <p role="status">次の呼び出しまであと {staffCallCooldownRemainingSeconds} 秒です。</p> : null}<div className="modal-actions"><button className="button button--quiet" disabled={staffCallSubmitting} onClick={() => setModal(null)}>やめる</button><button className="button button--primary button--large" disabled={staffCallSubmitting || staffCallCooldownRemainingSeconds > 0} onClick={callStaff}><Bell size={22} weight="bold" /> {staffCallSubmitting ? "送信中" : staffCallCooldownRemainingSeconds > 0 ? `あと${staffCallCooldownRemainingSeconds}秒` : "呼び出す"}</button></div></Modal> : null}
       {modal === "feature" ? <Modal title="確認" onClose={() => setModal(null)}><p className="modal-lead">この機能は次の実装段階で接続します。</p><div className="modal-actions"><button className="button button--primary" onClick={() => setModal(null)}>閉じる</button></div></Modal> : null}
       {modal === "history" ? <Modal title="これまでのご注文" onClose={() => setModal(null)} wide><div className="customer-history">{apiMode && apiHistoryState.loading ? <div className="empty-state"><ClipboardText size={42} /><p>注文履歴を読み込んでいます。</p></div> : apiMode && apiHistoryState.error ? <div className="empty-state"><ClipboardText size={42} /><p>注文履歴を取得できません。</p></div> : customerHistory.length ? customerHistory.map((order) => <article key={order.id}><header><b>{formatTime(order.createdAt)} のご注文</b><span className={`status-chip status-${order.status}`}>{customerTransportLabel(order)}</span></header>{order.items.map((item) => <div key={item.id}><span>{selectionDisplayName({ name: item.nameSnapshot }, item)}</span><b>{item.quantity}点</b></div>)}</article>) : <div className="empty-state"><ClipboardText size={42} /><p>注文履歴はまだありません。</p></div>}</div></Modal> : null}
       {detailItem ? <Modal title={detailItem.name} titleExtra={detailItem.detail?.reading ? <span className="modal__title-reading">{detailItem.detail.reading}</span> : null} onClose={() => setDetailItem(null)} wide className="modal--product-detail" footer={<div className="modal-actions product-detail__actions"><button className="button button--quiet" onClick={() => setDetailItem(null)}>一覧へ戻る</button>{detailItem.categoryId === "shochu" && detailItem.servingOptions?.length ? <button className="button button--primary button--large" onClick={() => chooseShochuFromDetail(detailItem)}>これにする</button> : detailItem.categoryId === "sake" && detailItem.variants?.length ? <button className="button button--primary button--large" onClick={() => chooseSakeFromDetail(detailItem)}>これにする</button> : null}</div>}><div className="product-detail">{detailItem.detail?.imageUri || detailItem.imageUri ? <div className="product-detail__image"><img src={detailItem.detail?.imageUri || detailItem.imageUri} alt={detailItem.name} style={imageLayoutStyle(detailItem, "detail")} /></div> : null}<div>{detailItem.detail?.itemType ? <span className="category-tag">{detailItem.detail.itemType}</span> : null}<p className="product-detail__description">{detailItem.detail?.description || detailItem.description}</p><dl>{[["産地", "origin"], ["蔵元", "producer"], ["味の特徴", "taste"], ["香り", "aroma"], ["甘辛", "sweetness"], ["キレ", "finish"]].filter(([, key]) => detailItem.detail?.[key]).map(([label, key]) => <div key={key}><dt>{label}</dt><dd>{detailItem.detail[key]}</dd></div>)}</dl>{detailItem.detail?.recommendation ? <blockquote>{detailItem.detail.recommendation}</blockquote> : null}</div></div></Modal> : null}

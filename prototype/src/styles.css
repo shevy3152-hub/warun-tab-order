@@ -184,6 +184,7 @@ h1, h2, h3, p { margin: 0; }
 .header-action { position: relative; height: 70px; min-width: 0; flex: 1 1 0; padding: 0 18px; border: 1px solid var(--ink); background: transparent; display: flex; justify-content: center; align-items: center; gap: 10px; font-size: 16px; font-weight: 800; }
 .header-action:nth-child(2), .header-action:nth-child(4) { min-width: 245px; }
 .header-action:hover { background: #eee8dc; }
+.header-action:disabled { cursor: not-allowed; opacity: .72; }
 .header-action .badge { position: absolute; right: -8px; top: -8px; }
 .table-label { margin-left: auto; white-space: nowrap; font-size: 20px; font-weight: 800; }
 .table-label b { color: var(--red); font-size: 36px; margin-left: 8px; }

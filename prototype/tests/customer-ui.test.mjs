@@ -11,6 +11,7 @@ const appSource = await readFile(new URL("../src/App.jsx", import.meta.url), "ut
 const styles = await readFile(new URL("../src/styles.css", import.meta.url), "utf8");
 const customerScreen = appSource.slice(appSource.indexOf("function CustomerScreen"), appSource.indexOf("const staffNavItems"));
 const visitConfigRefreshSource = await readFile(new URL("../src/customer-visit-config-refresh.js", import.meta.url), "utf8");
+const staffCallSource = await readFile(new URL("../src/customer-staff-call.js", import.meta.url), "utf8");
 
 test("CustomerScreen renders menu prices but no cart or customer-history totals", () => {
   assert.match(customerScreen, /PriceDisplay/);
@@ -365,13 +366,30 @@ test("API customer staff call submits an idempotent request and shows success on
   const callStart = customerScreen.indexOf("const callStaff = async () =>");
   const callEnd = customerScreen.indexOf("const noticeKind", callStart);
   const callHandler = customerScreen.slice(callStart, callEnd);
-  assert.match(callHandler, /await orderClient\.createStaffCall\(\{ clientCallId \}\)/);
+  assert.match(callHandler, /await orderClient\.createStaffCall\(\{ clientCallId, expectedVisitContextId: callVisitContextId \}\)/);
   assert.match(callHandler, /staffCallSubmitLock\.current/);
-  assert.match(callHandler, /warun-pending-staff-call-id/);
+  assert.match(callHandler, /warun-pending-staff-call-id:\$\{customerDeviceConfig\?\.deviceId \?\? deviceId\}:\$\{callVisitContextId\}/);
   const apiCallHandler = callHandler.slice(callHandler.indexOf("staffCallSubmitLock.current = true"));
   assert.ok(apiCallHandler.indexOf("await orderClient.createStaffCall") < apiCallHandler.indexOf("スタッフを呼び出しました"));
   assert.match(callHandler, /呼出を保存できませんでした。呼出画面を開いたまま再試行してください。/);
   assert.match(customerScreen, /disabled=\{staffCallSubmitting\}/);
+  assert.match(customerScreen, /staffCallCooldownRemainingSeconds/);
+  assert.match(callHandler, /expectedVisitContextId: callVisitContextId/);
+  assert.match(customerScreen, /isMatchingCustomerStaffCallResolution/);
+  assert.match(customerScreen, /message: "スタッフを呼び出しました。", staffCallId: cooldown\.staffCallId/);
+  assert.match(customerScreen, /isCustomerStaffCallSuccessNotice\(current, staffCallCooldown\.staffCallId\) \? null : current/);
+  assert.match(customerScreen, /notice\?\.kind !== "success" \|\| notice\.staffCallId/);
+  assert.doesNotMatch(customerScreen, /スタッフが対応しました/);
+  assert.match(customerScreen, /staffCallResolvedIdsRef\.current\.has\(cooldown\.staffCallId\)/);
+  const successfulCall = callHandler.slice(callHandler.indexOf("const result = await orderClient.createStaffCall"));
+  assert.ok(successfulCall.indexOf("await orderClient.createStaffCall") < successfulCall.indexOf("setStaffCallCooldown(cooldown)"));
+  assert.ok(successfulCall.indexOf("setStaffCallCooldown(cooldown)") < successfulCall.indexOf("スタッフを呼び出しました"));
+  const failedCallPath = callHandler.slice(callHandler.lastIndexOf("} catch {"), callHandler.indexOf("} finally {"));
+  assert.doesNotMatch(failedCallPath, /setStaffCallCooldown\(/);
+  assert.match(customerScreen, /staffCallCooldownRemainingSeconds > 0 \|\| !staffCallCooldown\?\.staffCallId/);
+  assert.match(customerScreen, /disabled=\{staffCallSubmitting \|\| staffCallCooldownRemainingSeconds > 0\}/);
+  assert.ok(customerScreen.indexOf("const staffCallStorageKey =") < customerScreen.indexOf("useRef({ key: staffCallStorageKey"));
+  assert.match(staffCallSource, /warun-staff-call-cooldown/);
 });
 
 test("revoked customer authorization keeps the cart visible and blocks enqueue until discard", () => {
@@ -991,7 +1009,7 @@ test("production customer history loads authenticated SQLite data and fails clos
 });
 
 test("customer success notice clears itself without clearing other notices", () => {
-  assert.match(customerScreen, /if \(notice\?\.kind !== "success"\) return undefined/);
+  assert.match(customerScreen, /if \(notice\?\.kind !== "success" \|\| notice\.staffCallId\) return undefined/);
   assert.match(customerScreen, /window\.setTimeout/);
   assert.match(customerScreen, /current\?\.kind === "success" \? null : current/);
   assert.match(customerScreen, /\}, 4000\);/);

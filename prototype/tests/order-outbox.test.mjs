@@ -36,7 +36,7 @@ test("staff call client posts only the idempotency key and visit context, and do
   const response = {
     status: 201,
     headers: { get: (name) => name === "Idempotency-Result" ? "created" : null },
-    async json() { return { clientCallId, callType: "staff", status: "open", idempotencyResult: "created" }; },
+    async json() { return { staffCallId: uuid(78), clientCallId, callType: "staff", status: "open", idempotencyResult: "created" }; },
   };
   const result = await postCustomerStaffCall({
     config, clientCallId, visitContextId, env: { navigator: { onLine: true } },
@@ -47,10 +47,38 @@ test("staff call client posts only the idempotency key and visit context, and do
   assert.equal(calls[0][1].method, "POST");
   assert.equal(calls[0][1].headers.Authorization, "Bearer test-token");
   assert.deepEqual(JSON.parse(calls[0][1].body), { clientCallId, visitContextId });
+  assert.equal(result.staffCallId, uuid(78));
   await assert.rejects(() => postCustomerStaffCall({
     config, clientCallId, visitContextId, env: { navigator: { onLine: true } },
     fetchImpl: async () => ({ status: 503, headers: { get: () => null }, async json() { return { error: { code: "SERVICE_UNAVAILABLE" } }; } }),
   }), /呼出を保存できませんでした/);
+});
+
+test("staff-call API client rejects a visit change before sending the call", async () => {
+  const calls = [];
+  const expectedVisitContextId = `v1_${"a".repeat(64)}`;
+  const currentVisitContextId = `v1_${"b".repeat(64)}`;
+  const client = createCustomerOrderClient({
+    global: {
+      WARUN_ORDER_MODE: "api",
+      WARUN_API_BASE: "http://localhost:28787/v1",
+      WARUN_API_TOKEN: "isolated-test-token",
+      navigator: { onLine: true },
+    },
+    store: createMemoryOutbox(),
+    autoRetry: false,
+    fetchImpl: async (url, options = {}) => {
+      calls.push({ url, options });
+      return { ok: true, status: 200, async json() { return { role: "customer", visitContextId: currentVisitContextId }; } };
+    },
+  });
+  await assert.rejects(
+    () => client.createStaffCall({ clientCallId: uuid(79), expectedVisitContextId }),
+    (error) => error.code === "VISIT_CONTEXT_STALE",
+  );
+  assert.equal(calls.length, 1);
+  assert.match(calls[0].url, /\/device\/config$/);
+  await client.stop();
 });
 
 function successfulTransport(result = "created", calls = []) {
