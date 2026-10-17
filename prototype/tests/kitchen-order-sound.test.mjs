@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { readFile } from "node:fs/promises";
 import { fetchKitchenSnapshot } from "../src/kitchen-api.js";
-import { createKitchenOrderSound, createKitchenSoundEngine, kitchenSoundStorageKey, KITCHEN_NOTIFICATION_GAIN } from "../src/kitchen-order-sound.js";
+import { createKitchenOrderSound, createKitchenSoundEngine, initialKitchenOrderSoundState, kitchenSoundStorageKey, KITCHEN_NOTIFICATION_GAIN } from "../src/kitchen-order-sound.js";
 const order = (id, status = "new") => ({ id, status, version: 1 });
 function fixture({ storage, activate, loadBaseline, ...options } = {}) {
   const values = new Map();
@@ -14,11 +14,15 @@ function fixture({ storage, activate, loadBaseline, ...options } = {}) {
   const controller = createKitchenOrderSound({ storage: store, storageKey: "test", engine, loadBaseline, now: () => clock, onChange: state => changes.push(state), ...options });
   return { controller, engine, store, plays: () => plays, playKinds, stops: () => stops, advance: value => { clock = value; }, changes };
 }
-test("initial OFF and first successful snapshot never replay existing orders", async () => {
+test("unset sound preference defaults ON but waits for explicit audio activation", async () => {
   const f = fixture();
-  assert.equal(f.controller.getState().status, "off");
+  assert.equal(f.controller.getState().requestedOn, true);
+  assert.equal(f.controller.getState().status, "needs-activation");
+  assert.match(f.controller.getState().message, /音を有効にする/);
   f.controller.observe([order("old")]);
+  assert.equal(f.plays(), 0);
   await f.controller.enable();
+  assert.equal(f.controller.getState().status, "on");
   f.controller.observe([], { requestStartedAt: 10 });
   f.controller.observe([order("old")], { requestStartedAt: 20 });
   assert.equal(f.plays(), 0);
@@ -27,6 +31,12 @@ test("initial OFF and first successful snapshot never replay existing orders", a
   await early.controller.enable();
   early.controller.observe([order("existing")], { requestStartedAt: 20 });
   assert.equal(early.plays(), 0);
+});
+test("unavailable storage keeps the ON default and reports that preferences cannot persist", () => {
+  const state = initialKitchenOrderSoundState(undefined, "test");
+  assert.equal(state.requestedOn, true);
+  assert.equal(state.status, "needs-activation");
+  assert.equal(state.storageAvailable, false);
 });
 test("one sound per new order, with duplicates, served updates and reconnects silent", async () => {
   const f = fixture();
@@ -103,8 +113,9 @@ test("reload preserves known IDs but requires a new activation click", async () 
   assert.deepEqual(f.playKinds, ["order", "staffCall"]);
   f.controller.dispose();
   const reloaded = fixture({ storage: f.store });
-  assert.equal(reloaded.controller.getState().status, "off");
-  assert.match(reloaded.controller.getState().message, /前回はON/);
+  assert.equal(reloaded.controller.getState().status, "needs-activation");
+  assert.equal(reloaded.controller.getState().requestedOn, true);
+  assert.match(reloaded.controller.getState().message, /音を有効にする/);
   reloaded.controller.observe([]);
   await reloaded.controller.enable();
   reloaded.controller.observe([], { requestStartedAt: 10 });
@@ -147,9 +158,11 @@ test("activation and playback failures stop audio and do not retry on incoming o
 });
 test("test while OFF does not enable new-order sounds; audio suspension shows a blocked state", async () => {
   const f = fixture();
+  f.controller.disable();
   await f.controller.test();
   assert.equal(f.plays(), 1);
   assert.equal(f.controller.getState().status, "off");
+  assert.equal(f.controller.getState().requestedOn, false);
   await f.controller.enable();
   f.controller.observe([], { requestStartedAt: 10 });
   f.controller.audioStateChanged("suspended");
@@ -220,6 +233,8 @@ test("sound controls belong only to kitchen and use snapshot request timing", as
   assert.match(app, /playCheckoutBell\(checkoutAudioRef\)/);
   const component = await readFile(new URL("../src/KitchenOrderSound.jsx", import.meta.url), "utf8");
   assert.match(component, /音を試す/);
+  assert.match(component, /音を有効にする/);
+  assert.match(component, /ON（音声未有効）/);
   assert.match(component, /role="switch"/);
   assert.match(component, /aria-checked={enabled}/);
 });
@@ -295,18 +310,22 @@ test("activation progress distinguishes audio waiting from baseline waiting", as
   assert.equal(f.controller.getState().status, "off");
 });
 
-test("audio and API failures have specific safe reasons and never display ON", async () => {
+test("audio and API failures preserve the ON preference without claiming audio is ready", async () => {
   const audio = fixture({ activate: async () => { throw Object.assign(new Error("private detail"), { name: "NotAllowedError" }); } });
   await audio.controller.enable();
   assert.equal(audio.controller.getState().audioStatus, "failed");
+  assert.equal(audio.controller.getState().requestedOn, true);
+  assert.equal(audio.controller.getState().status, "blocked");
   assert.match(audio.controller.getState().message, /ブラウザーが音声の有効化を拒否/);
+  assert.match(audio.controller.getState().message, /音声は再生できる状態ではありません/);
+  assert.match(audio.controller.getState().message, /音を有効にする/);
   assert.doesNotMatch(audio.controller.getState().message, /private detail/);
   const api = fixture({ loadBaseline: async () => { throw Object.assign(new Error("private detail"), { status: 401 }); } });
   await api.controller.enable();
   assert.equal(api.controller.getState().baselineStatus, "failed");
   assert.match(api.controller.getState().message, /HTTP 401/);
   assert.equal(api.controller.getState().status, "blocked");
-  assert.match(api.controller.getState().message, /再度有効化/);
+  assert.match(api.controller.getState().message, /音を有効にする/);
 });
 
 test("pending activation times out once, aborts baseline and ignores late completion", async () => {
@@ -389,12 +408,14 @@ test("audio activation deadline reports audio waiting and allows an explicit ret
 });
 
 
-test("volume defaults to the previous gain, persists locally, and reload is always OFF", async () => {
+test("volume persists locally and an ON preference remains ON after reload pending activation", async () => {
   const f = fixture();
   assert.equal(f.controller.getState().volume, 50);
+  assert.equal(f.controller.getState().requestedOn, true);
+  assert.equal(f.controller.getState().status, "needs-activation");
   const volumes = []; f.engine.setVolume = value => volumes.push(value);
   f.controller.setVolume(80);
-  assert.equal(f.controller.getState().status, "off");
+  assert.equal(f.controller.getState().status, "needs-activation");
   assert.deepEqual(volumes, [80]);
   await f.controller.setEnabled(true);
   assert.equal(f.controller.getState().status, "on");
@@ -404,15 +425,23 @@ test("volume defaults to the previous gain, persists locally, and reload is alwa
   assert.equal(f.controller.getState().status, "on");
   const reloaded = fixture({ storage: f.store });
   assert.equal(reloaded.controller.getState().volume, 100);
-  assert.equal(reloaded.controller.getState().status, "off");
+  assert.equal(reloaded.controller.getState().status, "needs-activation");
+  assert.equal(reloaded.controller.getState().requestedOn, true);
+  assert.match(reloaded.controller.getState().message, /音を有効にする/);
   f.controller.setEnabled(false);
   assert.equal(f.controller.getState().status, "off");
+  assert.equal(f.controller.getState().requestedOn, false);
+  const explicitlyOff = fixture({ storage: f.store });
+  assert.equal(explicitlyOff.controller.getState().requestedOn, false);
+  assert.equal(explicitlyOff.controller.getState().status, "off");
 });
 
 test("test leaves switch state unchanged both ON and OFF; muted observations remain deduplicated", async () => {
   const f = fixture();
+  f.controller.disable();
   await f.controller.test();
   assert.equal(f.controller.getState().status, "off");
+  assert.equal(f.controller.getState().requestedOn, false);
   await f.controller.setEnabled(true);
   await f.controller.test();
   assert.equal(f.controller.getState().status, "on");
@@ -431,6 +460,7 @@ test("test leaves switch state unchanged both ON and OFF; muted observations rem
 
 test("volume is clamped and failed test does not turn the switch ON", async () => {
   const f = fixture({ activate: async () => { throw new Error("blocked"); } });
+  f.controller.disable();
   f.controller.setVolume(150); assert.equal(f.controller.getState().volume, 100);
   f.controller.setVolume(-1); assert.equal(f.controller.getState().volume, 0);
   f.controller.setVolume(NaN); assert.equal(f.controller.getState().volume, 50);
@@ -479,12 +509,13 @@ test("rendered switch invokes activation, never test; ON survives order and volu
   const hooks = {
     element: (type, attributes, ...children) => ({ type, props: { ...attributes, children } }),
     useRef: value => { const i=index++; return slots[i] || (slots[i]={current:value}); },
-    useState: value => { const i=index++; if (!slots[i]) slots[i]={value}; return [slots[i].value, v => { slots[i].value=typeof v==='function'?v(slots[i].value):v; }]; },
+    useState: value => { const i=index++; if (!slots[i]) slots[i]={value:typeof value==='function'?value():value}; return [slots[i].value, v => { slots[i].value=typeof v==='function'?v(slots[i].value):v; }]; },
     useEffect: (run, deps) => { const i=index++; if (!same(slots[i]?.deps,deps)) { effects.push(() => { slots[i]?.cleanup?.(); slots[i]={deps,cleanup:run()}; }); } },
   };
   const render = () => { index=0;tree=component(props);while(effects.length)effects.shift()();index=0;tree=component(props);return tree; };
   const walk = node => !node || typeof node !== 'object' ? [] : [node,...(node.props?.children || []).flat(Infinity).flatMap(walk)];
   const find = predicate => walk(tree).find(predicate);
+  const textOf = node => typeof node === 'string' ? node : !node || typeof node !== 'object' ? "" : (node.props?.children || []).flat(Infinity).map(textOf).join("");
   const priorWindow = globalThis.window; globalThis.__kitchenSoundHooks=hooks;
   let plays=0,reads=0;let clock=10;
   class Context {
@@ -499,8 +530,11 @@ test("rendered switch invokes activation, never test; ON survives order and volu
     component=(await import('data:text/javascript;base64,'+Buffer.from(transformed.code).toString('base64'))).KitchenOrderSound;
     props={orders:[],ready:true,requestStartedAt:10,demoMode:false};render();
     const toggle=()=>find(n=>n.props?.role==='switch');
-    assert.equal(toggle().props['aria-checked'],false);
-    toggle().props.onClick();render();
+    assert.equal(toggle().props['aria-checked'],true);
+    assert.match(textOf(toggle()), /音声未有効/);
+    const activate=find(n=>n.type==='button'&&n.props.children.includes('音を有効にする'));
+    assert.ok(activate);
+    activate.props.onClick();render();
     assert.equal(toggle().props['aria-busy'],true);
     await new Promise(resolve=>setImmediate(resolve));render();
     assert.equal(reads,1);assert.equal(plays,0);

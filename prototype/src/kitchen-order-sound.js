@@ -4,6 +4,38 @@ export function normalizeKitchenSoundVolume(value) {
   return typeof value === "number" && Number.isFinite(value) ? Math.round(Math.max(0, Math.min(100, value))) : DEFAULT_KITCHEN_SOUND_VOLUME;
 }
 
+function readKitchenSoundSettings(storage, storageKey) {
+  let stored = {};
+  let storageAvailable = true;
+  try {
+    if (typeof storage?.getItem !== "function") throw new Error("Storage unavailable");
+    stored = JSON.parse(storage.getItem(storageKey) || "{}");
+  } catch { storageAvailable = false; }
+  if (!stored || typeof stored !== "object" || Array.isArray(stored)) stored = {};
+  return {
+    requestedOn: typeof stored.requestedOn === "boolean" ? stored.requestedOn : true,
+    volume: normalizeKitchenSoundVolume(stored.volume),
+    seenIds: Array.isArray(stored.seenIds) ? stored.seenIds.filter((id) => typeof id === "string") : [],
+    seenCallIds: Array.isArray(stored.seenCallIds) ? stored.seenCallIds.filter((id) => typeof id === "string") : [],
+    storageAvailable,
+  };
+}
+
+export function initialKitchenOrderSoundState(storage, storageKey) {
+  const { requestedOn, volume, storageAvailable } = readKitchenSoundSettings(storage, storageKey);
+  return {
+    status: requestedOn ? "needs-activation" : "off",
+    message: requestedOn
+      ? "通知音の設定はONです。ブラウザーの再生制限により音声は未有効です。「音を有効にする」を押してください。"
+      : "通知音はOFFです。スイッチをONにすると有効になります。",
+    audioStatus: "idle",
+    baselineStatus: "idle",
+    storageAvailable,
+    volume,
+    requestedOn,
+  };
+}
+
 export function kitchenSoundStorageKey(env = globalThis) {
   try {
     const endpoint = new URL(env.WARUN_API_BASE || "/v1", env.location?.origin);
@@ -72,25 +104,25 @@ export function createKitchenSoundEngine({ env = globalThis, onStateChange = () 
 }
 
 export function createKitchenOrderSound({ storage, storageKey, engine, loadBaseline = async () => [], now = () => performance.now(), onChange = () => {}, setTimer = setTimeout, clearTimer = clearTimeout, timeoutMs = 8000 } = {}) {
-  let stored = {};
-  let storageAvailable = true;
-  try { stored = JSON.parse(storage?.getItem(storageKey) || "{}"); } catch { storageAvailable = false; }
-  if (!stored || typeof stored !== "object") stored = {};
-  const seen = new Set(Array.isArray(stored.seenIds) ? stored.seenIds.filter((id) => typeof id === "string") : []);
-  const seenCallIds = new Set(Array.isArray(stored.seenCallIds) ? stored.seenCallIds.filter((id) => typeof id === "string") : []);
-  let volume = normalizeKitchenSoundVolume(stored.volume);
+  const settings = readKitchenSoundSettings(storage, storageKey);
+  let storageAvailable = settings.storageAvailable;
+  const seen = new Set(settings.seenIds);
+  const seenCallIds = new Set(settings.seenCallIds);
+  let volume = settings.volume;
   engine.setVolume?.(volume);
-  let requestedOn = stored.requestedOn === true;
+  let requestedOn = settings.requestedOn;
   let initialized = false;
   let enabledAt = Infinity;
   let generation = 0;
   let disposed = false;
-  let status = "off";
-  let message = requestedOn ? "前回はONでした。スイッチをONにして、この画面の音を有効にしてください。" : "通知音はOFFです。スイッチをONにすると有効になります。";
+  let status = requestedOn ? "needs-activation" : "off";
+  let message = requestedOn
+    ? "通知音の設定はONです。ブラウザーの再生制限により音声は未有効です。「音を有効にする」を押してください。"
+    : "通知音はOFFです。スイッチをONにすると有効になります。";
   let pending = null;
   let audioStatus = "idle";
   let baselineStatus = "idle";
-  const state = () => ({ status, message, storageAvailable, audioStatus, baselineStatus, volume });
+  const state = () => ({ status, message, storageAvailable, audioStatus, baselineStatus, volume, requestedOn });
   const cancelPending = () => { pending?.abort(); pending = null; };
   const bounded = (operation, stage, signal) => new Promise((resolve, reject) => {
     let timer;
@@ -133,7 +165,7 @@ export function createKitchenOrderSound({ storage, storageKey, engine, loadBasel
         : error.status ? `厨房の新着一覧取得に失敗しました（HTTP ${error.status}）`
         : error.code === "INVALID_RESPONSE" ? "厨房の新着一覧応答形式が不正です"
         : "厨房の新着一覧を取得できませんでした（通信・応答エラー）";
-    message = `${reason}。通知音はOFFです。注文とスタッフ呼出の画面表示は続きます。スイッチをONにして再度有効化してください。`;
+    message = `${reason}。通知音の設定はONですが、音声は再生できる状態ではありません。注文とスタッフ呼出の画面表示は続きます。「音を有効にする」を押して再試行してください。`;
     publish();
   };
   return {
@@ -153,6 +185,8 @@ export function createKitchenOrderSound({ storage, storageKey, engine, loadBasel
       pending = new AbortController();
       const signal = pending.signal;
       status = "enabling";
+      requestedOn = true;
+      persist();
       audioStatus = "pending";
       baselineStatus = "pending";
       enabledAt = Infinity;
@@ -218,7 +252,7 @@ export function createKitchenOrderSound({ storage, storageKey, engine, loadBasel
         await engine.activate();
         if (disposed || attempt !== generation) return;
         if (volume > 0) engine.play();
-        message = volume === 0 ? "消音（音量0％）のため試聴音は鳴りません。" : status === "on" ? "通知音ON：試聴音を再生しました。" : "試聴音を再生しました。新規注文の通知音はOFFです。";
+        message = volume === 0 ? "消音（音量0％）のため試聴音は鳴りません。" : status === "on" ? "通知音ON：試聴音を再生しました。" : requestedOn ? "試聴音を再生しました。通知音設定はONですが、通知を有効にするには「音を有効にする」を押してください。" : "試聴音を再生しました。新着通知の設定はOFFです。";
         publish();
       } catch (error) {
         if (disposed || attempt !== generation) return;
