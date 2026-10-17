@@ -1845,6 +1845,16 @@ function checkoutErrorMessage(error, fallback) {
   return fallback;
 }
 
+function servingErrorMessage(error) {
+  if (error?.code === "ORDER_CONFLICT") return "注文または明細の状態が変わったため、提供状態を保存できませんでした。最新状態を確認してください。";
+  if (error?.code === "ORDER_NOT_FOUND" || error?.code === "INVALID_ORDER_REQUEST") return "対象の注文・明細を確認できませんでした。注文一覧を再取得してください。";
+  if (error?.code === "AUTHORIZATION_FAILED" || error?.status === 401 || error?.status === 403) return "厨房端末の認証が拒否されました。接続状態を確認してください。";
+  if (error?.code === "SERVE_REFRESH_FAILED") return "提供更新の応答後に最新状態を再取得できませんでした。保存状態を確認するため、通信を確認して再試行してください。";
+  if (error?.code === "API_UNAVAILABLE") return "厨房APIに接続できません。接続状態を確認して再試行してください。";
+  if (error instanceof TypeError) return "通信に失敗しました。接続状態を確認して再試行してください。";
+  return "提供状態を保存できませんでした。接続状態と注文の状態を確認して再試行してください。";
+}
+
 function CheckoutAdjustmentInput({ label, value, onChange, disabled, onDelete = null, optional = false }) {
   return <div className={`checkout-adjustment-row ${label ? "" : "checkout-adjustment-row--optional"}`}>
     {label ? <><span className="checkout-adjustment-label">{label}</span><div className="checkout-adjustment-fields"><label><span>1人分</span><input aria-label={`${label}の1人分`} className="checkout-unit-input" inputMode="numeric" pattern="[0-9]*" value={value.unitAmount} onChange={(event) => { if (/^\d*$/.test(event.target.value)) onChange({ ...value, unitAmount: event.target.value }); }} placeholder="0" disabled={disabled} /><small>円</small></label><label><span>人数</span><input aria-label={`${label}の人数`} className="checkout-people-input" inputMode="numeric" pattern="[0-9]*" min="1" max="99" value={value.people} onChange={(event) => { if (/^\d*$/.test(event.target.value)) onChange({ ...value, people: event.target.value }); }} placeholder="1" disabled={disabled} /><small>名</small></label><output aria-label={`${label}の金額`}>{Number.isInteger(Number(value.unitAmount)) && Number.isInteger(Number(value.people)) ? yen(Number(value.unitAmount) * Number(value.people)) : "入力確認"}</output></div></> : <label className="checkout-other-fields"><span>任意料金</span><input aria-label="任意料金の項目名" value={value.label} onChange={(event) => onChange({ ...value, label: event.target.value })} placeholder="項目名" maxLength={100} disabled={disabled} /><input aria-label="任意料金の金額" className="checkout-amount-input" inputMode="numeric" pattern="[0-9]*" value={value.amount} onChange={(event) => { if (/^\d*$/.test(event.target.value)) onChange({ ...value, amount: event.target.value }); }} placeholder="0" disabled={disabled} /><small>円</small></label>}
@@ -1947,6 +1957,9 @@ function KitchenScreen({ state, updateState, apiState, checkoutState, onServe, o
   const [quantityReason, setQuantityReason] = useState("");
   const [cancellationTarget, setCancellationTarget] = useState(null);
   const [collapsedOrders, setCollapsedOrders] = useState({});
+  const [servingItemKey, setServingItemKey] = useState("");
+  const servingItemLockRef = useRef(false);
+  const [servingErrors, setServingErrors] = useState({});
   const [historyState, setHistoryState] = useState({ loading: false, error: false, orders: [] });
   const [additionTarget, setAdditionTarget] = useState(null);
   const apiMode = Boolean(apiState);
@@ -2025,23 +2038,39 @@ function KitchenScreen({ state, updateState, apiState, checkoutState, onServe, o
   };
 
   const toggleServed = async (orderId, itemId) => {
-    if (apiMode) {
-      await onServe(orderId, itemId);
-      await loadHistory();
-      return;
-    }
-    updateState((current) => {
-      const now = new Date().toISOString();
-      const orders = current.orders.map((order) => {
-        if (order.id !== orderId) return order;
-        const items = order.items.map((item) => item.id === itemId ? { ...item, isServed: !item.isServed, servedAt: item.isServed ? null : now } : item);
-        const billableItems = items.filter((item) => !item.isCancelled);
-        const completed = billableItems.length > 0 && billableItems.every((item) => item.isServed);
-        const anyServed = billableItems.some((item) => item.isServed);
-        return { ...order, items, status: completed ? "completed" : anyServed ? "active" : "new", completedAt: completed ? now : null };
-      });
-      return { ...current, orders };
+    if (servingItemLockRef.current) return;
+    const itemKey = `${orderId}:${itemId}`;
+    servingItemLockRef.current = true;
+    setServingItemKey(itemKey);
+    setServingErrors((current) => {
+      const next = { ...current };
+      delete next[itemKey];
+      return next;
     });
+    try {
+      if (apiMode) {
+        await onServe(orderId, itemId);
+        await loadHistory();
+      } else {
+        updateState((current) => {
+          const now = new Date().toISOString();
+          const orders = current.orders.map((order) => {
+            if (order.id !== orderId) return order;
+            const items = order.items.map((item) => item.id === itemId ? { ...item, isServed: !item.isServed, servedAt: item.isServed ? null : now } : item);
+            const billableItems = items.filter((item) => !item.isCancelled);
+            const completed = billableItems.length > 0 && billableItems.every((item) => item.isServed);
+            const anyServed = billableItems.some((item) => item.isServed);
+            return { ...order, items, status: completed ? "completed" : anyServed ? "active" : "new", completedAt: completed ? now : null };
+          });
+          return { ...current, orders };
+        });
+      }
+    } catch (error) {
+      setServingErrors((current) => ({ ...current, [itemKey]: servingErrorMessage(error) }));
+    } finally {
+      servingItemLockRef.current = false;
+      setServingItemKey("");
+    }
   };
 
   const submitQuantityAdjustment = async (direction, confirmZero = false) => {
@@ -2301,8 +2330,9 @@ function KitchenScreen({ state, updateState, apiState, checkoutState, onServe, o
                     <button type="button" className="order-item__name" aria-label={`${kitchenMenuName(item, kitchenAliases)}のキャンセル確認を開く`} onClick={() => setCancellationTarget({ action: "cancel", orderId, item, order })} disabled={cancellationLocked}>
                       <span><b>{kitchenMenuName(item, kitchenAliases)}</b><small>{Number(item.billableQuantity ?? item.quantity ?? 0)}点</small></span>
                     </button>
-                    <button type="button" className="order-item__serve" aria-label={`${kitchenMenuName(item, kitchenAliases)}を提供済みにする`} aria-pressed={item.isServed} onClick={() => void toggleServed(orderId, item.id)} disabled={item.isServed || cancellationLocked}><Check size={19} weight="bold" /></button>
+                    <button type="button" className={`order-item__serve${item.isServed ? " is-served" : ""}`} aria-label={item.isServed ? `${kitchenMenuName(item, kitchenAliases)}は提供済み` : `${kitchenMenuName(item, kitchenAliases)}を提供済みにする`} aria-pressed={item.isServed} aria-busy={servingItemKey === `${orderId}:${item.id}`} onClick={() => void toggleServed(orderId, item.id)} disabled={item.isServed || cancellationLocked || Boolean(servingItemKey)}>{servingItemKey === `${orderId}:${item.id}` ? <span aria-hidden="true">…</span> : item.isServed ? <Check size={19} weight="bold" /> : null}</button>
                   </div>
+                  {servingErrors[`${orderId}:${item.id}`] ? <p className="order-item-serve-error" role="alert">{servingErrors[`${orderId}:${item.id}`]}</p> : null}
                   <button type="button" className="order-item-price" aria-label={`${kitchenMenuName(item, kitchenAliases)}の単価と数量を編集`} onClick={() => { setPriceTarget({ ...item, id: item.id, orderId, locked: cancellationLocked }); setPriceDraft(String(item.currentUnitPriceYen ?? item.adjustedUnitPriceYen ?? item.unitPriceYenSnapshot ?? item.unitPriceSnapshot ?? 0)); setPriceError(""); setQuantityError(""); setQuantityZeroConfirm(false); }} disabled={cancellationLocked}>単価 {yen(item.currentUnitPriceYen ?? item.adjustedUnitPriceYen ?? item.unitPriceYenSnapshot ?? item.unitPriceSnapshot ?? 0)}</button>
                   {item.quantityHistory?.length ? <details className="order-item-quantity-history"><summary>数量操作 {item.quantityHistory.length}件</summary>{item.quantityHistory.map((event) => <p key={event.eventId}>{event.action === "added" ? "追加注文 +1点" : "数量 −1点"}・{event.actorLabel || event.actorDeviceId}・{formatDateTime(new Date(event.occurredAtMs))}・{event.isServedSnapshot ? "操作時：提供済み" : "操作時：未提供"}{event.relatedOrderId ? `・追加注文 ${event.relatedOrderId.slice(0, 8)}` : ""}</p>)}</details> : null}
                 </div>;
@@ -4336,12 +4366,12 @@ export function App() {
   }, [route]);
 
   const serveKitchenItem = async (orderId, orderItemId) => {
+    await markKitchenItemServed({ env: window, orderId, orderItemId });
     try {
-      await markKitchenItemServed({ env: window, orderId, orderItemId });
       const snapshot = await fetchKitchenSnapshot({ env: window });
       setKitchenApiState({ loading: false, error: false, orders: snapshot.orders, staffCalls: snapshot.staffCalls, sessions: snapshot.sessions, notificationRequestStartedAt: snapshot.notificationRequestStartedAt });
-    } catch {
-      setKitchenApiState((current) => current ? { ...current, error: true } : current);
+    } catch (error) {
+      throw new KitchenApiError("提供更新後の注文一覧を再取得できませんでした。", { code: "SERVE_REFRESH_FAILED", status: error?.status ?? 0 });
     }
   };
 

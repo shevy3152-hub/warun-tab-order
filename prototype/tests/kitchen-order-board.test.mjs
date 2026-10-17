@@ -149,8 +149,10 @@ test("kitchen table call bells filter the call list and complete only the select
   assert.match(screen, /const displayedCalls = callPanelTableId === null \? activeCalls : activeCalls\.filter\(\(call\) => String\(call\.tableId\) === callPanelTableId\)/);
   assert.match(screen, /className="table-panel__call" aria-label=\{`テーブル \$\{tableId\} のスタッフ呼び出し \$\{tableCalls\.length\}件を確認`\}/);
   assert.match(screen, /onClick=\{\(\) => openCallPanel\(tableId\)\}/);
-  assert.match(screen, /displayedCalls\.map\(\(call\) =>[\s\S]*?resolveCall\(call\.id\)\}>対応完了/);
-  assert.match(screen, /call\.id === callId \? \{ \.\.\.call, resolvedAt:/);
+  assert.match(screen, /displayedCalls\.map\(\(call\) =>/);
+  assert.match(screen, /onClick=\{\(\) => void resolveCall\(call\)\}/);
+  assert.match(screen, /staffCallId: call\.id, expectedVersion: call\.version/);
+  assert.match(screen, /entry\.id === call\.id \? \{ \.\.\.entry, resolvedAt:/);
 });
 
 test("kitchen markup prioritizes live horizontal table slots and keeps histories on their own screen", async () => {
@@ -176,6 +178,11 @@ test("kitchen markup prioritizes live horizontal table slots and keeps histories
   assert.doesNotMatch(screen, /席をリセット/);
   assert.doesNotMatch(screen, /onCloseSession/);
   assert.match(screen, /toggleServed\(orderId, item\.id\)/);
+  assert.match(screen, /servingItemLockRef\.current/);
+  assert.match(screen, /aria-busy=\{servingItemKey === `\$\{orderId\}:\$\{item\.id\}`\}/);
+  assert.match(screen, /disabled=\{item\.isServed \|\| cancellationLocked \|\| Boolean\(servingItemKey\)\}/);
+  assert.match(screen, /item\.isServed \? <Check size=\{19\} weight="bold" \/> : null/);
+  assert.match(screen, /className="order-item-serve-error" role="alert"/);
   assert.match(screen, /aria-label=\{`\$\{kitchenMenuName\(item, kitchenAliases\)\}のキャンセル確認を開く`\}/);
   assert.match(screen, /aria-label=\{`\$\{kitchenMenuName\(item, kitchenAliases\)\}の単価と数量を編集`\}/);
   assert.match(screen, /aria-label="数量を1点減らす"/);

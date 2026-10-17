@@ -82,6 +82,19 @@ test("kitchen serving update uses the same runtime token", async () => {
   assert.deepEqual(JSON.parse(calls[0].options.body), { orderId: "order-1", orderItemId: 11 });
 });
 
+test("kitchen serving update preserves API status and error code for the UI", async () => {
+  const env = environment(async () => ({
+    ok: false,
+    status: 409,
+    async json() { return { error: { code: "ORDER_CONFLICT", message: "Order conflicts with an existing request." } }; },
+  }));
+
+  await assert.rejects(
+    () => markKitchenItemServed({ env, orderId: "order-1", orderItemId: 11 }),
+    (error) => error.status === 409 && error.code === "ORDER_CONFLICT",
+  );
+});
+
 test("kitchen item cancellation and restore send the reason and return the updated order", async () => {
   const calls = [];
   const env = environment(async (url, options) => {

@@ -317,7 +317,7 @@ export async function markKitchenItemServed({ env = globalThis, orderId, orderIt
     headers: { ...requestHeaders, "Content-Type": "application/json" },
     body: JSON.stringify({ orderId, orderItemId: Number(orderItemId) }),
   });
-  if (!response.ok) throw new Error("Serving update failed.");
+  if (!response.ok) throw await responseError(response, "提供状態を保存できませんでした。");
 }
 
 async function changeKitchenOrderItemCancellation({ env = globalThis, orderId, orderItemId, reason = null, operation, fetchImpl = env.fetch } = {}) {

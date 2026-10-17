@@ -1658,7 +1658,10 @@ h1, h2, h3, p { margin: 0; }
 .staff-app--kitchen .order-item__name:hover { background: #f0eade; }
 .staff-app--kitchen .order-item__name:disabled { opacity: .62; cursor: not-allowed; }
 .staff-app--kitchen .order-item__serve { width: 36px; min-height: 36px; border: 1px solid var(--ink); background: transparent; color: var(--ink); display: grid; place-items: center; }
-.staff-app--kitchen .order-item__serve:disabled { background: #514d47; color: #fff; cursor: default; }
+.staff-app--kitchen .order-item__serve:disabled { cursor: default; }
+.staff-app--kitchen .order-item__serve.is-served { background: #514d47; color: #fff; }
+.staff-app--kitchen .order-item__serve[aria-busy="true"] { background: #e8dfd1; color: var(--ink); cursor: wait; }
+.staff-app--kitchen .order-item-serve-error { grid-column: 1 / -1; margin: 0 0 8px; color: #a31617; font-size: 13px; font-weight: 800; line-height: 1.35; }
 .staff-app--kitchen .order-item.is-served .order-item__name b { text-decoration: line-through; }
 .staff-app--kitchen .order-item-price { min-height: 36px; border: 1px solid var(--line); background: #fffaf2; padding: 0 8px; color: var(--red); font-size: 13px; font-weight: 900; white-space: nowrap; }
 .staff-app--kitchen .order-item-cancel,
