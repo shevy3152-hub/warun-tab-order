@@ -181,7 +181,9 @@ test("kitchen markup prioritizes live horizontal table slots and keeps histories
   assert.match(screen, /servingItemLockRef\.current/);
   assert.match(screen, /aria-busy=\{servingItemKey === `\$\{orderId\}:\$\{item\.id\}`\}/);
   assert.match(screen, /disabled=\{item\.isServed \|\| cancellationLocked \|\| Boolean\(servingItemKey\)\}/);
-  assert.match(screen, /item\.isServed \? <Check size=\{19\} weight="bold" \/> : null/);
+  assert.match(screen, /className=\{`order-item__serve\$\{item\.isServed \? " is-served" : ""\}`\}/);
+  assert.match(screen, /aria-label=\{item\.isServed \? `\$\{kitchenMenuName\(item, kitchenAliases\)\}は提供済み` : `\$\{kitchenMenuName\(item, kitchenAliases\)\}を提供済みにする`\}/);
+  assert.doesNotMatch(screen, /item\.isServed \? <Check/);
   assert.match(screen, /className="order-item-serve-error" role="alert"/);
   assert.match(screen, /aria-label=\{`\$\{kitchenMenuName\(item, kitchenAliases\)\}のキャンセル確認を開く`\}/);
   assert.match(screen, /aria-label=\{`\$\{kitchenMenuName\(item, kitchenAliases\)\}の単価と数量を編集`\}/);
