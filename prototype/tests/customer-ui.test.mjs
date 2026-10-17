@@ -571,6 +571,27 @@ test("admin menu add and edit ordering controls count category items and save ed
   assert.match(styles, /\.menu-editor__sort-order-actions/);
 });
 
+test("admin deletion and archive actions live only at the bottom of existing edit forms", () => {
+  assert.match(appSource, /editingMenu \? <div className="menu-editor__lifecycle"/);
+  assert.match(appSource, /この商品を削除・アーカイブ/);
+  assert.doesNotMatch(appSource, /onClick=\{\(\) => void openMenuItemLifecycle\(item\)\}/);
+  assert.match(appSource, /const requestMenuItemLifecycle = \(item\) => \{[\s\S]*editingMenuId === item\.id && menuEditorDirty[\s\S]*setMenuLifecycleDiscardPrompt\(item\)/);
+  assert.match(appSource, /編集を続ける/);
+  assert.match(appSource, /変更を破棄して確認へ/);
+  assert.match(appSource, /const discardMenuEditsAndOpenLifecycle = \(\) => \{[\s\S]*closeMenuEditor\(\);[\s\S]*openMenuItemLifecycle\(item\)/);
+  assert.match(appSource, /商品を削除しますか？[\s\S]*menuItemLifecycle\.item\.name/);
+  assert.match(appSource, /<button type="button" className="button button--quiet" onClick=\{\(\) => setMenuItemLifecycle\(null\)\}[^>]*>キャンセル/);
+});
+
+test("shared product editor groups related settings and keeps section headings descriptive", () => {
+  for (const heading of ["販売・客席表示（売り切れ・注文方法・表示先）", "画像・一覧／詳細表示", "提供方法・容量・温度・価格", "商品詳細（ふりがな・産地・蔵元・味・説明・おすすめ）"]) assert.ok(appSource.includes(heading));
+  assert.match(appSource, /name="name"[\s\S]*name="categoryId"[\s\S]*name="price"[\s\S]*name="description"/);
+  assert.match(styles, /.menu-editor__section-body \{ display: grid/);
+  assert.match(styles, /.menu-editor__lifecycle \{[\s\S]*border-top: 2px dashed/);
+  assert.match(styles, /.menu-admin-list \{[\s\S]*overflow-x: auto/);
+  assert.match(styles, /.admin-row__actions \{ display: grid/);
+});
+
 test("admin shochu edits reuse canonical serving option IDs", () => {
   assert.match(appSource, /editingMenu\?\.servingOptions\?\.find\(\(option\) => option\.name === optionName\)\?\.servingOptionId/);
   assert.match(appSource, /`\$\{targetId\}-\$\{\["rock", "water", "soda", "hot"\]\[index\]\}`/);

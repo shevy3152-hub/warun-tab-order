@@ -3293,6 +3293,7 @@ function AdminScreen({ state, updateState, section = "menu" }) {
   const [menuEditorCategoryId, setMenuEditorCategoryId] = useState("");
   const [menuEditorSortOrder, setMenuEditorSortOrder] = useState(1);
   const [menuEditorPlacementEdge, setMenuEditorPlacementEdge] = useState(null);
+  const [menuEditorDirty, setMenuEditorDirty] = useState(false);
   const [pairingTableId, setPairingTableId] = useState("1");
   const [pairingQr, setPairingQr] = useState(null);
   const [pairingError, setPairingError] = useState("");
@@ -3317,6 +3318,7 @@ function AdminScreen({ state, updateState, section = "menu" }) {
   const [showArchivedMenuItems, setShowArchivedMenuItems] = useState(false);
   const [archivedMenuItems, setArchivedMenuItems] = useState([]);
   const [menuItemLifecycle, setMenuItemLifecycle] = useState(null);
+  const [menuLifecycleDiscardPrompt, setMenuLifecycleDiscardPrompt] = useState(null);
   const menuCardRefs = useRef(new Map());
   const menuScrollAnchor = useRef(null);
   const [businessHoursState, setBusinessHoursState] = useState({ loading: adminApiMode && section === "hours", saving: false, error: false, message: "", messageKind: "", formal: null, draft: DEFAULT_BUSINESS_HOURS });
@@ -3495,6 +3497,7 @@ function AdminScreen({ state, updateState, section = "menu" }) {
     return items.map((item) => orderById.has(item.id) ? { ...item, sortOrder: orderById.get(item.id) } : item);
   };
   const openNewMenuEditor = () => {
+    setMenuEditorDirty(false);
     const categoryId = state.categories[0]?.id ?? "";
     setEditingMenuId(null);
     setMenuEditorCategoryId(categoryId);
@@ -3512,6 +3515,7 @@ function AdminScreen({ state, updateState, section = "menu" }) {
     if (node) menuScrollAnchor.current = { id, top: node.getBoundingClientRect().top };
   };
   const openMenuEditor = (id) => {
+    setMenuEditorDirty(false);
     rememberMenuPosition(id);
     setEditingMenuId(id);
     const item = state.menuItems.find((entry) => entry.id === id);
@@ -3523,6 +3527,7 @@ function AdminScreen({ state, updateState, section = "menu" }) {
   const closeMenuEditor = () => {
     const anchor = menuScrollAnchor.current;
     setShowAdd(false);
+    setMenuEditorDirty(false);
     setEditingMenuId(null);
     if (anchor) window.requestAnimationFrame(() => {
       const node = menuCardRefs.current.get(anchor.id);
@@ -3708,6 +3713,20 @@ function AdminScreen({ state, updateState, section = "menu" }) {
     const items = await fetchArchivedAdminMenuItems({ env: window });
     setArchivedMenuItems(items);
     return items;
+  };
+  const requestMenuItemLifecycle = (item) => {
+    if (editingMenuId === item.id && menuEditorDirty) {
+      setMenuLifecycleDiscardPrompt(item);
+      return;
+    }
+    void openMenuItemLifecycle(item);
+  };
+  const discardMenuEditsAndOpenLifecycle = () => {
+    const item = menuLifecycleDiscardPrompt;
+    setMenuLifecycleDiscardPrompt(null);
+    if (!item) return;
+    closeMenuEditor();
+    void openMenuItemLifecycle(item);
   };
   const openMenuItemLifecycle = async (item) => {
     if (!adminApiMode) {
@@ -3958,26 +3977,33 @@ function AdminScreen({ state, updateState, section = "menu" }) {
              </div>
            </div>
            {reorderMode ? <div className="menu-reorder-toolbar"><label>対象カテゴリー<select value={reorderCategoryId} onChange={(event) => { const next = menuGroups.find((group) => group.category.id === event.target.value); setReorderCategoryId(event.target.value); setReorderDraftIds(next?.items.map((item) => item.id) ?? []); setReorderBaseIds(next?.items.map((item) => item.id) ?? []); }} disabled={catalogState.saving}>{menuGroups.map((group) => <option key={group.category.id} value={group.category.id}>{group.category.name}</option>)}</select></label><button className="button button--quiet" type="button" onClick={cancelReorder} disabled={catalogState.saving}>キャンセル</button><button className="button button--primary" type="button" onClick={saveReorder} disabled={catalogState.saving}>{catalogState.saving ? "保存中" : "並び順を保存"}</button></div> : null}
-          {showAdd ? <form className={`inline-form inline-form--menu menu-editor${editingMenu ? " menu-editor--editing" : ""}`} key={editingMenuId ?? "new-menu"} onSubmit={addMenu}>
+          {showAdd ? <form className={`inline-form inline-form--menu menu-editor${editingMenu ? " menu-editor--editing" : ""}`} key={editingMenuId ?? "new-menu"} onSubmit={addMenu} onChange={() => setMenuEditorDirty(true)}>
             <div className="menu-editor__heading"><b>{editingMenu ? `${editingMenu.name}を編集` : "新しい商品を追加"}</b><span>{editingMenu ? "既存の商品IDを保ったまま更新します。" : "商品を新規登録します。"}</span></div>
             <label>正式名<input name="name" required placeholder="例：だし巻き玉子" defaultValue={editingMenu?.name ?? ""} /></label>
             <label>厨房用の通称<input name="kitchenAlias" required placeholder="例：だし巻き" defaultValue={editingMenu?.kitchenAlias ?? DEFAULT_KITCHEN_MENU_ALIASES[editingMenu?.id] ?? ""} /></label>
             <label>カテゴリ<select name="categoryId" value={selectedMenuCategoryId} onChange={(event) => { const nextCategoryId = event.target.value; const peers = state.menuItems.filter((item) => item.categoryId === nextCategoryId && item.id !== editingMenuId); setMenuEditorCategoryId(nextCategoryId); setMenuEditorSortOrder(peers.length ? Math.max(...peers.map((item) => Number(item.sortOrder) || 0)) + 1 : 1); setMenuEditorPlacementEdge(null); }}>{state.categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}</select></label>
             <label>税込マスター価格<input name="price" type="number" min="0" step="1" defaultValue={editingMenu?.price ?? 500} /></label>
+            <label className="menu-editor__wide">{descriptionFieldLabel}<textarea name="description" defaultValue={editingMenu?.description ?? ""} /></label>
+            <div className="menu-editor__sort-order"><label><span>並び順 <small>{selectedMenuCategoryCount}品</small></span><input name="sortOrder" type="number" min="0" step="1" value={menuEditorSortOrder} onChange={(event) => { setMenuEditorSortOrder(event.target.value === "" ? "" : Number(event.target.value)); setMenuEditorPlacementEdge(null); }} /></label><div className="menu-editor__sort-order-actions"><button className="button button--quiet" type="button" onClick={(event) => setMenuEditorEdge("first", event.currentTarget.form)}>{editingMenu ? "最上段へ移動" : "最上段に追加"}</button><button className="button button--quiet" type="button" onClick={(event) => setMenuEditorEdge("last", event.currentTarget.form)}>{editingMenu ? "最下段へ移動" : "最下段に追加"}</button></div></div>
+            <details className="menu-editor__section"><summary>販売・客席表示（売り切れ・注文方法・表示先）</summary><div className="menu-editor__section-body">
             <label>客席での表示<select name="customerVisibilityMode" defaultValue={editingMenu?.customerVisibilityMode ?? "all_tables"}><option value="all_tables">全テーブル</option><option value="per_session">来店ごとに許可</option></select></label>
             <TableVisibilityFields tables={tableVisibilityTables} mode={editingMenu?.tableVisibilityMode ?? "all_tables"} selectedTableIds={editingMenu?.tableVisibilityTableIds ?? []} />
-            <label className="menu-editor__wide">{descriptionFieldLabel}<textarea name="description" defaultValue={editingMenu?.description ?? ""} /></label>
             <label className="menu-editor__check"><input type="checkbox" name="isSoldOut" defaultChecked={editingMenu?.isSoldOut ?? false} /> 売り切れ</label>
             <fieldset className="menu-ordering-mode"><legend>注文方法</legend><label><input type="radio" name="orderingMode" value="normal" defaultChecked={(editingMenu?.orderingMode ?? "normal") === "normal"} /> 注文方法：通常注文</label><label><input type="radio" name="orderingMode" value="reservation_only" defaultChecked={editingMenu?.orderingMode === "reservation_only"} /> 注文方法：予約限定</label></fieldset>
             <label className="menu-editor__check"><input type="checkbox" name="isActive" defaultChecked={editingMenu?.isActive !== false} /> 客席に表示</label>
-            <div className="menu-editor__sort-order"><label><span>並び順 <small>{selectedMenuCategoryCount}品</small></span><input name="sortOrder" type="number" min="0" step="1" value={menuEditorSortOrder} onChange={(event) => { setMenuEditorSortOrder(event.target.value === "" ? "" : Number(event.target.value)); setMenuEditorPlacementEdge(null); }} /></label><div className="menu-editor__sort-order-actions"><button className="button button--quiet" type="button" onClick={(event) => setMenuEditorEdge("first", event.currentTarget.form)}>{editingMenu ? "最上段へ移動" : "最上段に追加"}</button><button className="button button--quiet" type="button" onClick={(event) => setMenuEditorEdge("last", event.currentTarget.form)}>{editingMenu ? "最下段へ移動" : "最下段に追加"}</button></div></div>
+            </div></details>
+            <details className="menu-editor__section"><summary>画像・一覧／詳細表示</summary><div className="menu-editor__section-body">
             <ProductImageUriField name="imageUri" label="商品画像URI" initialUri={editingMenu?.imageUri ?? ""} resolveDisplayUri={selectedMenuCategoryId === "shochu" ? shochuThumbUri : undefined} />
             <label className="menu-editor__check"><input type="checkbox" name="showImageInList" defaultChecked={editingMenu?.detail?.showImageInList ?? selectedMenuCategoryId === "shochu"} /> 一覧に画像を表示（日本酒は常時表示）</label>
+            <label className="menu-editor__check"><input type="checkbox" name="detailEnabled" defaultChecked={editingMenu?.detail?.enabled ?? false} /> 詳細表示を有効にする</label>
+            <ProductImageUriField name="detailImageUri" label="詳細画像URI" initialUri={editingMenu?.detail?.imageUri ?? ""} fallbackUri={editingMenu?.imageUri ?? ""} />
+            </div></details>
+            <details className="menu-editor__section"><summary>提供方法・容量・温度・価格</summary><div className="menu-editor__section-body">
             <label>焼酎内の区分<select name="sectionKey" defaultValue={editingMenu?.sectionKey ?? ""}><option value="">なし</option><option value="芋">芋</option><option value="麦・その他">麦・その他</option></select></label>
             <label className="menu-editor__check"><input type="checkbox" name="shochuOptions" defaultChecked={Boolean(editingMenu?.servingOptions?.length)} /> 焼酎の標準4種の飲み方を使用</label>
             {editingMenu?.id && foodVariantDefinitions(editingMenu).length ? <fieldset className="food-variant-editor"><legend>variant（税込）</legend>{foodVariantDefinitions(editingMenu).map(({ name, index }) => <div key={name}><label>{name}<input name={`foodVariantName${index}`} defaultValue={editingMenu.variants?.[index]?.name ?? name} /></label><label>税込価格<input name={`foodVariantPrice${index}`} type="number" min="0" step="1" defaultValue={editingMenu.variants?.[index]?.priceYen ?? 0} /></label><label className="menu-editor__check"><input type="checkbox" name={`foodVariantActive${index}`} defaultChecked={editingMenu.variants?.[index]?.isActive !== false} /> 販売中</label></div>)}</fieldset> : selectedMenuCategoryId === "sake" || editingMenu?.categoryId === "sake" ? <fieldset className="sake-variant-editor"><legend>日本酒variant（税込・提供温度）</legend><div><label>グラス 110ml<input name="glassPrice" type="number" min="0" defaultValue={editingMenu?.variants?.find((variant) => variant.name === "グラス")?.priceYen ?? ""} /></label><label><input type="checkbox" name="glassCold" defaultChecked={editingMenu?.variants?.find((variant) => variant.name === "グラス")?.temperatureOptions?.includes("冷酒") ?? true} /> 冷酒</label><label><input type="checkbox" name="glassHot" defaultChecked={editingMenu?.variants?.find((variant) => variant.name === "グラス")?.temperatureOptions?.includes("燗酒") ?? false} /> 燗酒</label></div><div><label>徳利1合 180ml<input name="tokuriPrice" type="number" min="0" defaultValue={editingMenu?.variants?.find((variant) => variant.name === "徳利1合")?.priceYen ?? ""} /></label><label><input type="checkbox" name="tokuriCold" defaultChecked={editingMenu?.variants?.find((variant) => variant.name === "徳利1合")?.temperatureOptions?.includes("冷酒") ?? true} /> 冷酒</label><label><input type="checkbox" name="tokuriHot" defaultChecked={editingMenu?.variants?.find((variant) => variant.name === "徳利1合")?.temperatureOptions?.includes("燗酒") ?? true} /> 燗酒</label></div><div><label>徳利2合 360ml<input name="tokuri2Price" type="number" min="0" defaultValue={editingMenu?.variants?.find((variant) => variant.name === "徳利2合")?.priceYen ?? ""} /></label><label><input type="checkbox" name="tokuri2Cold" defaultChecked={editingMenu?.variants?.find((variant) => variant.name === "徳利2合")?.temperatureOptions?.includes("冷酒") ?? true} /> 冷酒</label><label><input type="checkbox" name="tokuri2Hot" defaultChecked={editingMenu?.variants?.find((variant) => variant.name === "徳利2合")?.temperatureOptions?.includes("燗酒") ?? true} /> 燗酒</label></div></fieldset> : null}
-            <label className="menu-editor__check"><input type="checkbox" name="detailEnabled" defaultChecked={editingMenu?.detail?.enabled ?? false} /> 詳細表示を有効にする</label>
-            <ProductImageUriField name="detailImageUri" label="詳細画像URI" initialUri={editingMenu?.detail?.imageUri ?? ""} fallbackUri={editingMenu?.imageUri ?? ""} />
+            </div></details>
+            <details className="menu-editor__section"><summary>商品詳細（ふりがな・産地・蔵元・味・説明・おすすめ）</summary><div className="menu-editor__section-body">
             <label>ふりがな<input name="reading" defaultValue={editingMenu?.detail?.reading ?? ""} /></label>
             <label>酒種<input name="itemType" defaultValue={editingMenu?.detail?.itemType ?? ""} /></label>
             <label>産地<input name="origin" defaultValue={editingMenu?.detail?.origin ?? ""} /></label>
@@ -3988,9 +4014,11 @@ function AdminScreen({ state, updateState, section = "menu" }) {
             <label>キレ<input name="finish" defaultValue={editingMenu?.detail?.finish ?? ""} /></label>
             <label className="menu-editor__wide">詳細説明<textarea name="detailDescription" defaultValue={editingMenu?.detail?.description ?? ""} /></label>
             <label className="menu-editor__wide">おすすめコメント<textarea name="recommendation" defaultValue={editingMenu?.detail?.recommendation ?? ""} /></label>
+            </div></details>
              <div className="menu-editor__actions"><button className="button button--quiet" type="button" onClick={resetMenuEditor} disabled={catalogState.saving}>キャンセル</button><button className="button button--primary" type="submit" disabled={catalogState.saving}>{catalogState.saving ? "保存中" : editingMenu ? "変更を保存" : "追加する"}</button></div>
+             {editingMenu ? <div className="menu-editor__lifecycle"><div><b>削除・アーカイブ</b><small>保存済みの商品に対する操作です。未保存の変更がある場合は、先に選択してください。</small></div><button className="button button--quiet" type="button" onClick={() => requestMenuItemLifecycle(editingMenu)} disabled={catalogState.saving || !adminApiMode}>この商品を削除・アーカイブ</button></div> : null}
            </form> : null}
-          {reorderMode ? <div className="menu-reorder-list" aria-label="商品の並び替え">{reorderDraftIds.map((id) => selectedReorderGroup?.items.find((entry) => entry.id === id)).filter(Boolean).map((item) => <div className="menu-reorder-row" key={item.id} onDragOver={(event) => event.preventDefault()} onDrop={() => { moveReorderItem(draggedMenuId, item.id); setDraggedMenuId(null); }}><button className="reorder-handle" type="button" draggable={!catalogState.saving} aria-label={`${item.name}をドラッグして並び替え`} onDragStart={() => setDraggedMenuId(item.id)}>≡</button><b>{String(reorderDraftIds.indexOf(item.id) + 1).padStart(2, "0")}</b><span>{item.name}</span><small>{item.kitchenAlias ?? item.name}</small><button type="button" className="button button--quiet" onClick={() => shiftReorderItem(item.id, -1)} disabled={catalogState.saving}>上へ</button><button type="button" className="button button--quiet" onClick={() => shiftReorderItem(item.id, 1)} disabled={catalogState.saving}>下へ</button></div>)}</div> : <div className="menu-admin-list"><div className="admin-row admin-row--header"><span>画像</span><span>カテゴリー</span><span>正式名・通称</span><span>価格（税込）</span><span>販売状況</span><span>並び順</span><span>操作</span></div>{displayedMenuGroups.map(({ category, items }) => <section className="menu-admin-group" key={category.id}><h3 className="menu-admin-group__heading"><span>{category.name}</span><small>{items.length}品</small></h3>{items.map((item) => <React.Fragment key={item.id}><div className={`admin-row ${item.isSoldOut ? "is-muted" : ""}`} ref={(node) => { if (node) menuCardRefs.current.set(item.id, node); else menuCardRefs.current.delete(item.id); }}><div className="admin-menu-card__image">{item.imageUri || item.detail?.imageUri ? <div className="admin-menu-card__image-frame"><img src={item.imageUri || item.detail.imageUri} alt="" style={imageLayoutStyle(item, "thumbnail")} /></div> : <span>画像なし</span>}</div><span className="category-tag">{category.name}</span><div className="admin-row__name"><b>{item.name}</b><small>通称：{item.kitchenAlias ?? DEFAULT_KITCHEN_MENU_ALIASES[item.id] ?? item.name}</small></div><div className="admin-menu-card__price"><small>税込</small><strong>{yen(item.price)}</strong></div><div className={`admin-menu-card__status ${adminMenuAvailability(item).className}`}><i></i>{adminMenuAvailability(item).label}</div><div className="admin-row__actions"><button className="button button--primary" type="button" onClick={() => openMenuEditor(item.id)}>{editingMenuId === item.id ? "編集中" : "編集"}</button><button className="button button--quiet" type="button" onClick={() => setMenuItem(item.id, { isSoldOut: !item.isSoldOut })}>{item.isSoldOut ? "販売再開" : "売り切れ"}</button><button className="button button--quiet" type="button" onClick={() => setImageLayoutItemId(item.id)}>画像</button><button className="button button--quiet" type="button" onClick={() => void openMenuItemLifecycle(item)}>削除・アーカイブ</button></div></div>{null}</React.Fragment>)}</section>)}</div>}
+          {reorderMode ? <div className="menu-reorder-list" aria-label="商品の並び替え">{reorderDraftIds.map((id) => selectedReorderGroup?.items.find((entry) => entry.id === id)).filter(Boolean).map((item) => <div className="menu-reorder-row" key={item.id} onDragOver={(event) => event.preventDefault()} onDrop={() => { moveReorderItem(draggedMenuId, item.id); setDraggedMenuId(null); }}><button className="reorder-handle" type="button" draggable={!catalogState.saving} aria-label={`${item.name}をドラッグして並び替え`} onDragStart={() => setDraggedMenuId(item.id)}>≡</button><b>{String(reorderDraftIds.indexOf(item.id) + 1).padStart(2, "0")}</b><span>{item.name}</span><small>{item.kitchenAlias ?? item.name}</small><button type="button" className="button button--quiet" onClick={() => shiftReorderItem(item.id, -1)} disabled={catalogState.saving}>上へ</button><button type="button" className="button button--quiet" onClick={() => shiftReorderItem(item.id, 1)} disabled={catalogState.saving}>下へ</button></div>)}</div> : <div className="menu-admin-list"><div className="admin-row admin-row--header"><span>画像</span><span>カテゴリー</span><span>正式名・通称</span><span>価格（税込）</span><span>販売状況</span><span>並び順</span><span>操作</span></div>{displayedMenuGroups.map(({ category, items }) => <section className="menu-admin-group" key={category.id}><h3 className="menu-admin-group__heading"><span>{category.name}</span><small>{items.length}品</small></h3>{items.map((item) => <React.Fragment key={item.id}><div className={`admin-row ${item.isSoldOut ? "is-muted" : ""}`} ref={(node) => { if (node) menuCardRefs.current.set(item.id, node); else menuCardRefs.current.delete(item.id); }}><div className="admin-menu-card__image">{item.imageUri || item.detail?.imageUri ? <div className="admin-menu-card__image-frame"><img src={item.imageUri || item.detail.imageUri} alt="" style={imageLayoutStyle(item, "thumbnail")} /></div> : <span>画像なし</span>}</div><span className="category-tag">{category.name}</span><div className="admin-row__name"><b>{item.name}</b><small>通称：{item.kitchenAlias ?? DEFAULT_KITCHEN_MENU_ALIASES[item.id] ?? item.name}</small></div><div className="admin-menu-card__price"><small>税込</small><strong>{yen(item.price)}</strong></div><div className={`admin-menu-card__status ${adminMenuAvailability(item).className}`}><i></i>{adminMenuAvailability(item).label}</div><span className="admin-menu-card__sort-order">{item.sortOrder}</span><div className="admin-row__actions"><button className="button button--primary" type="button" onClick={() => openMenuEditor(item.id)}>{editingMenuId === item.id ? "編集中" : "編集"}</button><button className="button button--quiet" type="button" onClick={() => setMenuItem(item.id, { isSoldOut: !item.isSoldOut })}>{item.isSoldOut ? "販売再開" : "売り切れ"}</button><button className="button button--quiet" type="button" onClick={() => setImageLayoutItemId(item.id)}>画像</button></div></div>{null}</React.Fragment>)}</section>)}</div>}
         </> : null}
 
         {section === "categories" ? <>
@@ -4084,6 +4112,7 @@ function AdminScreen({ state, updateState, section = "menu" }) {
         </> : null}
       </section>
       {pairingQr ? <Modal title="客席端末をQRで登録" onClose={() => setPairingQr(null)} wide><div className="pairing-qr-modal"><p>A90のカメラでこのQRを読み取ってください。登録画面にコードが自動入力されます。</p><div className="pairing-qr-modal__image" dangerouslySetInnerHTML={{ __html: pairingQr.svg }} /><p>QR接続先: {pairingQr.origin}</p><p>QRには現在のLAN URLと一回限りのペアリング情報が含まれています。手入力コードは表示しません。</p><button className="button button--quiet" type="button" onClick={() => setPairingQr(null)}>閉じる</button></div></Modal> : null}
+      {menuLifecycleDiscardPrompt ? <Modal title="未保存の変更があります" onClose={() => setMenuLifecycleDiscardPrompt(null)}><div className="modal-lead"><b>{menuLifecycleDiscardPrompt.name}</b><p>編集内容を保存せずに削除・アーカイブの確認へ進みますか？編集を続ける場合は、入力内容を保持します。</p></div><div className="modal-actions"><button type="button" className="button button--quiet" onClick={() => setMenuLifecycleDiscardPrompt(null)}>編集を続ける</button><button type="button" className="button button--primary" onClick={discardMenuEditsAndOpenLifecycle}>変更を破棄して確認へ</button></div></Modal> : null}
       {menuItemLifecycle ? <Modal title={menuItemLifecycle.kind === "checking" ? "商品情報を確認しています" : menuItemLifecycle.kind === "restore" ? "アーカイブ商品を復帰しますか？" : menuItemLifecycle.disposition === "archive" ? "商品をアーカイブしますか？" : "商品を削除しますか？"} onClose={() => { if (!menuItemLifecycle.busy && menuItemLifecycle.kind !== "checking") setMenuItemLifecycle(null); }}>
         <div className="modal-lead"><b>{menuItemLifecycle.item.name}</b>{menuItemLifecycle.kind === "checking" ? <p>商品参照を確認しています。</p> : menuItemLifecycle.kind === "restore" ? <p>この商品を通常の商品一覧へ戻します。安全のため「客席非表示」で復帰します。客席へ表示する場合は、復帰後に通常編集から変更してください。注文履歴と画像ファイルは保持されます。</p> : menuItemLifecycle.disposition === "archive" ? <p>注文履歴などの参照があるため、商品をアーカイブします。注文履歴と画像ファイルは削除しません。</p> : <p>保持対象の参照がないため、商品登録を削除します。画像ファイルは共有・履歴利用の可能性があるため削除しません。</p>}</div>
         {menuItemLifecycle.error ? <p className="checkout-feedback checkout-feedback--error" role="alert">{menuItemLifecycle.error}</p> : null}
