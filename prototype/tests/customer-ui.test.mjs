@@ -534,6 +534,27 @@ test("admin menu editing is grouped, cancellable, and keeps edit ordering data",
   assert.match(styles, /\.menu-editor__actions \{/);
 });
 
+test("admin menu creation and editing share the full form and preserve the existing item identity", () => {
+  assert.match(appSource, /\{showAdd \? <form className=\{`inline-form inline-form--menu menu-editor/);
+  assert.match(appSource, /onSubmit=\{addMenu\}/);
+  assert.doesNotMatch(appSource, /saveInlineMenu|admin-menu-inline-editor/);
+  assert.match(appSource, /const targetId = editingMenuId \?\? makeId\("menu"\)/);
+  assert.match(appSource, /expectedVersion: editingMenu\?\.version \?\? 0/);
+  assert.match(appSource, /menuItems: current\.menuItems\.map\(\(item\) => item\.id === editingMenuId/);
+  assert.match(appSource, /\[\.\.\.current\.menuItems, \{ \.\.\.nextItem, \.\.\.patch/);
+  assert.match(appSource, /const editedItems = current\.menuItems\.map\(\(item\) => item\.id === editingMenuId \? \{ \.\.\.item, \.\.\.nextItem \}/);
+  assert.match(appSource, /isSoldOut: form\.get\("isSoldOut"\) === "on"/);
+  assert.match(appSource, /isActive: form\.get\("isActive"\) === "on"/);
+  assert.match(appSource, /sortOrder: Number\.isSafeInteger\(Number\(form\.get\("sortOrder"\)\)\)/);
+  assert.match(appSource, /onClick=\{resetMenuEditor\} disabled=\{catalogState\.saving\}>キャンセル/);
+  assert.match(appSource, /name="detailImageUri"/);
+  assert.match(appSource, /name="glassCold"/);
+  assert.match(appSource, /name="tokuri2Hot"/);
+  assert.match(appSource, /name="shochuOptions" defaultChecked=\{Boolean\(editingMenu\?\.servingOptions\?\.length\)\}/);
+  assert.match(appSource, /mode=\{editingMenu\?\.tableVisibilityMode \?\? "all_tables"\}/);
+  assert.match(appSource, /setMenuEditorPlacementEdge\(null\)/);
+});
+
 test("admin menu add and edit ordering controls count category items and save edge placement", () => {
   assert.match(appSource, /const selectedMenuCategoryItems = state\.menuItems\.filter\(\(item\) => item\.categoryId === selectedMenuCategoryId\)/);
   assert.match(appSource, /const selectedMenuCategoryCount = selectedMenuCategoryItemsForPlacement\.length \+ \(editingMenu \? 1 : 0\)/);
@@ -872,21 +893,18 @@ test("admin menu thumbnails apply the saved thumbnail layout in the same portrai
   assert.match(customerScreen, /imageLayoutStyle\(detailItem, "detail"\)/);
 });
 
-test("inline menu editing uploads and saves the detail image URI without replacing list URI or detail settings", () => {
-  const inlineEditorStart = appSource.indexOf('className="admin-menu-inline-editor"');
-  assert.notEqual(inlineEditorStart, -1);
-  const inlineEditorEnd = appSource.indexOf("</form>", inlineEditorStart);
-  const inlineEditor = appSource.slice(inlineEditorStart, inlineEditorEnd);
-  assert.match(inlineEditor, /<ProductImageUriField name="detailImageUri" label="詳細画像URI" initialUri=\{item\.detail\?\.imageUri \?\? ""\} fallbackUri=\{item\.imageUri \?\? ""\} \/>/);
-  assert.doesNotMatch(inlineEditor, /<ProductImageLocation uri=\{item\.detail\?\.imageUri\}/);
+test("shared menu editor saves the detail image URI without replacing the list URI or image layouts", () => {
+  assert.match(appSource, /<ProductImageUriField name="detailImageUri" label="詳細画像URI" initialUri=\{editingMenu\?\.detail\?\.imageUri \?\? ""\} fallbackUri=\{editingMenu\?\.imageUri \?\? ""\} \/>/);
+  assert.doesNotMatch(appSource, /<ProductImageLocation uri=\{editingMenu\?\.detail\?\.imageUri\}/);
 
-  const inlineSaveStart = appSource.indexOf("const saveInlineMenu =");
-  const inlineSaveEnd = appSource.indexOf("const refreshAdminCatalog =", inlineSaveStart);
-  const inlineSave = appSource.slice(inlineSaveStart, inlineSaveEnd);
-  assert.match(inlineSave, /\.\.\.item,/);
-  assert.match(inlineSave, /imageUri: form\.get\("imageUri"\)\?\.toString\(\)\.trim\(\) \|\| null,/);
-  assert.match(inlineSave, /detail: \{\s*\.\.\.\(item\.detail \?\? \{\}\),\s*imageUri: form\.get\("detailImageUri"\)\?\.toString\(\)\.trim\(\) \|\| null,\s*\},/);
-  assert.doesNotMatch(inlineSave, /imageLayouts\s*:/);
+  const sharedSaveStart = appSource.indexOf("const addMenu = async");
+  const sharedSaveEnd = appSource.indexOf("const refreshAdminCatalog =", sharedSaveStart);
+  const sharedSave = appSource.slice(sharedSaveStart, sharedSaveEnd);
+  assert.match(sharedSave, /const targetId = editingMenuId \?\? makeId\("menu"\)/);
+  assert.match(sharedSave, /imageUri: form\.get\("imageUri"\)\?\.toString\(\)\.trim\(\) \|\| undefined,/);
+  assert.match(sharedSave, /imageUri: form\.get\("detailImageUri"\)\?\.toString\(\)\.trim\(\) \|\| undefined,/);
+  const menuPatch = sharedSave.slice(sharedSave.indexOf("const patch = {"), sharedSave.indexOf("const nextItem ="));
+  assert.doesNotMatch(menuPatch, /imageLayouts\s*:/);
 });
 test("admin detail editing covers every displayed tasting field", () => {
   assert.match(appSource, /name="aroma"/);
@@ -1020,5 +1038,5 @@ test("admin menu availability label distinguishes hidden, sold out, and availabl
   assert.deepEqual(adminMenuAvailability({ isActive: true, isSoldOut: false }), { label: "販売中", className: "" });
   assert.deepEqual(adminMenuAvailability({ isActive: false, isSoldOut: true }), { label: "客席非表示", className: "is-inactive" });
   assert.ok(appSource.includes("adminMenuAvailability(item).label"));
-  assert.equal((appSource.match(/name="isActive"[^>]*\/> 客席に表示/g) ?? []).length, 2);
+  assert.equal((appSource.match(/name="isActive"[^>]*\/> 客席に表示/g) ?? []).length, 1);
 });
