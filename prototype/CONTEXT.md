@@ -824,3 +824,31 @@
 - API、DB、schema、checkout、safe-copy、checkout／production環境は変更なし。QA previewは停止しport 5197閉鎖を確認。commit／pushなし。
 
 次: commit／pushやsafe-copy反映などの配布作業は別途明示依頼を待つ。
+
+## 通知音・スタッフ呼出 利用者受入と音声予約確認 2026-10-18
+
+- 利用者受入結果: 厨房の注文音試聴は聞こえた。スタッフ呼出音は3組設計に対し2組に聞こえた。客席の30秒再送制限と30秒後の解除はPASS。これは利用者からの報告であり、本セッションではsafe-copy上の追加呼出を送っていない。
+- 現行 `prototype/src/kitchen-order-sound.js` の `createKitchenSoundEngine().play("staffCall")` は、523Hzと659Hzの2音を1組にし、組の開始を再生開始から0秒、0.85秒、1.70秒に予約する。各音は0.18秒。staff callの予約枠は `nextStart = start + 2.2` 秒で、`start` はAudioContextの現在時刻と前予約の終了時刻の遅い方。厨房設定UIは音量値を状態／storageから表示し、受入報告には音量の実測値は含まれていない。
+- エンジンは `AudioContext` をresumeし、音ごとに oscillator/gain を作成して `context.destination` へ接続する。Bluetooth出力経路の安定化待ち、先頭に無音を置く処理、デバイス別の出力確認はコード上確認できなかった。Bluetoothの接続・経路切替タイミング等により先頭の組が聞こえにくくなる可能性は考えられるが、2組に聞こえた原因がBluetoothだったとは断定できず、他の要因も未確認。
+- `prototype/tests/kitchen-order-sound.test.mjs` には3組の周波数と予約時刻（注文音が先行するケースで staff-call の音開始0.42/0.69、1.27/1.54、2.12/2.39秒）を確認するユニットテストがある。これはコード上の予約を検証し、Bluetooth実機での可聴性を検証するものではない。
+- この記録では追加呼出送信、設定変更、実装、build、DB／会計履歴の変更を行っていない。既存の未commit差分、旧画像、QA資材は保持する。
+
+次: Bluetoothを含む出力経路で、最初の呼出音が欠ける条件を切り分ける受入手順を決めてから、変更要否を判断する。
+
+## 呼出音0.5秒先行・隔離試聴準備 2026-10-18
+
+- 利用者の前回報告は維持: 注文音試聴は聞こえた、スタッフ呼出音は3組設計に対し2組に聞こえた、客席30秒再送制限と30秒後解除はPASS。Bluetooth起因とは断定していない。
+- 隔離worktreeの厨房音声エンジンで、呼出音の最初の音の開始を予約基準時刻から0.5秒後へ変更。音色・音量・組内2音・3組の開始間隔0.85秒は維持し、3組全体の予約枠も0.5秒ずらした。次の通知も重ならないよう、スタッフ呼出の次予約枠を最初の音開始から2.2秒後に設定。注文音の単独開始・音色・音量は変更なし。
+- 音声エンジンは `resume()` をawaitした後に `play()` され、予約時に `AudioContext.currentTime` を読む。限定テストではresume完了後のcurrentTime=7秒を基準に先頭音7.5秒、後続の注文音9.7秒を予約し、順序・非重複を確認。
+- `?demo=1` の隔離厨房画面に限り、「呼出音を試す（隔離）」ボタンを追加。`controller.test("staffCall")` がWeb Audioのみを再生し、スタッフ呼出APIを呼ばない。通常のsafe-copy/API画面では当該ボタンは非表示。Bluetoothは聞こえ方を比較する候補であり、この変更では実機のroute readinessやBluetooth接続を検証していない。
+- 検証: `pnpm install --frozen-lockfile` up-to-date、`node --test tests/kitchen-order-sound.test.mjs` 35/35、`pnpm run build` success (Vite 4,654 modules; Sites build preparation／inline-client含む)、`pnpm run test:sites` 4/4、`git diff --check` success。通常sandboxの初回buildはesbuildのworktree読取Access deniedで停止し、権限レビュー経由で同じ隔離worktree内buildに成功。build設定・依存は変更していない。
+- Web build成果物は当worktree `prototype/dist` 内のみ。運用safe-copyへの反映・runtime再起動・スタッフ呼出送信・設定変更・DB／会計履歴変更・commit・pushは未実施。既存の `server/test/order-repository.test.mjs` 差分、旧画像、QA資材、DB、旧release、backupを保持。
+
+次: 利用者の隔離試聴PASSを受け、指定のcommit・通常push・safe-copy Web反映と配信確認を行う。実呼出送信は行わない。
+
+- 追補: 隔離試聴preview `http://127.0.0.1:4173/?demo=1#/kitchen` を起動。Viteは `127.0.0.1` のみを待受に指定し、HTML GET 200を確認。demo=1のため厨房APIを使わず、隔離試聴ボタンはローカル再生のみ。Codex右パネルへ表示をキュー済み。利用者の試聴合図前の音声再生・実呼出送信は行っていない。previewは合図待ちのため稼働を継続。
+
+## 呼出音の隔離試聴 利用者PASS 2026-10-18
+
+- 利用者報告: 隔離試聴PASS。前回確認の2組聴取から調整後の呼出音について受入済みとして記録。Bluetooth接続の有無など比較条件の内訳は未記録のため、原因は確定していない。
+- このPASSに実スタッフ呼出の追加送信は含まれない。safe-copy DB・運用設定の変更なし。

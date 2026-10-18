@@ -41,6 +41,7 @@ export function KitchenOrderSound({ orders, staffCalls = [], suppressStaffCalls 
       <label className="kitchen-order-sound__volume"><span>音量 <output>{state.volume === 0 ? "消音（0％）" : `${state.volume}％`}</output></span><input type="range" min="0" max="100" step="1" value={state.volume} aria-label="通知音の音量" aria-valuetext={state.volume === 0 ? "消音" : `${state.volume}％`} onChange={(event) => controller.current?.setVolume(Number(event.target.value))} /></label>
       {enabled && !playingEnabled && !enabling ? <button type="button" className="button button--primary" onClick={() => void controller.current?.enable()}>音を有効にする</button> : null}
       <button type="button" className="button button--quiet" disabled={enabling} onClick={() => void controller.current?.test()}>音を試す</button>
+      {demoMode ? <button type="button" className="button button--quiet" disabled={enabling} onClick={() => void controller.current?.test("staffCall")}>呼出音を試す（隔離）</button> : null}
     </div>
     <small id="kitchen-order-sound-status" role="status">{state.message}{!state.storageAvailable ? " このブラウザーでは音量・通知済みIDを保存できません。" : ""}</small>
   </section>;

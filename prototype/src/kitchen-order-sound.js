@@ -65,8 +65,9 @@ export function createKitchenSoundEngine({ env = globalThis, onStateChange = () 
       if (context?.state !== "running") throw new Error("Audio not running");
       if (volume === 0) return;
       const peak = KITCHEN_NOTIFICATION_GAIN * volume / DEFAULT_KITCHEN_SOUND_VOLUME;
-      const start = Math.max(context.currentTime, nextStart);
+      const reservationStart = Math.max(context.currentTime, nextStart);
       const isStaffCall = kind === "staffCall";
+      const start = reservationStart + (isStaffCall ? 0.5 : 0);
       nextStart = start + (isStaffCall ? 2.2 : 0.42);
       const callPair = [{ frequency: 523, duration: 0.18, holdAt: 0.12 }, { frequency: 659, duration: 0.18, holdAt: 0.12 }];
       const notes = isStaffCall
@@ -244,14 +245,14 @@ export function createKitchenOrderSound({ storage, storageKey, engine, loadBasel
       persist();
       publish();
     },
-    async test() {
+    async test(kind = "order") {
       if (disposed) return;
       const attempt = generation;
       if (volume === 0) { message = "消音（音量0％）のため試聴音は鳴りません。"; publish(); return; }
       try {
         await engine.activate();
         if (disposed || attempt !== generation) return;
-        if (volume > 0) engine.play();
+        if (volume > 0) engine.play(kind);
         message = volume === 0 ? "消音（音量0％）のため試聴音は鳴りません。" : status === "on" ? "通知音ON：試聴音を再生しました。" : requestedOn ? "試聴音を再生しました。通知音設定はONですが、通知を有効にするには「音を有効にする」を押してください。" : "試聴音を再生しました。新着通知の設定はOFFです。";
         publish();
       } catch (error) {

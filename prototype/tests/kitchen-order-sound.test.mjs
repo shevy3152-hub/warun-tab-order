@@ -217,8 +217,26 @@ test("staff-call three-pair tone is distinct and queued without overlapping the 
   engine.play("order");
   engine.play("staffCall");
   engine.play("order");
-  assert.deepEqual(oscillators.map((node) => node.startTime), [0, 0.42, 0.69, 1.27, 1.54, 2.12, 2.39, 2.62]);
+  assert.deepEqual(oscillators.map((node) => Number(node.startTime.toFixed(2))), [0, 0.92, 1.19, 1.77, 2.04, 2.62, 2.89, 3.12]);
   assert.deepEqual(oscillators.map((node) => node.frequencyValues[0][0]), [880, 523, 659, 523, 659, 523, 659, 880]);
+  for (let index = 1; index < oscillators.length; index++) assert.ok(oscillators[index].startTime >= oscillators[index - 1].stopTime);
+  engine.dispose();
+});
+test("staff-call lead-in and reservation are based on AudioContext time after resume", async () => {
+  const oscillators = [];
+  class Context {
+    constructor() { this.state = "suspended"; this.currentTime = 0; this.destination = {}; }
+    async resume() { await Promise.resolve(); this.currentTime = 7; this.state = "running"; }
+    async close() {}
+    createOscillator() { const node = { frequency: { setValueAtTime(value, at) { node.frequencyValues.push([value, at]); } }, frequencyValues: [], connect() {}, disconnect() {}, start(at) { this.startTime = at; }, stop(at) { this.stopTime = at; } }; oscillators.push(node); return node; }
+    createGain() { return { gain: { setValueAtTime() {}, linearRampToValueAtTime() {}, exponentialRampToValueAtTime() {} }, connect() {}, disconnect() {} }; }
+  }
+  const engine = createKitchenSoundEngine({ env: { AudioContext: Context } });
+  await engine.activate();
+  engine.play("staffCall");
+  engine.play("order");
+  assert.deepEqual(oscillators.map((node) => Number(node.startTime.toFixed(2))), [7.5, 7.77, 8.35, 8.62, 9.2, 9.47, 9.7]);
+  assert.deepEqual(oscillators.slice(0, 6).map((node) => node.frequencyValues[0][0]), [523, 659, 523, 659, 523, 659]);
   for (let index = 1; index < oscillators.length; index++) assert.ok(oscillators[index].startTime >= oscillators[index - 1].stopTime);
   engine.dispose();
 });
@@ -233,6 +251,8 @@ test("sound controls belong only to kitchen and use snapshot request timing", as
   assert.match(app, /playCheckoutBell\(checkoutAudioRef\)/);
   const component = await readFile(new URL("../src/KitchenOrderSound.jsx", import.meta.url), "utf8");
   assert.match(component, /音を試す/);
+  assert.ok(component.includes("{demoMode ? <button"));
+  assert.ok(component.includes('test("staffCall")}>呼出音を試す（隔離）'));
   assert.match(component, /音を有効にする/);
   assert.match(component, /ON（音声未有効）/);
   assert.match(component, /role="switch"/);
@@ -549,6 +569,12 @@ test("rendered switch invokes activation, never test; ON survives order and volu
     toggle().props.onClick();render();assert.equal(toggle().props['aria-checked'],false);
     await find(n=>n.type==='button'&&n.props.children.includes('音を試す')).props.onClick();await new Promise(resolve=>setImmediate(resolve));render();
     assert.equal(toggle().props['aria-checked'],false);assert.equal(plays,3);
+    assert.equal(find(n=>n.type==='button'&&n.props.children.includes('呼出音を試す（隔離）')),undefined);
+    props={...props,demoMode:true};render();
+    const staffTrial=find(n=>n.type==='button'&&n.props.children.includes('呼出音を試す（隔離）'));
+    assert.ok(staffTrial);
+    await staffTrial.props.onClick();await new Promise(resolve=>setImmediate(resolve));render();
+    assert.equal(plays,9);assert.equal(reads,1);
   } finally {
     for(const slot of slots)slot?.cleanup?.();globalThis.window=priorWindow;delete globalThis.__kitchenSoundHooks;
   }
