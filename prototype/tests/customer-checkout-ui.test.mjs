@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 const source = await readFile(new URL("../src/App.jsx", import.meta.url), "utf8");
+const orderOutbox = await readFile(new URL("../src/order-outbox.js", import.meta.url), "utf8");
 const styles = await readFile(new URL("../src/styles.css", import.meta.url), "utf8");
 const modal = source.slice(source.indexOf("function CustomerCheckoutModal"), source.indexOf("function CustomerScreen"));
 
@@ -22,6 +23,18 @@ test("customer checkout button and states are connected to the authenticated cli
   assert.match(source, /AudioContext/);
 });
 
+test("ready checkout uses only the modal close control and reopens through a fresh GET", () => {
+  assert.match(modal, /<Modal title="お会計" onClose=\{onClose\} className="modal--checkout">/);
+  assert.doesNotMatch(modal, /checkout-modal__footer|button[^>]*>閉じる</);
+
+  const openCheckout = source.slice(source.indexOf("const openCheckout = () =>"), source.indexOf("const requestCheckout = async () =>"));
+  assert.match(openCheckout, /setModal\("checkout"\)/);
+  assert.match(openCheckout, /setCheckoutRefreshKey\(\(current\) => current \+ 1\)/);
+  assert.doesNotMatch(openCheckout, /requestCheckout|POST/);
+  assert.match(source, /orderClient\.getCheckout\(\)/);
+  assert.match(source, /if \(checkoutSubmitting \|\| checkoutState\.checkout\?\.status === "requested" \|\| checkoutState\.checkout\?\.status === "ready"\) return/);
+});
+
 test("customer pending view does not expose order or adjustment amounts", () => {
   const pending = modal.slice(modal.indexOf("waiting ?"), modal.indexOf(": cancelled ?"));
   assert.match(pending, /しばらくお待ちください/);
@@ -37,6 +50,13 @@ test("cancelled checkout hides the old total and uses the existing customer re-r
   assert.match(cancelled, /新しく会計を依頼する/);
   assert.doesNotMatch(cancelled, /grandTotalYen|orderedItemsTotalYen|adjustmentsTotalYen/);
   assert.match(source, /const resetCancelledCheckout = \(\) => \{[\s\S]*checkoutRequestIdRef\.current = null/);
+});
+
+test("only a current ready checkout response can provide an amount to the customer modal", () => {
+  assert.match(modal, /const ready = checkout\?\.status === "ready" && Number\.isSafeInteger\(checkout\.grandTotalYen\)/);
+  assert.match(source, /setCheckoutState\(\(current\) => \(\{ \.\.\.current, loading: true, error: false, errorDetails: null, visitContextId: checkoutVisitContextId \}\)\)/);
+  assert.match(source, /setCheckoutState\(\{ loading: false, error: false, errorDetails: null, checkout: nextCheckout, visitContextId: checkoutVisitContextId \}\)/);
+  assert.match(orderOutbox, /checkout\.status === "ready" && Number\.isSafeInteger\(checkout\.grandTotalYen\) \? \{ grandTotalYen: checkout\.grandTotalYen \} : \{\}/);
 });
 
 test("checkout GET retry renders safe diagnostics and never sends a checkout request", () => {
