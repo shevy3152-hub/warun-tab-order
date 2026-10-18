@@ -66,6 +66,11 @@ test("customer notice gates only the customer screen and does not touch orders o
   assert.match(customer, /subscribeInvalidations|enqueue/);
   assert.match(customer, /orderStartNoticeState\.settings/);
   assert.match(styles, /customer-order-start-notice__body[\s\S]*?white-space:\s*pre-wrap/);
+  assert.match(notice, /customer-order-start-notice__body-scroll[\s\S]*customer-order-start-notice__continue/);
+  assert.match(styles, /\.customer-order-start-notice \{ height: 100dvh;[\s\S]*overflow: hidden/);
+  assert.match(styles, /\.customer-order-start-notice__card \{[\s\S]*grid-template-rows: auto minmax\(0, 1fr\) auto auto/);
+  assert.match(styles, /\.customer-order-start-notice__body-scroll \{ min-height: 0; overflow-y: auto/);
+  assert.match(styles, /\.customer-order-start-notice__continue \{[\s\S]*min-height: 72px; margin: 0/);
   assert.match(app, /function CustomerOrderStartNoticeEditor/);
   assert.match(app, /客席プレビュー/);
   assert.doesNotMatch(app, /□ すべて確認しました/);

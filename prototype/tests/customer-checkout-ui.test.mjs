@@ -38,3 +38,14 @@ test("cancelled checkout hides the old total and uses the existing customer re-r
   assert.doesNotMatch(cancelled, /grandTotalYen|orderedItemsTotalYen|adjustmentsTotalYen/);
   assert.match(source, /const resetCancelledCheckout = \(\) => \{[\s\S]*checkoutRequestIdRef\.current = null/);
 });
+
+test("checkout modal state is scoped to the current visit and ignores late prior-visit responses", () => {
+  assert.match(source, /checkoutVisitContextRef\.current = checkoutVisitContextId/);
+  assert.match(source, /setCheckoutState\(\{ loading: false, error: false, checkout: nextCheckout, visitContextId: checkoutVisitContextId \}\)/);
+  assert.match(source, /\[apiMode, modal, orderClient, checkoutRefreshKey, checkoutVisitContextId\]/);
+  assert.match(source, /checkoutVisitContextRef\.current !== requestVisitContextId\) return/);
+  assert.match(source, /modal === "checkout" && \(!apiMode \|\| checkoutState\.visitContextId === checkoutVisitContextId\)/);
+  assert.match(source, /setModal\(\(current\) => current === "checkout" \? null : current\)/);
+  assert.match(source, /if \(resource === "deviceConfig"\) \{[\s\S]*checkoutReadGenerationRef\.current \+= 1;[\s\S]*setCheckoutState\(\{ loading: false, error: false, checkout: null, visitContextId: checkoutVisitContextId \}\)[\s\S]*setModal\(\(current\) => current === "checkout" \? null : current\)/);
+  assert.match(source, /requestGeneration !== checkoutReadGenerationRef\.current/);
+});

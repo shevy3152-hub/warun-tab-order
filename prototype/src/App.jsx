@@ -759,12 +759,18 @@ function CustomerCheckoutModal({ checkoutState, receiptRequested, onReceiptChang
 function CustomerOrderStartNotice({ ready, settings, loading, error, onContinue, onRetry }) {
   return <main className="customer-order-start-notice">
     <section className="customer-order-start-notice__card" aria-labelledby="customer-order-start-notice-title">
-      <p className="customer-order-start-notice__eyebrow">店舗の利用ルール</p>
-      <h1 id="customer-order-start-notice-title">{settings?.heading || "注文前の確認"}</h1>
-      {settings ? <p className="customer-order-start-notice__body">{settings.body}</p> : null}
-      {loading ? <p className="customer-order-start-notice__status" role="status">注意事項を読み込んでいます。</p> : null}
-      {error ? <div className="customer-order-start-notice__error" role="alert"><p>注意事項を取得できません。通信状態を確認してください。</p><button type="button" className="button button--outline" onClick={onRetry}>再取得</button></div> : null}
-      {!ready && !loading && !error ? <p className="customer-order-start-notice__status" role="status">来店情報を確認しています。</p> : null}
+      <header className="customer-order-start-notice__heading">
+        <p className="customer-order-start-notice__eyebrow">店舗の利用ルール</p>
+        <h1 id="customer-order-start-notice-title">{settings?.heading || "注文前の確認"}</h1>
+      </header>
+      <div className="customer-order-start-notice__body-scroll">
+        {settings ? <p className="customer-order-start-notice__body">{settings.body}</p> : null}
+      </div>
+      <div className="customer-order-start-notice__feedback">
+        {loading ? <p className="customer-order-start-notice__status" role="status">注意事項を読み込んでいます。</p> : null}
+        {error ? <div className="customer-order-start-notice__error" role="alert"><p>注意事項を取得できません。通信状態を確認してください。</p><button type="button" className="button button--outline" onClick={onRetry}>再取得</button></div> : null}
+        {!ready && !loading && !error ? <p className="customer-order-start-notice__status" role="status">来店情報を確認しています。</p> : null}
+      </div>
       <button className="customer-order-start-notice__continue" type="button" disabled={!ready} onClick={onContinue}>確認して注文を開始する</button>
     </section>
   </main>;
@@ -919,7 +925,7 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
   const [apiOrders, setApiOrders] = useState([]);
   const [apiHistoryState, setApiHistoryState] = useState({ loading: false, error: false });
   const [historyRefreshKey, setHistoryRefreshKey] = useState(0);
-  const [checkoutState, setCheckoutState] = useState({ loading: false, error: false, checkout: null });
+  const [checkoutState, setCheckoutState] = useState({ loading: false, error: false, checkout: null, visitContextId: null });
   const [checkoutReceiptRequested, setCheckoutReceiptRequested] = useState(false);
   const [checkoutSubmitting, setCheckoutSubmitting] = useState(false);
   const [checkoutRefreshKey, setCheckoutRefreshKey] = useState(0);
@@ -932,6 +938,7 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
   const [staffCallCooldown, setStaffCallCooldown] = useState(null);
   const [staffCallClock, setStaffCallClock] = useState(Date.now());
   const staffCallVisitContextId = apiMode ? (customerDeviceConfig?.visitContextId ?? null) : "demo";
+  const checkoutVisitContextId = apiMode ? (customerDeviceConfig?.visitContextId ?? null) : "demo";
   const staffCallStorageKey = customerStaffCallCooldownKey(customerDeviceConfig?.deviceId ?? deviceId, staffCallVisitContextId);
   const staffCallCooldownKeyRef = useRef(null);
   const staffCallCooldownUntilRef = useRef({ key: staffCallStorageKey, untilAtMs: 0 });
@@ -1002,11 +1009,23 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
   }, [staffCallCooldown?.staffCallId, staffCallCooldownRemainingSeconds]);
   const checkoutRequestIdRef = useRef(null);
   const checkoutPreviousRef = useRef(null);
+  const checkoutReadGenerationRef = useRef(0);
+  const checkoutVisitContextRef = useRef(checkoutVisitContextId);
   const checkoutAudioRef = useRef(null);
   const checkoutSoundKeysRef = useRef(new Set());
   const menuIdleTimerRef = useRef(null);
   const imoRef = useRef(null);
   const otherRef = useRef(null);
+  useEffect(() => {
+    if (checkoutVisitContextRef.current === checkoutVisitContextId) return;
+    checkoutVisitContextRef.current = checkoutVisitContextId;
+    checkoutReadGenerationRef.current += 1;
+    checkoutRequestIdRef.current = null;
+    checkoutPreviousRef.current = null;
+    setCheckoutReceiptRequested(false);
+    setCheckoutState({ loading: false, error: false, checkout: null, visitContextId: checkoutVisitContextId });
+    setModal((current) => current === "checkout" ? null : current);
+  }, [checkoutVisitContextId]);
   const customerMajorCategories = buildCustomerMajorCategories(apiMenu?.categories, CUSTOMER_MAJOR_CATEGORIES);
   const currentMajorCategory = customerMajorCategories.find((category) => category.id === majorCategoryId) ?? customerMajorCategories[0];
   const currentSubcategories = currentMajorCategory.subcategories;
@@ -1116,7 +1135,15 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
     const unsubscribe = typeof orderClient.subscribeInvalidations === "function" ? orderClient.subscribeInvalidations((event) => {
       const resource = event?.payload?.resource ?? event?.resource;
       if (resource === "menu") setMenuRefreshKey((current) => current + 1);
-      if (resource === "deviceConfig") void refreshVisitState();
+      if (resource === "deviceConfig") {
+        checkoutReadGenerationRef.current += 1;
+        checkoutPreviousRef.current = null;
+        checkoutRequestIdRef.current = null;
+        setCheckoutReceiptRequested(false);
+        setCheckoutState({ loading: false, error: false, checkout: null, visitContextId: checkoutVisitContextId });
+        setModal((current) => current === "checkout" ? null : current);
+        void refreshVisitState();
+      }
       if (resource === "orders") setHistoryRefreshKey((current) => current + 1);
       if (resource === "checkout" || String(event?.payload?.type || event?.type || "").startsWith("checkout.")) setCheckoutRefreshKey((current) => current + 1);
     }, { onReconnect: refreshVisitState, onAuthorizationFailure: blockCartAfterAuthenticationFailure }) : () => {};
@@ -1125,14 +1152,15 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
       visitConfigRefresher.stop();
       unsubscribe();
     };
-  }, [apiMode, orderClient, onCustomerDeviceConfigChange, customerDeviceConfig?.deviceId]);
+  }, [apiMode, orderClient, onCustomerDeviceConfigChange, customerDeviceConfig?.deviceId, checkoutVisitContextId]);
 
   useEffect(() => {
     if (!apiMode || !orderClient?.getCheckout || (modal !== "checkout" && checkoutRefreshKey === 0)) return undefined;
     let cancelled = false;
-    if (modal === "checkout") setCheckoutState((current) => ({ ...current, loading: true, error: false }));
+    const requestGeneration = checkoutReadGenerationRef.current;
+    if (modal === "checkout") setCheckoutState((current) => ({ ...current, loading: true, error: false, visitContextId: checkoutVisitContextId }));
     void orderClient.getCheckout().then((nextCheckout) => {
-      if (cancelled) return;
+      if (cancelled || requestGeneration !== checkoutReadGenerationRef.current) return;
       const previous = checkoutPreviousRef.current;
       checkoutPreviousRef.current = nextCheckout;
       if (previous?.status === "requested" && nextCheckout?.status === "ready") {
@@ -1146,12 +1174,12 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
         }
       }
       setCheckoutReceiptRequested(nextCheckout?.receiptRequested === true);
-      setCheckoutState({ loading: false, error: false, checkout: nextCheckout });
+      setCheckoutState({ loading: false, error: false, checkout: nextCheckout, visitContextId: checkoutVisitContextId });
     }).catch(() => {
-      if (!cancelled) setCheckoutState((current) => ({ ...current, loading: false, error: true }));
+      if (!cancelled && requestGeneration === checkoutReadGenerationRef.current) setCheckoutState((current) => ({ ...current, loading: false, error: true, visitContextId: checkoutVisitContextId }));
     });
     return () => { cancelled = true; };
-  }, [apiMode, modal, orderClient, checkoutRefreshKey]);
+  }, [apiMode, modal, orderClient, checkoutRefreshKey, checkoutVisitContextId]);
 
   useEffect(() => {
     const unsubscribe = orderClient.subscribe((event) => {
@@ -1576,7 +1604,7 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
   };
   const openCheckout = () => {
     if (!apiMode) {
-      setCheckoutState({ loading: false, error: true, checkout: null });
+      setCheckoutState({ loading: false, error: true, checkout: null, visitContextId: checkoutVisitContextId });
       setModal("checkout");
       return;
     }
@@ -1585,18 +1613,22 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
   };
   const requestCheckout = async () => {
     if (checkoutSubmitting || checkoutState.checkout?.status === "requested" || checkoutState.checkout?.status === "ready") return;
+    const requestVisitContextId = checkoutVisitContextId;
     prepareCheckoutBell(checkoutAudioRef);
     setCheckoutSubmitting(true);
-    setCheckoutState((current) => ({ ...current, loading: true, error: false }));
+    setCheckoutState((current) => ({ ...current, loading: true, error: false, visitContextId: requestVisitContextId }));
     const checkoutRequestId = checkoutRequestIdRef.current || createClientOrderId();
     checkoutRequestIdRef.current = checkoutRequestId;
     try {
       const checkout = await orderClient.requestCheckout({ checkoutRequestId, receiptRequested: checkoutReceiptRequested });
+      if (checkoutVisitContextRef.current !== requestVisitContextId) return;
       checkoutPreviousRef.current = checkout;
-      setCheckoutState({ loading: false, error: false, checkout });
+      setCheckoutState({ loading: false, error: false, checkout, visitContextId: requestVisitContextId });
     } catch (error) {
-      setCheckoutState((current) => ({ ...current, loading: false, error: true }));
-      if (!(error instanceof CustomerCheckoutError)) setCheckoutState((current) => ({ ...current, error: true }));
+      if (checkoutVisitContextRef.current === requestVisitContextId) {
+        setCheckoutState((current) => ({ ...current, loading: false, error: true, visitContextId: requestVisitContextId }));
+        if (!(error instanceof CustomerCheckoutError)) setCheckoutState((current) => ({ ...current, error: true }));
+      }
     } finally { setCheckoutSubmitting(false); }
   };
   const retryCheckout = () => setCheckoutRefreshKey((current) => current + 1);
@@ -1604,7 +1636,7 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
     checkoutRequestIdRef.current = null;
     checkoutPreviousRef.current = null;
     setCheckoutReceiptRequested(false);
-    setCheckoutState({ loading: false, error: false, checkout: null });
+    setCheckoutState({ loading: false, error: false, checkout: null, visitContextId: checkoutVisitContextId });
   };
   const closeRideGuidance = () => {
     setRideGuidanceType(null);
@@ -1641,7 +1673,7 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
   return (
     <div className={`customer-app ${majorNavOpen ? "" : "customer-app--category-collapsed"}`} data-customer-theme={visibleCustomerTheme} style={customerThemePaletteStyle(visibleCustomerTheme)}>
       {modal === "ride-guidance" ? <RideGuidanceModal dataState={rideGuidanceState} selectedType={rideGuidanceType} onSelectType={setRideGuidanceType} onBack={() => setRideGuidanceType(null)} onClose={closeRideGuidance} /> : null}
-      {modal === "checkout" ? <CustomerCheckoutModal checkoutState={checkoutState} receiptRequested={checkoutReceiptRequested} onReceiptChange={setCheckoutReceiptRequested} onRequest={requestCheckout} onRetry={retryCheckout} onResetCancelled={resetCancelledCheckout} onClose={() => setModal(null)} submitting={checkoutSubmitting} /> : null}
+      {modal === "checkout" && (!apiMode || checkoutState.visitContextId === checkoutVisitContextId) ? <CustomerCheckoutModal checkoutState={checkoutState} receiptRequested={checkoutReceiptRequested} onReceiptChange={setCheckoutReceiptRequested} onRequest={requestCheckout} onRetry={retryCheckout} onResetCancelled={resetCancelledCheckout} onClose={() => setModal(null)} submitting={checkoutSubmitting} /> : null}
       <aside className="customer-sidebar">
         {majorNavOpen && customerThemeAssetPath && visibleCustomerTheme === customerTheme ? <CustomerThemeImage theme={customerTheme} variant={customerThemeConfig} alt={`${CUSTOMER_THEME_DEFINITIONS[customerTheme]?.label ?? "客席テーマ"}のレール画像`} onError={() => setCustomerThemeImageFailed(true)} /> : null}
         <CustomerRailContent expanded={majorNavOpen} categories={customerMajorCategories} currentCategoryId={majorCategoryId} onSelectCategory={selectMajorCategory} onExpand={() => setMajorNavOpen(true)} businessHours={businessHours} onOpenNotice={() => setShowBusinessNotice(true)} />

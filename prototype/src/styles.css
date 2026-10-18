@@ -162,14 +162,17 @@ h1, h2, h3, p { margin: 0; }
 .customer-hours b { font-size: 12px; }
 .customer-hours span { font: 700 17px/1.2 monospace; letter-spacing: .08em; }
 .customer-hours small { font-size: 11px; }
-.customer-order-start-notice { min-height: 100dvh; box-sizing: border-box; display: grid; place-items: center; overflow-y: auto; padding: clamp(20px, 5vw, 64px); background: #f3eadb; color: var(--ink); }
-.customer-order-start-notice__card { width: min(760px, 100%); box-sizing: border-box; padding: clamp(24px, 5vw, 56px); border: 2px solid var(--ink); border-top: 12px solid var(--red); background: #fffaf3; box-shadow: 8px 8px 0 #d7c7b5; }
+.customer-order-start-notice { height: 100dvh; min-height: 0; box-sizing: border-box; display: grid; place-items: center; overflow: hidden; padding: clamp(12px, 4vh, 40px) clamp(16px, 5vw, 64px); background: #f3eadb; color: var(--ink); }
+.customer-order-start-notice__card { width: min(760px, 100%); height: 100%; max-height: 100%; min-height: 0; box-sizing: border-box; display: grid; grid-template-rows: auto minmax(0, 1fr) auto auto; gap: clamp(10px, 2vh, 18px); overflow: hidden; padding: clamp(20px, 5vw, 56px); border: 2px solid var(--ink); border-top: 12px solid var(--red); background: #fffaf3; box-shadow: 8px 8px 0 #d7c7b5; }
+.customer-order-start-notice__heading { min-width: 0; }
 .customer-order-start-notice__eyebrow { margin: 0 0 10px; color: var(--red); font-size: 17px; font-weight: 900; letter-spacing: .08em; }
-.customer-order-start-notice__card h1 { margin: 0 0 28px; font-size: clamp(27px, 4vw, 38px); line-height: 1.35; font-weight: 900; }
-.customer-order-start-notice__body { min-height: 160px; padding: 22px; border: 1px solid #c46e69; border-left: 7px solid var(--red); background: #fff; white-space: pre-wrap; overflow-wrap: anywhere; font-size: clamp(19px, 2.1vw, 24px); line-height: 1.8; font-weight: 900; }
-.customer-order-start-notice__status { margin: 18px 0 0; color: var(--muted); font-weight: 800; }
-.customer-order-start-notice__error { margin-top: 16px; display: flex; align-items: center; justify-content: space-between; gap: 14px; color: #9b1c14; font-weight: 800; }
-.customer-order-start-notice__continue { width: 100%; min-height: 72px; margin-top: 26px; padding: 8px 14px; border: 0; background: var(--red); color: #fff; font-size: clamp(18px, 2vw, 22px); line-height: 1.35; font-weight: 900; touch-action: manipulation; }
+.customer-order-start-notice__card h1 { margin: 0; font-size: clamp(27px, 4vw, 38px); line-height: 1.35; font-weight: 900; }
+.customer-order-start-notice__body-scroll { min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+.customer-order-start-notice__body { margin: 0; min-height: 160px; padding: 22px; border: 1px solid #c46e69; border-left: 7px solid var(--red); background: #fff; white-space: pre-wrap; overflow-wrap: anywhere; font-size: clamp(19px, 2.1vw, 24px); line-height: 1.8; font-weight: 900; }
+.customer-order-start-notice__feedback { min-width: 0; }
+.customer-order-start-notice__status { margin: 0; color: var(--muted); font-weight: 800; }
+.customer-order-start-notice__error { margin: 0; display: flex; align-items: center; justify-content: space-between; gap: 14px; color: #9b1c14; font-weight: 800; }
+.customer-order-start-notice__continue { width: 100%; min-height: 72px; margin: 0; padding: 8px 14px; border: 0; background: var(--red); color: #fff; font-size: clamp(18px, 2vw, 22px); line-height: 1.35; font-weight: 900; touch-action: manipulation; }
 .customer-order-start-notice__continue:disabled { background: #8a8179; cursor: not-allowed; }
 @media (max-width: 600px) { .customer-order-start-notice__body { min-height: 120px; padding: 16px; } }
 .business-hours-notice-button { min-height: 52px; margin-top: 8px; padding: 8px 10px; border: 1px solid #fff; background: transparent; color: #fff; font-size: 14px; font-weight: 900; line-height: 1.2; touch-action: manipulation; }
