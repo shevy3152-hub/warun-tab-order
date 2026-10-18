@@ -27,7 +27,7 @@ import {
 } from "@phosphor-icons/react";
 import { Fragment } from "react";
 import * as React from "react";
-import { createClientOrderId, createCustomerOrderClient, CustomerCheckoutError, resolveOrderApiConfig } from "./order-outbox.js";
+import { createClientOrderId, createCustomerOrderClient, resolveOrderApiConfig } from "./order-outbox.js";
 import { claimCustomerDevice, createIndexedDbCredentialStore, loadOrCreateCustomerDevice, pairingClaimErrorMessage, runtimeForCustomerCredentials } from "./device-credentials.js";
 import { customerOrderErrorCategory, customerOrderNoticeFromOutboxEvent } from "./customer-order-notice.js";
 import { AdminPairingError, configuredAdminToken, createAdminRideGuidanceContact, deleteAdminRideGuidanceContact, fetchAdminBusinessHours, fetchAdminCheckoutRequests, fetchAdminCustomerOrderStartNotice, fetchAdminCustomerThemeConfig, fetchAdminDiagnostics, fetchAdminMenu, fetchAdminSessionMenuAccess, fetchArchivedAdminMenuItems, previewAdminMenuItemLifecycle, executeAdminMenuItemLifecycle, restoreArchivedAdminMenuItem, allowAdminSessionMenuItem, confirmAndCloseAdminEmptySession, revokeAdminSessionMenuItem, fetchAdminOrderHistory, fetchAdminPaymentHistory, fetchAdminPairingPreflight, fetchAdminRideGuidance, issueCustomerPairingCode, revokeAdminDevice, saveAdminBusinessHours, saveAdminCustomerOrderStartNotice, saveAdminCustomerThemeConfig, saveAdminImageLayouts, saveAdminCategory, saveAdminMenuItem, saveAdminMenuOrdering, saveAdminRideGuidanceOrdering, saveAdminRideGuidancePickup, updateAdminRideGuidanceContact, voidAdminPayment } from "./admin-pairing.js";
@@ -743,7 +743,7 @@ function RideGuidanceModal({ dataState, selectedType, onSelectType, onBack, onCl
   </Modal>;
 }
 
-function CustomerCheckoutModal({ checkoutState, receiptRequested, onReceiptChange, onRequest, onRetry, onResetCancelled, onClose, submitting }) {
+function CustomerCheckoutModal({ checkoutState, checkoutRequestError, receiptRequested, onReceiptChange, onRequest, onRetry, onResetCancelled, onClose, submitting }) {
   const [splitCount, setSplitCount] = useState(2);
   const checkout = checkoutState.checkout;
   const ready = checkout?.status === "ready" && Number.isSafeInteger(checkout.grandTotalYen);
@@ -752,7 +752,7 @@ function CustomerCheckoutModal({ checkoutState, receiptRequested, onReceiptChang
   const splitAmount = ready ? Math.ceil(checkout.grandTotalYen / splitCount) : null;
   const error = checkoutState.error;
   return <Modal title="お会計" onClose={onClose} className="modal--checkout" footer={ready ? <div className="modal-actions checkout-modal__footer"><button type="button" className="button button--primary button--large" onClick={onClose}>閉じる</button></div> : null}>
-    {checkoutState.loading ? <div className="checkout-customer-state"><p className="checkout-customer-state__large">会計状態を確認中です</p></div> : error ? <div className="checkout-customer-state"><p className="checkout-customer-state__error" role="alert">会計状態を取得できませんでした。</p><p>通信状態を確認して、もう一度お試しください。</p><button type="button" className="button button--primary button--large" onClick={onRetry}>再試行</button></div> : ready ? <div className="checkout-customer-ready"><p className="checkout-customer-state__large">お会計金額</p><strong className="checkout-customer-total" aria-live="polite">税込 {yen(checkout.grandTotalYen)}</strong>{checkout.receiptRequested ? <p className="checkout-receipt-note">手書き領収書を希望済み</p> : null}<section className="checkout-split" aria-label="割り勘"><h3>割り勘</h3><div className="checkout-split__control"><button type="button" aria-label="人数を1人減らす" onClick={() => setSplitCount((current) => Math.max(2, current - 1))} disabled={splitCount <= 2}>−</button><strong>{splitCount}人</strong><button type="button" aria-label="人数を1人増やす" onClick={() => setSplitCount((current) => Math.min(20, current + 1))} disabled={splitCount >= 20}>＋</button></div><p className="checkout-split__amount">おひとり {checkout.grandTotalYen % splitCount === 0 ? "" : "約"}{yen(splitAmount)}</p></section></div> : waiting ? <div className="checkout-customer-state"><p className="checkout-customer-state__large">しばらくお待ちください</p><p>ただいま会計を確認しています</p>{checkout.receiptRequested ? <p className="checkout-receipt-note">手書き領収書を希望済み</p> : null}</div> : cancelled ? <div className="checkout-customer-state"><p className="checkout-customer-state__error" role="alert">会計依頼が取り消されました</p><p>必要であれば、あらためて会計を依頼できます。</p><button type="button" className="button button--primary button--large" onClick={onResetCancelled}>新しく会計を依頼する</button></div> : <div className="checkout-customer-request"><p className="modal-lead">会計の準備をスタッフへ依頼します</p><button type="button" className={`checkout-receipt-toggle ${receiptRequested ? "is-selected" : ""}`} aria-pressed={receiptRequested} onClick={() => onReceiptChange(!receiptRequested)} disabled={submitting}><Receipt size={26} weight={receiptRequested ? "fill" : "regular"} /><span>手書き領収書を希望する</span><b>{receiptRequested ? "選択中" : ""}</b></button>{error ? <p className="checkout-customer-state__error" role="alert">会計依頼を送信できませんでした。もう一度お試しください。</p> : null}<div className="modal-actions checkout-modal__actions"><button type="button" className="button button--quiet" onClick={onClose} disabled={submitting}>キャンセル</button><button type="button" className="button button--primary button--large" onClick={onRequest} disabled={submitting}>{submitting ? "送信中…" : "お会計を依頼する"}</button></div></div>}
+    {checkoutState.loading ? <div className="checkout-customer-state"><p className="checkout-customer-state__large">会計状態を確認中です</p></div> : error ? <div className="checkout-customer-state"><p className="checkout-customer-state__error" role="alert">会計状態を取得できませんでした。</p><p className="checkout-customer-state__diagnostic">失敗段階: {checkoutState.errorDetails?.stage ?? "unknown"} / HTTP status: {checkoutState.errorDetails?.status ?? "なし"} / error code: {checkoutState.errorDetails?.code ?? "UNKNOWN_ERROR"}</p><button type="button" className="button button--primary button--large" onClick={onRetry}>再試行</button></div> : ready ? <div className="checkout-customer-ready"><p className="checkout-customer-state__large">お会計金額</p><strong className="checkout-customer-total" aria-live="polite">税込 {yen(checkout.grandTotalYen)}</strong>{checkout.receiptRequested ? <p className="checkout-receipt-note">手書き領収書を希望済み</p> : null}<section className="checkout-split" aria-label="割り勘"><h3>割り勘</h3><div className="checkout-split__control"><button type="button" aria-label="人数を1人減らす" onClick={() => setSplitCount((current) => Math.max(2, current - 1))} disabled={splitCount <= 2}>−</button><strong>{splitCount}人</strong><button type="button" aria-label="人数を1人増やす" onClick={() => setSplitCount((current) => Math.min(20, current + 1))} disabled={splitCount >= 20}>＋</button></div><p className="checkout-split__amount">おひとり {checkout.grandTotalYen % splitCount === 0 ? "" : "約"}{yen(splitAmount)}</p></section></div> : waiting ? <div className="checkout-customer-state"><p className="checkout-customer-state__large">しばらくお待ちください</p><p>ただいま会計を確認しています</p>{checkout.receiptRequested ? <p className="checkout-receipt-note">手書き領収書を希望済み</p> : null}</div> : cancelled ? <div className="checkout-customer-state"><p className="checkout-customer-state__error" role="alert">会計依頼が取り消されました</p><p>必要であれば、あらためて会計を依頼できます。</p><button type="button" className="button button--primary button--large" onClick={onResetCancelled}>新しく会計を依頼する</button></div> : <div className="checkout-customer-request"><p className="modal-lead">会計の準備をスタッフへ依頼します</p><button type="button" className={`checkout-receipt-toggle ${receiptRequested ? "is-selected" : ""}`} aria-pressed={receiptRequested} onClick={() => onReceiptChange(!receiptRequested)} disabled={submitting}><Receipt size={26} weight={receiptRequested ? "fill" : "regular"} /><span>手書き領収書を希望する</span><b>{receiptRequested ? "選択中" : ""}</b></button>{checkoutRequestError ? <p className="checkout-customer-state__error" role="alert">会計依頼を送信できませんでした。もう一度お試しください。</p> : null}<div className="modal-actions checkout-modal__actions"><button type="button" className="button button--quiet" onClick={onClose} disabled={submitting}>キャンセル</button><button type="button" className="button button--primary button--large" onClick={onRequest} disabled={submitting}>{submitting ? "送信中…" : "お会計を依頼する"}</button></div></div>}
   </Modal>;
 }
 
@@ -925,7 +925,8 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
   const [apiOrders, setApiOrders] = useState([]);
   const [apiHistoryState, setApiHistoryState] = useState({ loading: false, error: false });
   const [historyRefreshKey, setHistoryRefreshKey] = useState(0);
-  const [checkoutState, setCheckoutState] = useState({ loading: false, error: false, checkout: null, visitContextId: null });
+  const [checkoutState, setCheckoutState] = useState({ loading: false, error: false, errorDetails: null, checkout: null, visitContextId: null });
+  const [checkoutRequestError, setCheckoutRequestError] = useState(false);
   const [checkoutReceiptRequested, setCheckoutReceiptRequested] = useState(false);
   const [checkoutSubmitting, setCheckoutSubmitting] = useState(false);
   const [checkoutRefreshKey, setCheckoutRefreshKey] = useState(0);
@@ -1023,7 +1024,8 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
     checkoutRequestIdRef.current = null;
     checkoutPreviousRef.current = null;
     setCheckoutReceiptRequested(false);
-    setCheckoutState({ loading: false, error: false, checkout: null, visitContextId: checkoutVisitContextId });
+    setCheckoutState({ loading: false, error: false, errorDetails: null, checkout: null, visitContextId: checkoutVisitContextId });
+    setCheckoutRequestError(false);
     setModal((current) => current === "checkout" ? null : current);
   }, [checkoutVisitContextId]);
   const customerMajorCategories = buildCustomerMajorCategories(apiMenu?.categories, CUSTOMER_MAJOR_CATEGORIES);
@@ -1140,7 +1142,8 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
         checkoutPreviousRef.current = null;
         checkoutRequestIdRef.current = null;
         setCheckoutReceiptRequested(false);
-        setCheckoutState({ loading: false, error: false, checkout: null, visitContextId: checkoutVisitContextId });
+        setCheckoutState({ loading: false, error: false, errorDetails: null, checkout: null, visitContextId: checkoutVisitContextId });
+        setCheckoutRequestError(false);
         setModal((current) => current === "checkout" ? null : current);
         void refreshVisitState();
       }
@@ -1158,7 +1161,7 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
     if (!apiMode || !orderClient?.getCheckout || (modal !== "checkout" && checkoutRefreshKey === 0)) return undefined;
     let cancelled = false;
     const requestGeneration = checkoutReadGenerationRef.current;
-    if (modal === "checkout") setCheckoutState((current) => ({ ...current, loading: true, error: false, visitContextId: checkoutVisitContextId }));
+    if (modal === "checkout") setCheckoutState((current) => ({ ...current, loading: true, error: false, errorDetails: null, visitContextId: checkoutVisitContextId }));
     void orderClient.getCheckout().then((nextCheckout) => {
       if (cancelled || requestGeneration !== checkoutReadGenerationRef.current) return;
       const previous = checkoutPreviousRef.current;
@@ -1174,9 +1177,14 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
         }
       }
       setCheckoutReceiptRequested(nextCheckout?.receiptRequested === true);
-      setCheckoutState({ loading: false, error: false, checkout: nextCheckout, visitContextId: checkoutVisitContextId });
-    }).catch(() => {
-      if (!cancelled && requestGeneration === checkoutReadGenerationRef.current) setCheckoutState((current) => ({ ...current, loading: false, error: true, visitContextId: checkoutVisitContextId }));
+      setCheckoutState({ loading: false, error: false, errorDetails: null, checkout: nextCheckout, visitContextId: checkoutVisitContextId });
+    }).catch((error) => {
+      if (!cancelled && requestGeneration === checkoutReadGenerationRef.current) {
+        const code = typeof error?.code === "string" && /^[A-Z0-9_:-]{1,64}$/.test(error.code) ? error.code : "UNKNOWN_ERROR";
+        const status = Number.isInteger(error?.status) && error.status > 0 ? error.status : null;
+        const stage = ["configuration", "network", "http", "response"].includes(error?.stage) ? error.stage : "client";
+        setCheckoutState((current) => ({ ...current, loading: false, error: true, errorDetails: { stage, status, code }, visitContextId: checkoutVisitContextId }));
+      }
     });
     return () => { cancelled = true; };
   }, [apiMode, modal, orderClient, checkoutRefreshKey, checkoutVisitContextId]);
@@ -1603,8 +1611,9 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
     setModal("ride-guidance");
   };
   const openCheckout = () => {
+    setCheckoutRequestError(false);
     if (!apiMode) {
-      setCheckoutState({ loading: false, error: true, checkout: null, visitContextId: checkoutVisitContextId });
+      setCheckoutState({ loading: false, error: true, errorDetails: { stage: "configuration", status: null, code: "API_UNAVAILABLE" }, checkout: null, visitContextId: checkoutVisitContextId });
       setModal("checkout");
       return;
     }
@@ -1616,27 +1625,34 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
     const requestVisitContextId = checkoutVisitContextId;
     prepareCheckoutBell(checkoutAudioRef);
     setCheckoutSubmitting(true);
-    setCheckoutState((current) => ({ ...current, loading: true, error: false, visitContextId: requestVisitContextId }));
+    setCheckoutRequestError(false);
+    setCheckoutState((current) => ({ ...current, loading: true, error: false, errorDetails: null, visitContextId: requestVisitContextId }));
     const checkoutRequestId = checkoutRequestIdRef.current || createClientOrderId();
     checkoutRequestIdRef.current = checkoutRequestId;
     try {
       const checkout = await orderClient.requestCheckout({ checkoutRequestId, receiptRequested: checkoutReceiptRequested });
       if (checkoutVisitContextRef.current !== requestVisitContextId) return;
       checkoutPreviousRef.current = checkout;
-      setCheckoutState({ loading: false, error: false, checkout, visitContextId: requestVisitContextId });
+      setCheckoutRequestError(false);
+      setCheckoutState({ loading: false, error: false, errorDetails: null, checkout, visitContextId: requestVisitContextId });
     } catch (error) {
       if (checkoutVisitContextRef.current === requestVisitContextId) {
-        setCheckoutState((current) => ({ ...current, loading: false, error: true, visitContextId: requestVisitContextId }));
-        if (!(error instanceof CustomerCheckoutError)) setCheckoutState((current) => ({ ...current, error: true }));
+        setCheckoutRequestError(true);
+        setCheckoutState((current) => ({ ...current, loading: false, error: false, errorDetails: null, visitContextId: requestVisitContextId }));
+
       }
     } finally { setCheckoutSubmitting(false); }
   };
-  const retryCheckout = () => setCheckoutRefreshKey((current) => current + 1);
+  const retryCheckout = () => {
+    setCheckoutRequestError(false);
+    setCheckoutRefreshKey((current) => current + 1);
+  };
   const resetCancelledCheckout = () => {
     checkoutRequestIdRef.current = null;
     checkoutPreviousRef.current = null;
     setCheckoutReceiptRequested(false);
-    setCheckoutState({ loading: false, error: false, checkout: null, visitContextId: checkoutVisitContextId });
+    setCheckoutState({ loading: false, error: false, errorDetails: null, checkout: null, visitContextId: checkoutVisitContextId });
+        setCheckoutRequestError(false);
   };
   const closeRideGuidance = () => {
     setRideGuidanceType(null);
@@ -1673,7 +1689,7 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
   return (
     <div className={`customer-app ${majorNavOpen ? "" : "customer-app--category-collapsed"}`} data-customer-theme={visibleCustomerTheme} style={customerThemePaletteStyle(visibleCustomerTheme)}>
       {modal === "ride-guidance" ? <RideGuidanceModal dataState={rideGuidanceState} selectedType={rideGuidanceType} onSelectType={setRideGuidanceType} onBack={() => setRideGuidanceType(null)} onClose={closeRideGuidance} /> : null}
-      {modal === "checkout" && (!apiMode || checkoutState.visitContextId === checkoutVisitContextId) ? <CustomerCheckoutModal checkoutState={checkoutState} receiptRequested={checkoutReceiptRequested} onReceiptChange={setCheckoutReceiptRequested} onRequest={requestCheckout} onRetry={retryCheckout} onResetCancelled={resetCancelledCheckout} onClose={() => setModal(null)} submitting={checkoutSubmitting} /> : null}
+      {modal === "checkout" && (!apiMode || checkoutState.visitContextId === checkoutVisitContextId) ? <CustomerCheckoutModal checkoutState={checkoutState} checkoutRequestError={checkoutRequestError} receiptRequested={checkoutReceiptRequested} onReceiptChange={setCheckoutReceiptRequested} onRequest={requestCheckout} onRetry={retryCheckout} onResetCancelled={resetCancelledCheckout} onClose={() => setModal(null)} submitting={checkoutSubmitting} /> : null}
       <aside className="customer-sidebar">
         {majorNavOpen && customerThemeAssetPath && visibleCustomerTheme === customerTheme ? <CustomerThemeImage theme={customerTheme} variant={customerThemeConfig} alt={`${CUSTOMER_THEME_DEFINITIONS[customerTheme]?.label ?? "客席テーマ"}のレール画像`} onError={() => setCustomerThemeImageFailed(true)} /> : null}
         <CustomerRailContent expanded={majorNavOpen} categories={customerMajorCategories} currentCategoryId={majorCategoryId} onSelectCategory={selectMajorCategory} onExpand={() => setMajorNavOpen(true)} businessHours={businessHours} onOpenNotice={() => setShowBusinessNotice(true)} />

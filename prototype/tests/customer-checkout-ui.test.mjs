@@ -39,13 +39,23 @@ test("cancelled checkout hides the old total and uses the existing customer re-r
   assert.match(source, /const resetCancelledCheckout = \(\) => \{[\s\S]*checkoutRequestIdRef\.current = null/);
 });
 
+test("checkout GET retry renders safe diagnostics and never sends a checkout request", () => {
+  assert.ok(modal.includes("失敗段階: {checkoutState.errorDetails?.stage"));
+  assert.ok(modal.includes("HTTP status: {checkoutState.errorDetails?.status"));
+  assert.ok(modal.includes("error code: {checkoutState.errorDetails?.code"));
+  assert.ok(source.includes("const stage = [\"configuration\", \"network\", \"http\", \"response\"]"));
+  const retry = source.slice(source.indexOf("const retryCheckout"), source.indexOf("const resetCancelledCheckout"));
+  assert.match(retry, /setCheckoutRefreshKey/);
+  assert.doesNotMatch(retry, /requestCheckout|POST/);
+});
+
 test("checkout modal state is scoped to the current visit and ignores late prior-visit responses", () => {
   assert.match(source, /checkoutVisitContextRef\.current = checkoutVisitContextId/);
-  assert.match(source, /setCheckoutState\(\{ loading: false, error: false, checkout: nextCheckout, visitContextId: checkoutVisitContextId \}\)/);
+  assert.match(source, /setCheckoutState\(\{ loading: false, error: false, errorDetails: null, checkout: nextCheckout, visitContextId: checkoutVisitContextId \}\)/);
   assert.match(source, /\[apiMode, modal, orderClient, checkoutRefreshKey, checkoutVisitContextId\]/);
   assert.match(source, /checkoutVisitContextRef\.current !== requestVisitContextId\) return/);
   assert.match(source, /modal === "checkout" && \(!apiMode \|\| checkoutState\.visitContextId === checkoutVisitContextId\)/);
   assert.match(source, /setModal\(\(current\) => current === "checkout" \? null : current\)/);
-  assert.match(source, /if \(resource === "deviceConfig"\) \{[\s\S]*checkoutReadGenerationRef\.current \+= 1;[\s\S]*setCheckoutState\(\{ loading: false, error: false, checkout: null, visitContextId: checkoutVisitContextId \}\)[\s\S]*setModal\(\(current\) => current === "checkout" \? null : current\)/);
+  assert.match(source, /if \(resource === "deviceConfig"\) \{[\s\S]*checkoutReadGenerationRef\.current \+= 1;[\s\S]*setCheckoutState\(\{ loading: false, error: false, errorDetails: null, checkout: null, visitContextId: checkoutVisitContextId \}\)[\s\S]*setModal\(\(current\) => current === "checkout" \? null : current\)/);
   assert.match(source, /requestGeneration !== checkoutReadGenerationRef\.current/);
 });

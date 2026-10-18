@@ -1253,6 +1253,21 @@ test("customer checkout client uses authenticated current/create contracts and h
   assert.deepEqual(JSON.parse(calls[1].options.body), { checkoutRequestId, receiptRequested: true });
 });
 
+test("customer checkout GET reports safe failure diagnostics and no-request remains a successful GET", async () => {
+  const config = { enabled: true, baseUrl: "http://localhost:8787/v1", token: "private-customer-token" };
+  const calls = [];
+  const noRequest = await fetchCustomerCheckout({ config, fetchImpl: async (url, options) => {
+    calls.push({ url, method: options.method });
+    return { ok: true, status: 200, async json() { return { checkout: null }; } };
+  } });
+  assert.equal(noRequest, null);
+  assert.deepEqual(calls, [{ url: "http://localhost:8787/v1/customer/checkout-requests/current", method: "GET" }]);
+  await assert.rejects(() => fetchCustomerCheckout({ config, fetchImpl: async () => { throw new Error("secret token payload"); } }),
+    (error) => error.stage === "network" && error.status === 0 && error.code === "NETWORK_ERROR" && !error.message.includes("secret"));
+  await assert.rejects(() => fetchCustomerCheckout({ config, fetchImpl: async () => ({ ok: false, status: 404, async json() { return { error: { code: "CHECKOUT_SESSION_NOT_FOUND", message: "private body" }, token: "secret" }; } }) }),
+    (error) => error.stage === "http" && error.status === 404 && error.code === "CHECKOUT_SESSION_NOT_FOUND" && !error.message.includes("private body") && !error.message.includes("secret"));
+});
+
 test("customer checkout client preserves failure status without reporting success", async () => {
   const config = { enabled: true, baseUrl: "http://127.0.0.1:8787/v1", token: "customer-runtime-token" };
   const errorResponse = { ok: false, status: 409, async json() { return { error: { code: "CHECKOUT_CONFLICT" } }; } };

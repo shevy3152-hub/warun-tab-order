@@ -524,19 +524,24 @@ export async function postCustomerStaffCall({ config, clientCallId, visitContext
 }
 
 export class CustomerCheckoutError extends Error {
-  constructor(message, { status = 0, code = "CHECKOUT_API_ERROR" } = {}) {
+  constructor(message, { status = 0, code = "CHECKOUT_API_ERROR", stage = "unknown" } = {}) {
     super(message);
     this.name = "CustomerCheckoutError";
     this.status = status;
     this.code = code;
+    this.stage = stage;
   }
+}
+
+function publicCheckoutErrorCode(value, status) {
+  return typeof value === "string" && /^[A-Z0-9_:-]{1,64}$/.test(value) ? value : "HTTP_" + status;
 }
 
 async function checkoutResponseError(response, fallback) {
   let body = null;
   try { body = await response.json(); } catch { /* keep the stable status fallback */ }
-  const code = typeof body?.error?.code === "string" ? body.error.code : `HTTP_${response.status}`;
-  return new CustomerCheckoutError(fallback, { status: response.status, code });
+  const code = publicCheckoutErrorCode(body?.error?.code, response.status);
+  return new CustomerCheckoutError(fallback, { status: response.status, code, stage: "http" });
 }
 
 function mapCustomerCheckout(checkout) {
@@ -553,7 +558,7 @@ function mapCustomerCheckout(checkout) {
 }
 
 function requireCustomerCheckoutConfig(config, fetchImpl) {
-  if (!config?.enabled || !config.baseUrl || typeof fetchImpl !== "function") throw new CustomerCheckoutError("Customer checkout API is not configured.", { code: "API_UNAVAILABLE" });
+  if (!config?.enabled || !config.baseUrl || typeof fetchImpl !== "function") throw new CustomerCheckoutError("Customer checkout API is not configured.", { code: "API_UNAVAILABLE", stage: "configuration" });
   return { endpoint: `${config.baseUrl}/customer/checkout-requests`, headers: { Accept: "application/json", Authorization: `Bearer ${config.token}` } };
 }
 
@@ -561,11 +566,11 @@ export async function fetchCustomerCheckout({ config, fetchImpl = globalThis.fet
   const { endpoint, headers } = requireCustomerCheckoutConfig(config, fetchImpl);
   let response;
   try { response = await fetchImpl(`${endpoint}/current`, { method: "GET", headers }); }
-  catch { throw new CustomerCheckoutError("Customer checkout request failed.", { code: "NETWORK_ERROR" }); }
+  catch { throw new CustomerCheckoutError("Customer checkout request failed.", { code: "NETWORK_ERROR", stage: "network" }); }
   if (!response.ok) throw await checkoutResponseError(response, "会計状態を取得できません。");
   let body;
-  try { body = await response.json(); } catch { throw new CustomerCheckoutError("会計状態の応答が不正です。", { code: "INVALID_RESPONSE" }); }
-  if (!body || (body.checkout !== null && typeof body.checkout !== "object")) throw new CustomerCheckoutError("会計状態の応答が不正です。", { code: "INVALID_RESPONSE" });
+  try { body = await response.json(); } catch { throw new CustomerCheckoutError("会計状態の応答が不正です。", { code: "INVALID_RESPONSE", stage: "response" }); }
+  if (!body || (body.checkout !== null && typeof body.checkout !== "object")) throw new CustomerCheckoutError("会計状態の応答が不正です。", { code: "INVALID_RESPONSE", stage: "response" });
   return mapCustomerCheckout(body.checkout);
 }
 
