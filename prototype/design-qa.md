@@ -1,5 +1,12 @@
 # Design QA
 
+## Open-visit completed orders 2026-10-18
+
+- In the isolated `?demo=1` kitchen at a 1280 x 800 CSS viewport, checked that fully served orders remain within their table receipt and that their served-item details can be collapsed and reopened. The browser's existing local storage was retained; the UI toggle was returned to its initial expanded state.
+- The visible receipt labels the footer `表示中の注文商品合計`; the separate checkout panel labels the visit-level product amount `注文済み商品合計` and shows its own confirmation total. The two are not combined in the displayed sum. Unserved cards remain ahead of completed cards.
+- Automated coverage additionally verifies a completed order remains visible without a checkout request, that previous visits for the same table are excluded, and that the normal kitchen HTTP snapshot retains it through checkout cancellation but removes it after session close while order history remains.
+- The screenshot was inspected in the in-app browser but not saved as a QA image. No safe-copy, operational DB, order, serving, checkout, or staff-call operation was used.
+
 ## Evidence
 
 - Customer visual source: `../izakaya-preview.png`

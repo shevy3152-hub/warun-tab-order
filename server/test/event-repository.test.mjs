@@ -211,16 +211,32 @@ function insertOpenStaffCall(database, {
   tableId = 1,
   createdAtMs = FIXED_NOW,
 } = {}) {
+  let session = database.prepare(`
+    SELECT session_id FROM table_sessions
+    WHERE table_id = ? AND closed_at_ms IS NULL
+    ORDER BY opened_at_ms DESC
+    LIMIT 1
+  `).get(tableId);
+  if (!session) {
+    const sessionId = uuid(700 + tableId);
+    database.prepare(`
+      INSERT INTO table_sessions (
+        session_id, table_id, opened_at_ms, version, created_at_ms, updated_at_ms
+      ) VALUES (?, ?, 0, 1, 0, 0)
+    `).run(sessionId, tableId);
+    session = { session_id: sessionId };
+  }
   database.prepare(`
     INSERT INTO staff_calls (
-      staff_call_id, client_call_id, customer_device_id, table_id,
+      staff_call_id, client_call_id, customer_device_id, table_id, table_session_id,
       table_number_snapshot, call_type, status, created_at_ms, version
-    ) VALUES (?, ?, ?, ?, ?, 'staff', 'open', ?, 1)
+    ) VALUES (?, ?, ?, ?, ?, ?, 'staff', 'open', ?, 1)
   `).run(
     staffCallId,
     clientCallId,
     customerDeviceId,
     tableId,
+    session.session_id,
     tableId,
     createdAtMs,
   );
@@ -631,13 +647,27 @@ test('snapshot places unserved items before served items', async () => {
   });
 });
 
-test('snapshot excludes completed orders', async () => {
+test('kitchen snapshot retains completed orders only while their own table session is open', async () => {
   await withFixture(({ database, repository, principals }) => {
-    const created = createOrder(database);
+    const previous = createOrder(database, { clientOrderId: uuid(101), orderId: uuid(201) });
     database.prepare(`
       UPDATE orders SET status = 'completed', completed_at_ms = ?, version = 2
       WHERE order_id = ?
-    `).run(FIXED_NOW + 1, created.order.orderId);
+    `).run(FIXED_NOW + 1, previous.order.orderId);
+    database.prepare('UPDATE table_sessions SET closed_at_ms = ?, version = version + 1 WHERE session_id = ?')
+      .run(FIXED_NOW + 2, previous.order.sessionId);
+
+    const current = createOrder(database, { clientOrderId: uuid(102), orderId: uuid(202), now: FIXED_NOW + 3 });
+    database.prepare(`
+      UPDATE orders SET status = 'completed', completed_at_ms = ?, version = 2
+      WHERE order_id = ?
+    `).run(FIXED_NOW + 4, current.order.orderId);
+
+    const snapshot = repository.getSnapshotOrders(principals.kitchen);
+    assert.deepEqual(snapshot.activeOrders.map((order) => order.orderId), [current.order.orderId]);
+    assert.equal(snapshot.activeOrders[0].sessionId, current.order.sessionId);
+    database.prepare('UPDATE table_sessions SET closed_at_ms = ?, version = version + 1 WHERE session_id = ?')
+      .run(FIXED_NOW + 5, current.order.sessionId);
     assert.deepEqual(repository.getSnapshotOrders(principals.kitchen).activeOrders, []);
   });
 });

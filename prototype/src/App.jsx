@@ -2021,7 +2021,8 @@ function KitchenScreen({ state, updateState, apiState, checkoutState, onServe, o
     })),
   })) : state.orders.filter((order) => order.status === "completed" || order.status === "cancelled");
   const liveOrders = apiMode ? apiState.orders : state.orders.filter((order) => order.status === "new" || order.status === "active");
-  const boardOrders = [...liveOrders, ...historyOrders].map((order) => demoMode && order.tableId === "1" ? { ...order, sessionId: "demo-session-1" } : demoMode && order.tableId === "2" ? { ...order, sessionId: "demo-session-2" } : order);
+  const liveOrderIds = new Set(liveOrders.map((order) => String(order.id ?? order.orderId)));
+  const boardOrders = [...liveOrders, ...historyOrders.filter((order) => !liveOrderIds.has(String(order.id ?? order.orderId)))].map((order) => demoMode && order.tableId === "1" ? { ...order, sessionId: "demo-session-1" } : demoMode && order.tableId === "2" ? { ...order, sessionId: "demo-session-2" } : order);
   const activeOrders = liveOrders.filter((order) => order.status === "new" || order.status === "active");
   const tables = buildKitchenTableGroups({ orders: boardOrders, sessions, menuItems: state.menuItems, drinkCategoryIds: CUSTOMER_DRINK_CATEGORY_IDS, checkouts: activeCheckouts, staffCalls: activeCalls });
 
@@ -2300,7 +2301,7 @@ function KitchenScreen({ state, updateState, apiState, checkoutState, onServe, o
   const displayedCalls = callPanelTableId === null ? activeCalls : activeCalls.filter((call) => String(call.tableId) === callPanelTableId);
   return <StaffShell route="/kitchen" title="新着注文" subtitle="未提供の注文をテーブルごとに表示します。提供完了後も来店・注文履歴は保持されます。" state={state} newOrderCount={activeOrders.length} clock={<time className="kitchen-clock" aria-label={`現在時刻 ${formatTime(new Date())}`}>{formatTime(new Date())}</time>} status={<div className="staff-topbar__right"><div className="staff-call-rail"><button type="button" className="staff-call-button" aria-label="スタッフ呼出" title="スタッフ呼出" onClick={() => openCallPanel()}><Bell size={26} weight="fill" /><span className="kitchen-sidebar__call-label">スタッフ呼出</span> {activeCalls.length ? <b>{activeCalls.length}</b> : null}</button></div>{activeCallGroups.length ? <div className="staff-call-rail__list" aria-label="未対応のスタッフ呼び出し一覧">{activeCallGroups.map((group) => <button type="button" className="staff-call-rail__item" key={group.tableId} aria-label={`テーブル ${group.tableId} のスタッフ呼び出し ${group.calls.length}件を確認`} onClick={() => openCallPanel(group.tableId)}><span>T{group.tableId}</span></button>)}</div> : null}<ConnectionBadge online announceStatus /></div>}>
     <section className="kitchen-content">
-      <KitchenOrderSound orders={liveOrders} staffCalls={activeCalls} suppressStaffCalls={apiState?.suppressStaffCalls} ready={demoMode || (apiMode && !apiState.loading && !apiState.error)} requestStartedAt={apiState?.notificationRequestStartedAt} demoMode={demoMode} />
+      <KitchenOrderSound orders={activeOrders} staffCalls={activeCalls} suppressStaffCalls={apiState?.suppressStaffCalls} ready={demoMode || (apiMode && !apiState.loading && !apiState.error)} requestStartedAt={apiState?.notificationRequestStartedAt} demoMode={demoMode} />
       {apiMode && apiState.loading ? <div className="kitchen-empty"><p>注文を読み込み中です。</p></div> : null}
       {apiMode && apiState.error ? <div className="kitchen-empty" role="alert"><p>注文情報を取得できません。</p></div> : null}
       {!apiMode && !tables.length ? <div className="kitchen-empty"><CheckCircle size={54} weight="thin" /><h2>すべて提供済みです</h2><p>新しい注文が届くと、テーブルごとに表示されます。</p></div> : null}
@@ -2325,7 +2326,7 @@ function KitchenScreen({ state, updateState, apiState, checkoutState, onServe, o
                 const unserved = order.items.filter((item) => !item.isServed && !item.isCancelled && Number(item.billableQuantity ?? item.quantity ?? 0) > 0);
                 const served = order.items.filter((item) => item.isServed && !item.isCancelled && Number(item.billableQuantity ?? item.quantity ?? 0) > 0);
                 const cancelled = order.items.filter((item) => item.isCancelled);
-                const canCollapse = !unserved.length && checkoutPending;
+                const canCollapse = !unserved.length && served.length > 0;
                 const expanded = !collapsedOrders[order.id];
                 const renderItem = (item) => <div className={`order-item-row ${item.isServed ? "is-served" : ""}`} key={item.id}>
                   <div className={`order-item ${item.isServed ? "is-served" : ""}`}>
@@ -2360,7 +2361,7 @@ function KitchenScreen({ state, updateState, apiState, checkoutState, onServe, o
               })}
               {!orders.length ? <div className="table-panel__completed-note">この来店に未提供の注文はありません。sessionは保持されています。</div> : null}
             </div>
-            <footer><span>注文商品合計</span><b>{yen(total)}</b></footer>
+            <footer><span>表示中の注文商品合計</span><b>{yen(total)}</b></footer>
             </div>
           </article>;
         })}

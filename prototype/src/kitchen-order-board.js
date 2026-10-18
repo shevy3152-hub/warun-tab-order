@@ -1,15 +1,21 @@
 export function buildKitchenTableGroups({ orders, sessions, menuItems, drinkCategoryIds, checkouts = [], staffCalls = [] }) {
-  const activeOrders = orders.filter((order) => order.status === "new" || order.status === "active");
+  const openSessionsById = new Map(sessions.map((session) => [session.sessionId, session]));
+  const activeOrders = orders.filter((order) => (order.status === "new" || order.status === "active")
+    && (!order.sessionId || (openSessionsById.has(order.sessionId)
+      && String(openSessionsById.get(order.sessionId).tableId) === String(order.tableId))));
   const requestedCheckoutSessions = new Set(checkouts
     .filter((checkout) => checkout.status === "requested")
     .map((checkout) => checkout.tableSessionId));
-  const completedCheckoutOrders = orders.filter((order) => order.status === "completed"
+  const completedOpenSessionOrders = orders.filter((order) => order.status === "completed"
     && order.sessionId
-    && requestedCheckoutSessions.has(order.sessionId));
+    && openSessionsById.has(order.sessionId)
+    && String(openSessionsById.get(order.sessionId).tableId) === String(order.tableId));
   const cancelledCheckoutOrders = orders.filter((order) => order.status === "cancelled"
     && order.sessionId
+    && openSessionsById.has(order.sessionId)
+    && String(openSessionsById.get(order.sessionId).tableId) === String(order.tableId)
     && requestedCheckoutSessions.has(order.sessionId));
-  const boardOrders = [...activeOrders, ...completedCheckoutOrders, ...cancelledCheckoutOrders];
+  const boardOrders = [...activeOrders, ...completedOpenSessionOrders, ...cancelledCheckoutOrders];
   const menuById = new Map(menuItems.map((item) => [item.id, item]));
   const activeCallsByTable = new Map();
   staffCalls.filter((call) => !call.resolvedAt).forEach((call) => {

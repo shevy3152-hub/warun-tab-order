@@ -346,7 +346,13 @@ export function createEventRepository({ database } = {}) {
           order_origin,
           created_by_device_id
         FROM orders
-        WHERE status IN ('new', 'active')
+        WHERE orders.status IN ('new', 'active', 'completed')
+          AND EXISTS (
+            SELECT 1 FROM table_sessions AS ts
+            WHERE ts.session_id = orders.session_id
+              AND ts.table_id = orders.table_id
+              AND ts.closed_at_ms IS NULL
+          )
           AND EXISTS (SELECT 1 FROM order_items AS oi WHERE oi.order_id = orders.order_id AND oi.is_cancelled = 0 AND oi.quantity_reduced < oi.quantity)
         ORDER BY accepted_at_ms, order_id
       `),

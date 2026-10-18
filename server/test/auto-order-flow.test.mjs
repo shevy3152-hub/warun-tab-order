@@ -9,6 +9,7 @@ import { bootstrapCustomerOrderClient } from '../../prototype/src/customer-boots
 import { createCustomerOrderClient, createMemoryOutbox } from '../../prototype/src/order-outbox.js';
 import { createDeviceAuthenticator } from '../src/auth/device-auth.mjs';
 import { createCatalogRepository } from '../src/catalog/catalog-repository.mjs';
+import { createCheckoutRepository } from '../src/checkout/checkout-repository.mjs';
 import { initializeDatabase } from '../src/db/database.mjs';
 import { createEventRepository } from '../src/events/event-repository.mjs';
 import { createSnapshotService } from '../src/events/snapshot-service.mjs';
@@ -68,6 +69,7 @@ test('automatic customer-to-kitchen-to-history flow uses one SQLite order', asyn
   let authenticator;
   let catalog;
   let orders;
+  let checkout;
   let events;
   let snapshots;
   let hub;
@@ -77,9 +79,10 @@ test('automatic customer-to-kitchen-to-history flow uses one SQLite order', asyn
     catalog = createCatalogRepository({ database: connection.database });
     events = createEventRepository({ database: connection.database });
     orders = createOrderRepository({ database: connection.database, idFactory: () => uuid(100), now: () => 1_800_000_000_000 });
+    checkout = createCheckoutRepository({ database: connection.database, now: () => 1_800_000_000_100 });
     snapshots = createSnapshotService({ catalog, eventRepository: events });
     hub = createSseHub({ eventRepository: events, heartbeatIntervalMs: 1000 });
-    server = createHttpServer({ database: connection.database, authenticator, catalog, eventRepository: events, orderRepository: orders, snapshotService: snapshots, sseHub: hub });
+    server = createHttpServer({ database: connection.database, authenticator, catalog, eventRepository: events, orderRepository: orders, checkout, snapshotService: snapshots, sseHub: hub });
     const port = await listen(server);
     const origin = `http://127.0.0.1:${port}`;
     let fetchCalls = 0;
@@ -154,6 +157,33 @@ test('automatic customer-to-kitchen-to-history flow uses one SQLite order', asyn
     assert.equal(connection.database.prepare('SELECT status FROM orders').get().status, 'completed');
     assert.equal(connection.database.prepare('SELECT COUNT(*) AS count FROM event_log').get().count, 3);
 
+    const completedSnapshot = await fetch(`${origin}/v1/snapshot`, { headers: { Authorization: `Bearer ${KITCHEN_TOKEN}` } }).then((response) => response.json());
+    assert.equal(completedSnapshot.activeOrders.length, 1);
+    assert.equal(completedSnapshot.activeOrders[0].status, 'completed');
+    assert.equal(completedSnapshot.openSessions.length, 1);
+    const checkoutRequest = await fetch(`${origin}/v1/customer/checkout-requests`, {
+      method: 'POST', headers: { Authorization: `Bearer ${CUSTOMER_TOKEN}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ checkoutRequestId: uuid(301), receiptRequested: false }),
+    });
+    assert.equal(checkoutRequest.status, 201);
+    const cancelledCheckout = await fetch(`${origin}/v1/kitchen/checkout-requests/${uuid(301)}/cancel`, {
+      method: 'POST', headers: { Authorization: `Bearer ${KITCHEN_TOKEN}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ expectedVersion: 1 }),
+    });
+    assert.equal(cancelledCheckout.status, 200);
+    assert.equal((await cancelledCheckout.json()).status, 'cancelled');
+    const afterCheckoutCancel = await fetch(`${origin}/v1/snapshot`, { headers: { Authorization: `Bearer ${KITCHEN_TOKEN}` } }).then((response) => response.json());
+    assert.equal(afterCheckoutCancel.activeOrders.length, 1, 'open visit retains its completed order after checkout cancellation');
+
+    const closeSession = await fetch(`${origin}/v1/tables/sessions/close`, {
+      method: 'POST', headers: { Authorization: `Bearer ${KITCHEN_TOKEN}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tableId: 1, sessionId: afterCheckoutCancel.activeOrders[0].sessionId }),
+    });
+    assert.equal(closeSession.status, 200);
+    const afterSessionClose = await fetch(`${origin}/v1/snapshot`, { headers: { Authorization: `Bearer ${KITCHEN_TOKEN}` } }).then((response) => response.json());
+    assert.deepEqual(afterSessionClose.activeOrders, []);
+    assert.deepEqual(afterSessionClose.openSessions, []);
+
     const history = await fetch(`${origin}/v1/admin/order-history`, { headers: { Authorization: `Bearer ${ADMIN_TOKEN}` } }).then((response) => response.json());
     assert.equal(history.orders.length, 1);
     assert.equal(history.orders[0].status, 'completed');
@@ -169,6 +199,7 @@ test('automatic customer-to-kitchen-to-history flow uses one SQLite order', asyn
     hub?.close();
     events?.close();
     orders?.close();
+    checkout?.close();
     catalog?.close();
     authenticator?.close();
     connection.close();

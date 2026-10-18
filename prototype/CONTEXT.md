@@ -852,3 +852,15 @@
 
 - 利用者報告: 隔離試聴PASS。前回確認の2組聴取から調整後の呼出音について受入済みとして記録。Bluetooth接続の有無など比較条件の内訳は未記録のため、原因は確定していない。
 - このPASSに実スタッフ呼出の追加送信は含まれない。safe-copy DB・運用設定の変更なし。
+
+## 厨房の開いた来店に提供済み注文を保持 2026-10-18
+
+- 原因は厨房snapshot SQLが `new`／`active` のみ取得し、全品提供で `completed` になった注文を、開いた来店に属していても画面へ渡していなかったこと。隔離デモは履歴注文も画面入力へ含めていた。
+- serverの厨房snapshotは、`new`／`active`／`completed` のうち同じテーブル・同じ開いたsessionに属する注文だけを返す。画面は開いた来店の `completed` 注文を会計依頼の有無に関わらず表示し、未提供を優先する。提供済み詳細は注文カードごとに折り畳める。closed sessionや別の過去sessionは除外する。
+- KitchenScreenはsnapshot内のcompletedと履歴取得の同一注文IDを重複排除し、表示中の注文商品合計へ二重加算しない。金額ラベルを `表示中の注文商品合計` とし、来店単位checkoutの `注文済み商品合計`／`確認用合計` と区別する。注文通知音と新着件数は引き続き `new`／`active` のみを対象にする。
+- schema変更なし。隔離SQLite＋通常の厨房HTTP APIのE2Eで、全品提供後snapshot／再取得で保持、checkout取消後も保持、来店終了後は厨房snapshotから除外、注文履歴には保持を確認。別テストで同じテーブルの旧closed sessionをsnapshotから除外した。
+- 検証: `node --test tests/kitchen-order-board.test.mjs` 11/11、`node --test test/auto-order-flow.test.mjs` 1/1、completed注文snapshot対象1/1、スタッフ呼出fixture対象4/4、`pnpm run test:sites` 4/4、Vite build 4,654 modules／Sites build準備とinline client成功、`git diff --check`。当初失敗した4件は、現行DBが要求するopen sessionをfixtureが作らず、snapshot取得前の呼出INSERTでtrigger拒否されていた。fixture helperをopen sessionの作成・再利用と呼出への紐付けに修正し、該当4件だけ再実行して成功。snapshot取得条件の回帰ではない。
+- 隔離preview `http://127.0.0.1:4173/?demo=1#/kitchen` はPID 9624、`127.0.0.1` のみで稼働しHTTP 200。既存ブラウザー保存状態は初期化していない。1280×800で会計欄と注文カード、金額ラベルを確認し、提供済み詳細の折り畳み／再表示を操作して初期表示へ戻した。
+- 運用safe-copy、既存DB、API runtime、注文／提供／会計／呼出データ、設定、commit／pushは変更なし。既存の `server/test/order-repository.test.mjs` 未commit差分、旧Halloween PNG、QA資材を保持。build成果物はworktree内の `prototype/dist`。
+
+次: 隔離preview上で必要な利用者確認を続け、別途明示依頼があるまでsafe-copy反映・commit／pushは行わない。

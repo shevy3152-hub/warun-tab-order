@@ -32,7 +32,7 @@ test("kitchen board places drink add-on orders first and keeps unserved items ah
   assert.equal(groups[0].orders[3].hasUnservedItems, false);
 });
 
-test("tables with active work come before completed sessions and later orders restore the same session", () => {
+test("open sessions retain completed orders behind active work and exclude prior visits", () => {
   const sessions = [
     { tableId: "1", sessionId: "session-1", openedAt: "2026-09-23T09:00:00Z" },
     { tableId: "2", sessionId: "session-2", openedAt: "2026-09-23T09:30:00Z" },
@@ -52,27 +52,30 @@ test("tables with active work come before completed sessions and later orders re
   const restored = second.find((group) => group.tableId === "1");
   assert.equal(restored.isCompletedSide, false);
   assert.equal(restored.session.sessionId, "session-1");
-  assert.deepEqual(restored.orders.map((entry) => entry.id), ["later-1"]);
+  assert.deepEqual(restored.orders.map((entry) => entry.id), ["later-1", "finished-1"]);
   assert.equal(completedOrder.status, "completed");
   assert.equal(completedOrder.items[0].isServed, true);
 });
 
-test("a fully served order stays available to a requested checkout and is restored under a later order", () => {
+test("a fully served order stays visible in an open session without a checkout request", () => {
   const sessions = [{ tableId: "1", sessionId: "session-1", openedAt: "2026-09-23T09:00:00Z" }];
   const completed = order("finished-1", "1", [row("served-1", "food", true)], "2026-09-23T09:05:00Z", "session-1");
   completed.status = "completed";
-  const checkout = { tableSessionId: "session-1", status: "requested" };
-  const waiting = buildKitchenTableGroups({ orders: [completed], sessions, menuItems, drinkCategoryIds, checkouts: [checkout] });
+  const waiting = buildKitchenTableGroups({ orders: [completed], sessions, menuItems, drinkCategoryIds });
   assert.equal(waiting[0].orders[0].id, "finished-1");
   assert.equal(waiting[0].orders[0].hasUnservedItems, false);
   assert.equal(waiting[0].isCompletedSide, true);
   assert.equal(waiting[0].session.sessionId, "session-1");
 
   const later = order("later-1", "1", [row("later-row", "beer")], "2026-09-23T10:00:00Z", "session-1");
-  const restored = buildKitchenTableGroups({ orders: [completed, later], sessions, menuItems, drinkCategoryIds, checkouts: [checkout] })[0];
+  const restored = buildKitchenTableGroups({ orders: [completed, later], sessions, menuItems, drinkCategoryIds })[0];
   assert.deepEqual(restored.orders.map((entry) => entry.id), ["later-1", "finished-1"]);
   assert.equal(restored.hasUnservedOrders, true);
   assert.equal(restored.session.sessionId, "session-1");
+
+  const previous = { ...completed, id: "prior-visit", sessionId: "closed-session" };
+  const currentOnly = buildKitchenTableGroups({ orders: [previous, completed], sessions, menuItems, drinkCategoryIds })[0];
+  assert.deepEqual(currentOnly.orders.map((entry) => entry.id), ["finished-1"]);
 });
 
 test("fully cancelled orders are not new work but remain available during a requested checkout", () => {
@@ -170,7 +173,11 @@ test("kitchen markup prioritizes live horizontal table slots and keeps histories
   assert.match(screen, /注文内容を\{expanded \? "非表示" : "表示"\}/);
   assert.doesNotMatch(screen, /className="kitchen-history/);
   assert.doesNotMatch(screen, /fetchKitchenPaymentHistory/);
-  assert.match(screen, /const boardOrders = \[\.\.\.liveOrders, \.\.\.historyOrders\]/);
+  assert.match(screen, /const boardOrders = \[\.\.\.liveOrders, \.\.\.historyOrders\.filter/);
+  assert.match(screen, /historyOrders\.filter\(\(order\) => !liveOrderIds\.has\(String\(order\.id \?\? order\.orderId\)\)\)/);
+  assert.match(screen, /<KitchenOrderSound orders=\{activeOrders\}/);
+  assert.match(screen, /const canCollapse = !unserved\.length && served\.length > 0/);
+  assert.match(screen, /表示中の注文商品合計/);
   assert.match(historyScreen, /className="history-table-wrap"/);
   assert.match(historyScreen, /className="payment-history"/);
   assert.match(historyRoute, /new URLSearchParams\(window\.location\.search\)\.get\("demo"\) === "1"/);
