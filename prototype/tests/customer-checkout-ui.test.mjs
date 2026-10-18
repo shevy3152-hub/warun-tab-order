@@ -29,3 +29,12 @@ test("customer pending view does not expose order or adjustment amounts", () => 
   assert.match(styles, /\.checkout-customer-total \{[\s\S]*font:/);
   assert.match(styles, /\.checkout-split__control \{[\s\S]*grid-template-columns/);
 });
+
+test("cancelled checkout hides the old total and uses the existing customer re-request action", () => {
+  const cancelled = modal.split(": cancelled ?")[1]?.split(": <div className=\"checkout-customer-request\"")[0] ?? "";
+  assert.match(cancelled, /会計依頼が取り消されました/);
+  assert.match(cancelled, /onResetCancelled/);
+  assert.match(cancelled, /新しく会計を依頼する/);
+  assert.doesNotMatch(cancelled, /grandTotalYen|orderedItemsTotalYen|adjustmentsTotalYen/);
+  assert.match(source, /const resetCancelledCheckout = \(\) => \{[\s\S]*checkoutRequestIdRef\.current = null/);
+});

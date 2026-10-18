@@ -338,6 +338,8 @@ test("kitchen checkout API reads and mutates the authenticated v12 contract", as
   assert.deepEqual(JSON.parse(calls[1].options.body), { expectedVersion: 1, adjustments: [{ kind: "seat_charge", label: "席料", amountYen: 500 }] });
   assert.equal(calls[2].options.method, "POST");
   assert.equal(calls[3].options.method, "POST");
+  assert.equal(calls[3].url, `http://192.168.1.10:5173/v1/kitchen/checkout-requests/${checkoutRequestId}/cancel`);
+  assert.deepEqual(JSON.parse(calls[3].options.body), { expectedVersion: ready.version });
 });
 
 test("kitchen API is not configured without an explicit runtime token", () => {

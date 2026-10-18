@@ -320,7 +320,7 @@ export function createCheckoutRepository({ database, now = Date.now, idFactory =
       }
       if (Number(current.version) !== version) throw error(CHECKOUT_ERROR_CODES.VERSION_CONFLICT, 'Checkout request has changed since it was read.');
       const updatedAtMs = timestamp();
-      database.prepare("UPDATE checkout_requests SET status = 'cancelled', version = version + 1, updated_at_ms = ? WHERE checkout_request_id = ? AND version = ?").run(updatedAtMs, id, version);
+      database.prepare("UPDATE checkout_requests SET status = 'cancelled', grand_total_yen = NULL, ready_at_ms = NULL, version = version + 1, updated_at_ms = ? WHERE checkout_request_id = ? AND version = ?").run(updatedAtMs, id, version);
       const event = appendEvent(eventState(), principal, 'checkout.cancelled', id, { version: version + 1 }, updatedAtMs);
       return { request: hydrate(findRequest.get(id)), idempotencyResult: 'created', event };
     });

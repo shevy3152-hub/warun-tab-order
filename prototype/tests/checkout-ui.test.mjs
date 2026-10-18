@@ -13,6 +13,15 @@ test("kitchen checkout panel exposes the staff workflow without internal values"
   assert.match(appSource, /追加料金を保存/);
   assert.match(appSource, /合計金額を確定/);
   assert.match(appSource, /会計依頼を取り消す/);
+  assert.match(appSource, /selected\.status === "ready" \? <div className="checkout-editor__actions checkout-editor__actions--payment"/);
+  assert.match(appSource, /setConfirmAction\("cancel-ready"\)[\s\S]*?会計準備を解除/);
+  assert.match(appSource, /confirmAction === "cancel-ready" \? "会計準備を解除しますか？"/);
+  assert.match(appSource, /これは支払済みにする操作ではありません。現在の確定額を取り消し、客席から会計を再依頼してもらいます。追加料金は新しい依頼へ自動継承されません。/);
+  assert.match(appSource, /const apiAction = action === "cancel-ready" \? "cancel" : action/);
+  assert.match(appSource, /cancel: onCancel \}\[apiAction\]\)\(selected/);
+  assert.match(appSource, /cancelKitchenCheckout\(\{ env: window, checkoutRequestId: checkout\.checkoutRequestId, expectedVersion: checkout\.version \}\)/);
+  assert.match(appSource, /actionError instanceof KitchenApiError \? checkoutErrorMessage\(actionError, fallback\)/);
+  assert.match(appSource, /error\.status === 409 \|\| error\.code === "CHECKOUT_VERSION_CONFLICT"/);
   assert.match(appSource, /confirmAction === "ready"/);
 });
 

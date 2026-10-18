@@ -18,6 +18,7 @@ const SESSION = uuid(13);
 const ORDER = uuid(14);
 const CLIENT_ORDER = uuid(15);
 const CHECKOUT = uuid(16);
+const REPLACEMENT_CHECKOUT = uuid(21);
 const CUSTOMER_TOKEN = Buffer.alloc(32, 3).toString('base64url');
 const KITCHEN_TOKEN = Buffer.alloc(32, 4).toString('base64url');
 const hash = (token) => createHash('sha256').update(token, 'utf8').digest('hex');
@@ -103,6 +104,74 @@ test('checkout HTTP contract enforces roles and hides customer breakdown', async
     assert.equal(voided.statusCode, 200);
     assert.equal(voided.json.status, 'voided');
     assert.equal(voided.json.voidReason, '架空テスト取消');
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    checkout.close();
+    authenticator.close();
+    connection.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('ready checkout can be cancelled, hidden from customer, and replaced with a recalculated request', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'warun-http-checkout-reset-'));
+  const connection = initializeDatabase({ databasePath: join(directory, 'checkout.sqlite3') });
+  seed(connection.database);
+  const database = connection.database;
+  const authenticator = createDeviceAuthenticator({ database });
+  const checkout = createCheckoutRepository({ database, now: () => 3000 });
+  const noop = () => {};
+  const catalog = { getDeviceSettings() { return {}; }, getMenuForPrincipal() { return {}; }, writeMenuItem() {}, writeImageLayouts() {}, writeCategory() {}, writeMenuOrdering() {}, close: noop };
+  const orders = { createOrder() {}, getCustomerHistory() {}, getHistory() {}, closeTableSession() {}, markItemServed() {}, cancelOrderItem() {}, restoreOrderItemCancellation() {}, adjustKitchenOrderItemQuantity() {}, close: noop };
+  const events = { replay() {}, readCommittedForPrincipal() {}, getCurrentCursor() { return { eventEpoch: uuid(99), lastEventId: 0 }; }, close: noop };
+  const snapshots = { getSnapshot() {}, close: noop };
+  const hub = { notifyCommitted() {}, attach() {}, close: noop };
+  const server = createHttpServer({ database, authenticator, catalog, orderRepository: orders, eventRepository: events, snapshotService: snapshots, sseHub: hub, checkout, now: () => 3000 });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const port = server.address().port;
+  try {
+    const created = await request({ port, token: CUSTOMER_TOKEN, method: 'POST', path: '/v1/customer/checkout-requests', body: { checkoutRequestId: CHECKOUT, receiptRequested: false } });
+    assert.equal(created.statusCode, 201);
+    const adjusted = await request({ port, token: KITCHEN_TOKEN, method: 'PUT', path: `/v1/kitchen/checkout-requests/${CHECKOUT}/adjustments`, body: { expectedVersion: 1, adjustments: [{ kind: 'seat_charge', label: '席料', amountYen: 300 }] } });
+    const ready = await request({ port, token: KITCHEN_TOKEN, method: 'POST', path: `/v1/kitchen/checkout-requests/${CHECKOUT}/ready`, body: { expectedVersion: adjusted.json.version } });
+    assert.equal(ready.statusCode, 200);
+    assert.equal(ready.json.grandTotalYen, 1000);
+
+    const staleCancel = await request({ port, token: KITCHEN_TOKEN, method: 'POST', path: `/v1/kitchen/checkout-requests/${CHECKOUT}/cancel`, body: { expectedVersion: ready.json.version - 1 } });
+    assert.equal(staleCancel.statusCode, 409);
+    const stillReady = await request({ port, token: KITCHEN_TOKEN, path: '/v1/kitchen/checkout-requests' });
+    assert.equal(stillReady.json.checkouts[0].status, 'ready');
+    assert.equal(stillReady.json.checkouts[0].grandTotalYen, 1000);
+
+    const cancelled = await request({ port, token: KITCHEN_TOKEN, method: 'POST', path: `/v1/kitchen/checkout-requests/${CHECKOUT}/cancel`, body: { expectedVersion: ready.json.version } });
+    assert.equal(cancelled.statusCode, 200, JSON.stringify(cancelled.json));
+    assert.equal(cancelled.json.status, 'cancelled');
+    assert.equal(cancelled.json.grandTotalYen, null);
+    assert.equal(cancelled.json.readyAtMs, null);
+    const customerCancelled = await request({ port, token: CUSTOMER_TOKEN, path: '/v1/customer/checkout-requests/current' });
+    assert.equal(customerCancelled.json.checkout.status, 'cancelled');
+    assert.equal(Object.hasOwn(customerCancelled.json.checkout, 'grandTotalYen'), false);
+    assert.equal(Object.hasOwn(customerCancelled.json.checkout, 'orderedItemsTotalYen'), false);
+
+    database.prepare(`INSERT INTO orders (order_id, client_order_id, request_fingerprint, canonical_request_json, customer_device_id, table_id, session_id, table_number_snapshot, status, total_amount_yen, accepted_at_ms, completed_at_ms) VALUES (?, ?, ?, '{}', ?, 1, ?, 1, 'completed', 350, 40, 41)`).run(uuid(22), uuid(23), 'c'.repeat(64), CUSTOMER, SESSION);
+    database.prepare(`INSERT INTO order_items (order_item_id, order_id, line_index, menu_item_id, formal_name_snapshot, kitchen_alias_snapshot, unit_price_yen_snapshot, quantity, line_total_yen, is_served, served_at_ms, served_by_device_id, created_at_ms, updated_at_ms) VALUES (3, ?, 0, 'http-item', '追加架空商品', '架空', 350, 1, 350, 1, 40, ?, 40, 40)`).run(uuid(22), KITCHEN);
+    const replacement = await request({ port, token: CUSTOMER_TOKEN, method: 'POST', path: '/v1/customer/checkout-requests', body: { checkoutRequestId: REPLACEMENT_CHECKOUT, receiptRequested: false } });
+    assert.equal(replacement.statusCode, 201);
+    assert.equal(replacement.json.status, 'requested');
+    assert.equal(Object.hasOwn(replacement.json, 'grandTotalYen'), false);
+    const replacementList = await request({ port, token: KITCHEN_TOKEN, path: '/v1/kitchen/checkout-requests' });
+    const replacementRequest = replacementList.json.checkouts[0];
+    assert.equal(replacementRequest.checkoutRequestId, REPLACEMENT_CHECKOUT);
+    assert.equal(replacementRequest.orderedItemsTotalYen, 1050);
+    assert.deepEqual(replacementRequest.adjustments, []);
+
+    const replacementAdjustment = await request({ port, token: KITCHEN_TOKEN, method: 'PUT', path: `/v1/kitchen/checkout-requests/${REPLACEMENT_CHECKOUT}/adjustments`, body: { expectedVersion: replacementRequest.version, adjustments: [{ kind: 'seat_charge', label: '席料', amountYen: 300 }] } });
+    const replacementReady = await request({ port, token: KITCHEN_TOKEN, method: 'POST', path: `/v1/kitchen/checkout-requests/${REPLACEMENT_CHECKOUT}/ready`, body: { expectedVersion: replacementAdjustment.json.version } });
+    assert.equal(replacementReady.statusCode, 200);
+    assert.equal(replacementReady.json.orderedItemsTotalYen, 1050);
+    assert.equal(replacementReady.json.grandTotalYen, 1350);
+
+    assert.deepEqual({ status: database.prepare('SELECT status FROM checkout_requests WHERE checkout_request_id = ?').get(CHECKOUT).status, cancelledTotal: database.prepare('SELECT grand_total_yen FROM checkout_requests WHERE checkout_request_id = ?').get(CHECKOUT).grand_total_yen, oldAdjustments: database.prepare('SELECT COUNT(*) AS count FROM checkout_adjustments WHERE checkout_request_id = ?').get(CHECKOUT).count, newAdjustments: database.prepare('SELECT COUNT(*) AS count FROM checkout_adjustments WHERE checkout_request_id = ?').get(REPLACEMENT_CHECKOUT).count, orders: database.prepare('SELECT COUNT(*) AS count FROM orders WHERE session_id = ?').get(SESSION).count, items: database.prepare('SELECT COUNT(*) AS count FROM order_items').get().count, payments: database.prepare('SELECT COUNT(*) AS count FROM payment_records').get().count }, { status: 'cancelled', cancelledTotal: null, oldAdjustments: 1, newAdjustments: 1, orders: 2, items: 2, payments: 0 });
   } finally {
     await new Promise((resolve) => server.close(resolve));
     checkout.close();
