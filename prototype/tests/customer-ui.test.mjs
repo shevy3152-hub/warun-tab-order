@@ -344,8 +344,34 @@ test("API cart pins the first visit context and keeps stale cart contents availa
   assert.match(styles, /\.cart-context-warning \{[^}]*border: 2px solid var\(--red\)/);
 });
 
+function extractIfStatementBody(source, conditionPattern) {
+  const match = conditionPattern.exec(source);
+  assert.ok(match, "expected conditional branch to exist");
+  let cursor = match.index + match[0].length;
+  while (/\s/.test(source[cursor] ?? "")) cursor += 1;
+  if (source[cursor] !== "{") {
+    const statementEnd = [source.indexOf(";", cursor), source.indexOf("\n", cursor)]
+      .filter((index) => index !== -1)
+      .sort((left, right) => left - right)[0];
+    assert.notEqual(statementEnd, undefined, "expected conditional statement to end");
+    return source.slice(cursor, statementEnd + 1);
+  }
+  const bodyStart = cursor;
+  let depth = 0;
+  for (; cursor < source.length; cursor += 1) {
+    const character = source[cursor];
+    if (character === "{") depth += 1;
+    else if (character === "}" && --depth === 0) return source.slice(bodyStart + 1, cursor);
+  }
+  assert.fail("expected conditional block to end");
+}
+
 test("customer refreshes menu and device context after session invalidations and reconnect", () => {
-  assert.match(customerScreen, /resource === "deviceConfig"\) void refreshVisitState\(\)/);
+  const deviceConfigBody = extractIfStatementBody(
+    customerScreen,
+    /if\s*\(\s*resource\s*===\s*["']deviceConfig["']\s*\)/,
+  );
+  assert.match(deviceConfigBody, /\brefreshVisitState\s*\(\s*\)/);
   assert.match(customerScreen, /onReconnect: refreshVisitState/);
   assert.match(customerScreen, /getConfig: \(options\) => orderClient\.getDeviceConfig\(options\)/);
   assert.match(customerScreen, /onCustomerDeviceConfigChange\?\.\(\{ \.\.\.currentConfig, deviceId: customerDeviceConfig\?\.deviceId \}\)/);
