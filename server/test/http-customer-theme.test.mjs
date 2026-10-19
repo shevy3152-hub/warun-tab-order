@@ -314,9 +314,11 @@ test('customer theme config persists production metadata, exposes only safe plac
     assert.equal(adminInitial.statusCode, 200);
     assert.equal(adminInitial.json.theme, 'standard');
     assert.equal(adminInitial.json.version, 0);
-    assert.deepEqual(Object.keys(adminInitial.json.themes).sort(), ['autumn-leaves', 'camellia', 'japanese-halloween', 'moon-susuki', 'standard']);
+    assert.deepEqual(Object.keys(adminInitial.json.themes).sort(), ['autumn-leaves', 'camellia', 'christmas', 'japanese-halloween', 'moon-susuki', 'standard']);
     assert.match(adminInitial.json.themes.camellia.notes, /426×1587/);
     assert.match(adminInitial.json.themes.camellia.prompt, /文字.*ロゴ/);
+    assert.match(adminInitial.json.themes.christmas.prompt, /Merry Christmas/);
+    assert.match(adminInitial.json.themes.christmas.notes, /816×1968/);
 
     const customerInitial = await request({ port, token: CUSTOMER_TOKEN, path: '/v1/customer/theme-config' });
     assert.equal(customerInitial.statusCode, 200);
@@ -417,6 +419,23 @@ test('customer theme config persists production metadata, exposes only safe plac
     assert.equal(seasonalTheme.statusCode, 200);
     assert.equal(seasonalTheme.json.theme, 'autumn-leaves');
     assert.equal((await request({ port, token: CUSTOMER_TOKEN, path: '/v1/customer/theme-config' })).json.theme, 'autumn-leaves');
+    const christmasVariant = { ...draft.christmas, positionX: 0.35, positionY: 0.7, zoom: 1.25 };
+    draft.christmas = christmasVariant;
+    const christmasTheme = await request({
+      port,
+      token: ADMIN_TOKEN,
+      method: 'PUT',
+      path: '/v1/admin/customer-theme-config',
+      body: { expectedVersion: 2, theme: 'christmas', themes: draft },
+    });
+    assert.equal(christmasTheme.statusCode, 200);
+    assert.equal(christmasTheme.json.theme, 'christmas');
+    assert.deepEqual(
+      (({ positionX, positionY, zoom }) => ({ positionX, positionY, zoom }))(christmasTheme.json.themes.christmas),
+      { positionX: 0.35, positionY: 0.7, zoom: 1.25 },
+    );
+    assert.equal((await request({ port, token: CUSTOMER_TOKEN, path: '/v1/customer/theme-config' })).json.theme, 'christmas');
+    assert.equal(database.prepare("SELECT theme_key FROM customer_theme_settings").get().theme_key, 'christmas');
     assert.equal(database.prepare('PRAGMA integrity_check').get().integrity_check, 'ok');
     assert.deepEqual(database.prepare('PRAGMA foreign_key_check').all(), []);
   });

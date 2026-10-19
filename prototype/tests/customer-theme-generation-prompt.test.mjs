@@ -33,7 +33,7 @@ test('changed position and zoom update the generated copy; hidden images do not 
   assert.notEqual(first, next);
   assert.match(next, /拡大調整/);
   assert.match(next, /X100.0%/);
-  assert.match(next, /切り抜き量：左100.0・上200.0・右103.0・下158.0画像px/);
+  assert.match(next, /切り抜き量：左100.0・上200.0・右103.0・下218.0画像px/);
   const hidden = build({ definition, variant: {}, measurement: { ...measurement, imageHidden: true } });
   assert.match(hidden, /画像が非表示/);
   assert.doesNotMatch(hidden, /左65.0/);

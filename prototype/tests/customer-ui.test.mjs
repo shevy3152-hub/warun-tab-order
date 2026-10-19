@@ -23,7 +23,7 @@ test("CustomerScreen renders menu prices but no cart or customer-history totals"
 });
 
 test("CustomerScreen exposes a normalized rail theme with camellia as the active test theme", () => {
-  assert.deepEqual(CUSTOMER_THEMES, { standard: "standard", camellia: "camellia", "autumn-leaves": "autumn-leaves", "moon-susuki": "moon-susuki", "japanese-halloween": "japanese-halloween" });
+  assert.deepEqual(CUSTOMER_THEMES, { standard: "standard", camellia: "camellia", "autumn-leaves": "autumn-leaves", "moon-susuki": "moon-susuki", "japanese-halloween": "japanese-halloween", christmas: "christmas" });
   assert.equal(CUSTOMER_TEST_THEME, "camellia");
   assert.equal(normalizeCustomerTheme("unknown"), "standard");
   assert.equal(normalizeCustomerTheme("standard"), "standard");
@@ -33,6 +33,7 @@ test("CustomerScreen exposes a normalized rail theme with camellia as the active
   assert.equal(isAvailableCustomerTheme("autumn-leaves"), true);
   assert.equal(isAvailableCustomerTheme("moon-susuki"), true);
   assert.equal(isAvailableCustomerTheme("japanese-halloween"), true);
+  assert.equal(isAvailableCustomerTheme("christmas"), true);
   assert.match(appSource, /normalizeCustomerTheme\(theme\)/);
   assert.match(customerScreen, /data-customer-theme=\{visibleCustomerTheme\}/);
 });
@@ -42,6 +43,7 @@ test("seasonal customer rail themes point to the supplied original-size PNG asse
     "autumn-leaves": [1008, 1561],
     "moon-susuki": [1007, 1561],
     "japanese-halloween": [803, 2018],
+    christmas: [816, 1968],
   };
   for (const [theme, [width, height]] of Object.entries(expected)) {
     const assetPath = CUSTOMER_THEME_DEFINITIONS[theme].assetPath;
@@ -134,7 +136,7 @@ test("customer theme placement supports cover and full-image fit with shared dra
   assert.equal(resolveCustomerThemeZoom(1.75, 0.6), 1.75);
   assert.equal(customerThemeStoredZoomForVisualZoom(0.6, 0.6), 0.5);
   assert.equal(resolveCustomerThemeZoom(customerThemeStoredZoomForVisualZoom(0.8, 0.6), 0.6), 0.8);
-  for (const theme of ["camellia", "autumn-leaves", "moon-susuki", "japanese-halloween"]) {
+  for (const theme of ["camellia", "autumn-leaves", "moon-susuki", "japanese-halloween", "christmas"]) {
     const image = CUSTOMER_THEME_DEFINITIONS[theme].image;
     const minZoom = customerThemeImageMinimumZoom(image, 328, 800);
     for (const zoom of [0.5, minZoom, 1, 1.75, 3]) {

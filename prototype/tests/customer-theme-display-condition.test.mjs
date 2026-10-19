@@ -38,7 +38,7 @@ test('blocked, pending or too small space never invents placement frames',()=>{
  const full={status:'overlap',...m.measurement.visibleImage};assert.equal(frames({...m.measurement,regions:[full]},image).title,null);
 });
 test('each theme uses real supplied dimensions and preserves custom instructions',()=>{
- for(const key of ['camellia','autumn-leaves','moon-susuki']) {
+ for(const key of ['camellia','autumn-leaves','moon-susuki','christmas']) {
   const d=definitions[key],v={...variant,theme:key,prompt:'手入力の季節指示'},m=build(v,d.image);
   const copy=prompt({definition:d,variant:v,measurement:m.measurement});
   assert.match(copy,new RegExp('横'+d.image.width+'×縦'+d.image.height));assert.match(copy,/手入力の季節指示/);assert.doesNotMatch(copy,/Halloween|かぼちゃ|猫|803×縦2018/);
