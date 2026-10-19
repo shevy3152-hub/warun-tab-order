@@ -41,7 +41,7 @@ test("seasonal customer rail themes point to the supplied original-size PNG asse
   const expected = {
     "autumn-leaves": [1008, 1561],
     "moon-susuki": [1007, 1561],
-    "japanese-halloween": [803, 1958],
+    "japanese-halloween": [803, 2018],
   };
   for (const [theme, [width, height]] of Object.entries(expected)) {
     const assetPath = CUSTOMER_THEME_DEFINITIONS[theme].assetPath;

@@ -3,13 +3,13 @@ import assert from 'node:assert/strict';
 import { CUSTOMER_THEME_DEFINITIONS as definitions } from '../../shared/customer-theme-definitions.mjs';
 import { buildCustomerThemeGenerationPrompt as build } from '../src/customer-theme-generation-prompt.js';
 
-const measurement = { imageHidden: false, zoom: 0.5234, minimumZoom: 0.5234, frameWidth: 220, frameHeight: 1025, positionX: 0.5, positionY: 0.5, categoryCount: 3, placeholderCount: 1, viewportWidth: 638, viewportHeight: 1025, dpr: 0.63, spaceX: 0, spaceY: 488.56, rangeX: 0, rangeY: 488.56, visibleImage: { status: 'overlap', left: 0, top: 0, right: 803, bottom: 1958 }, regions: [{ label: '店名', status: 'none' }, { label: 'カテゴリ', status: 'overlap', left: 65, top: 0, right: 737, bottom: 688 }, { label: '営業時間', status: 'pending' }, { label: '案内ボタン', status: 'hidden' }] };
+const measurement = { imageHidden: false, zoom: 0.5234, minimumZoom: 0.5234, frameWidth: 220, frameHeight: 1025, positionX: 0.5, positionY: 0.5, categoryCount: 3, placeholderCount: 1, viewportWidth: 638, viewportHeight: 1025, dpr: 0.63, spaceX: 0, spaceY: 488.56, rangeX: 0, rangeY: 488.56, visibleImage: { status: 'overlap', left: 0, top: 0, right: 803, bottom: 2018 }, regions: [{ label: '店名', status: 'none' }, { label: 'カテゴリ', status: 'overlap', left: 65, top: 0, right: 737, bottom: 688 }, { label: '営業時間', status: 'pending' }, { label: '案内ボタン', status: 'hidden' }] };
 const definition = definitions['japanese-halloween'];
 test('generation prompt combines instructions, measured bounds and conditions with explicit units', () => {
   const result = build({ definition, variant: { prompt: definition.prompt }, measurement });
-  assert.match(result, /PNG形式、横803×縦1958画像px/);
+  assert.match(result, /PNG形式、横803×縦2018画像px/);
   assert.match(result, /画像全体を表示/);
-  assert.match(result, /左0.0・上0.0・右803.0・下1958.0画像px/);
+  assert.match(result, /左0.0・上0.0・右803.0・下2018.0画像px/);
   assert.match(result, /カテゴリ：左65.0・上0.0・右737.0・下688.0画像px/);
   assert.match(result, /営業時間：計測待ち・座標なし/);
   assert.match(result, /案内ボタン：現在は非表示・座標なし/);

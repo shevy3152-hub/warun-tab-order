@@ -3,13 +3,13 @@ import assert from 'node:assert/strict';
 import { CUSTOMER_THEME_DEFINITIONS as definitions } from '../../shared/customer-theme-definitions.mjs';
 import { A90_THEME_CONDITION, A90_THEME_REGIONS, customerThemeConditionModel as model, customerThemePlacementFrames as frames } from '../src/customer-theme-display-condition.js';
 import { buildCustomerThemeGenerationPrompt as prompt } from '../src/customer-theme-generation-prompt.js';
-const image = { width:803, height:1958 };
+const image = { width:803, height:2018 };
 const variant = Object.freeze({ theme:'japanese-halloween',zoom:1.0315,positionX:.515,positionY:.1816,prompt:'独自の絵柄と書体',notes:'手入力メモを保持' });
 const build = (v=variant, i=image, condition=A90_THEME_CONDITION) => model({image:i,variant:v,condition});
 test('A90 CSS geometry reproduces stored measurements without applying DPR',()=>{
  const a=build(),b=build(variant,image,{...A90_THEME_CONDITION,dpr:3});
  assert.equal(a.layout.metrics.frameWidth,220);assert.equal(a.measurement.viewportWidth,1313);assert.equal(a.measurement.viewportHeight,820);
- assert.ok(Math.abs(a.layout.metrics.renderWidth-347.3077)<.001);assert.ok(Math.abs(a.layout.metrics.renderHeight-846.859)<.01);
+ assert.ok(Math.abs(a.layout.metrics.renderWidth-336.9821)<.001);assert.ok(Math.abs(a.layout.metrics.renderHeight-846.859)<.01);
  assert.deepEqual(a.layout,b.layout);assert.deepEqual(a.measurement.regions,b.measurement.regions);
  assert.match(a.measurement.limitations,/未再現/);assert.match(a.measurement.limitations,/未実測|推定/);
 });
@@ -41,7 +41,7 @@ test('each theme uses real supplied dimensions and preserves custom instructions
  for(const key of ['camellia','autumn-leaves','moon-susuki']) {
   const d=definitions[key],v={...variant,theme:key,prompt:'手入力の季節指示'},m=build(v,d.image);
   const copy=prompt({definition:d,variant:v,measurement:m.measurement});
-  assert.match(copy,new RegExp('横'+d.image.width+'×縦'+d.image.height));assert.match(copy,/手入力の季節指示/);assert.doesNotMatch(copy,/Halloween|かぼちゃ|猫|803×縦1958/);
+  assert.match(copy,new RegExp('横'+d.image.width+'×縦'+d.image.height));assert.match(copy,/手入力の季節指示/);assert.doesNotMatch(copy,/Halloween|かぼちゃ|猫|803×縦2018/);
  }
  const d={...definitions.camellia,image:{width:500,height:1700}};assert.match(prompt({definition:d,variant,measurement:build(variant,d.image).measurement}),/横500×縦1700/);
  assert.equal(model({image:null,variant}),null);

@@ -2,6 +2,11 @@ import { customerThemePlacementFrames } from './customer-theme-display-condition
 const number = (value) => Number.isFinite(value) ? value.toFixed(1) : '計測待ち';
 const coordinates = (rect) => `左${number(rect.left)}・上${number(rect.top)}・右${number(rect.right)}・下${number(rect.bottom)}画像px`;
 
+export function customerThemeSpecificGuidance(definition) {
+  if (definition?.id !== 'japanese-halloween') return '';
+  return '画像自体の上端・下端それぞれ30pxは背景のみとし、文字・主役・装飾を置かない。画面側の余白とは別です。30pxは和風ハロウィン採用画像の条件であり、全テーマ共通の保証値ではありません。';
+}
+
 export function customerThemeGenerationImageInstruction(definition, prompt = '') {
   // Preserve the stored legacy seed; only replace its wording in the generated copy.
   if (definition.id === 'japanese-halloween' && prompt.trim() === definition.prompt.trim()) {
@@ -19,6 +24,8 @@ export function buildCustomerThemeGenerationPrompt({ definition, variant, measur
     `${format}形式、横${width}×縦${height}画像px、横：縦＝${width}：${height}（約${(width / height).toFixed(3)}：1）の背景画像を生成してください。縦横比を保ち、指定寸法のキャンバス全体を制作してください。`,
     '以下の座標は元画像の左上を原点とする画像pxです。選択した表示条件の参考値です。実客席では画面サイズや表示内容により変わります。全画面サイズでの安全領域を保証するものではありません。',
   ];
+  const themeGuidance = customerThemeSpecificGuidance(definition);
+  if (themeGuidance) lines.push(`【採用画像固有の条件】${themeGuidance}`);
   if (!measurement) {
     lines.push('表示範囲・UI重なり座標・適用条件は計測待ちです。未測定の座標を推測しないでください。');
   } else if (measurement.imageHidden) {
@@ -33,7 +40,7 @@ export function buildCustomerThemeGenerationPrompt({ definition, variant, measur
     lines.push('縦位置Yは中央50%を基準に、0%で画像を下へ、100%で上へ移動します。移動範囲は端から端までの距離です。枠に画像が収まる倍率でも上下へ移動でき、余白や切り抜きが発生します。以下の画像座標は現在の位置でクリップした実表示部分です。');
     lines.push('【UIが重なる領域】以下の領域は、重要な文字や主役の配置を極力避けてください。背景模様や脇役の一部が重なることは許容します。UIの文字が読みやすいよう、該当領域は描き込みや強いコントラストを抑えてください。');
     for (const region of measurement.regions) lines.push(`${region.label}：${region.status === 'overlap' ? coordinates(region) : region.status === 'none' ? '現在の画像との交差なし' : region.status === 'hidden' ? '現在は非表示・座標なし' : '計測待ち・座標なし'}。`);
-    lines.push('カテゴリ領域にはボタン上側の余白も含まれます。案内ボタンなど現在非表示の要素について、将来の表示位置や座標を仮定しないでください。');
+    lines.push('カテゴリ領域の矩形には実際のUIがない上側の空き帯も含まれます。タイトル枠がその帯にある場合は、カテゴリ全体ではなく実際のカテゴリ行を避け、空き帯を利用する制作案です。案内ボタンなど現在非表示の要素について、将来の表示位置や座標を仮定しないでください。');
   }
   const frames = customerThemePlacementFrames(measurement, definition.image);
   lines.push('【重要要素の配置枠】以下は表示範囲の内側に余裕を取り、実測UIを避けた制作案です。枠の左上・右下は元画像px。');

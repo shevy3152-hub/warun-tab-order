@@ -46,7 +46,7 @@ import { CUSTOMER_THEME_DEFINITIONS, isAvailableCustomerTheme } from "../../shar
 import { customerThemeImageLayout, customerThemePositionAfterDrag, normalizeCustomerThemeLayout, resolveCustomerThemeZoom, MIN_CUSTOMER_THEME_ZOOM, MAX_CUSTOMER_THEME_ZOOM } from "./customer-theme-layout.js";
 import { customerThemeGuideImageCoordinates } from "./customer-theme-guide.js";
 import { A90_THEME_CONDITION, A90_THEME_REGIONS, customerThemeConditionModel, customerThemePlacementFrames } from "./customer-theme-display-condition.js";
-import { buildCustomerThemeGenerationPrompt } from "./customer-theme-generation-prompt.js";
+import { buildCustomerThemeGenerationPrompt, customerThemeSpecificGuidance } from "./customer-theme-generation-prompt.js";
 import { DEFAULT_BUSINESS_HOURS, businessHoursDisplay, businessHoursHourLabel, combineBusinessHoursTime, normalizeBusinessHours, splitBusinessHoursTime } from "./business-hours.js";
 import { DEFAULT_BUSINESS_HOURS_NOTICE, withBusinessHoursNotice } from "./business-hours-notice.js";
 import { CHECKOUT_ADJUSTMENT_TYPES, checkoutAdjustmentTotal, normalizeCheckoutAdjustments, parseFixedAdjustment } from "./checkout-adjustments.js";
@@ -3064,6 +3064,7 @@ function CustomerThemeEditor({ adminApiMode }) {
         <div><button type="button" className="button button--outline" onClick={() => void copyPrompt()} disabled={!selectedVariant.prompt}>イメージ指示だけをコピー</button>{copyMessage ? <small role="status">{copyMessage}</small> : null}</div>
         {selectedDefinition.assetPath ? <div className="customer-theme-editor__field" aria-label="制作メモの重なり回避補足">
           <strong>重なり回避</strong>
+          {customerThemeSpecificGuidance(selectedDefinition) ? <small>{customerThemeSpecificGuidance(selectedDefinition)}</small> : null}
           {previewTheme === "japanese-halloween" ? <small>20261012新画像候補のA90実例：保存倍率1.0315／X51.5%／Y18.16%。主役周囲の余裕に改善余地があります。共通初期値や新しい画像の保証にはしません。</small> : null}
           <p>重要な文字・主役は、破線で示す店名・カテゴリ・営業時間などを避け、表示範囲の端から余裕を取ってください。カテゴリ枠には上側の余白も含まれます。枠側の余白は画像の一部ではありません。</p>
         </div> : null}
