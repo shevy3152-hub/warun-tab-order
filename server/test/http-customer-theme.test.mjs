@@ -318,7 +318,7 @@ test('customer theme config persists production metadata, exposes only safe plac
     assert.match(adminInitial.json.themes.camellia.notes, /426×1587/);
     assert.match(adminInitial.json.themes.camellia.prompt, /文字.*ロゴ/);
     assert.match(adminInitial.json.themes.christmas.prompt, /Merry Christmas/);
-    assert.match(adminInitial.json.themes.christmas.notes, /緑のテクスチャ背景/);
+    assert.match(adminInitial.json.themes.christmas.notes, /Merry Christmas/);
     assert.match(adminInitial.json.themes.christmas.notes, /816×1968/);
 
     const customerInitial = await request({ port, token: CUSTOMER_TOKEN, path: '/v1/customer/theme-config' });
