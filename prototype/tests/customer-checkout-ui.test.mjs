@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { beginCheckoutRead } from "../src/customer-checkout-state.js";
+import { beginCheckoutRead, isCheckoutModalForCurrentVisit, isPassiveMissingCheckoutSession } from "../src/customer-checkout-state.js";
 
 const source = await readFile(new URL("../src/App.jsx", import.meta.url), "utf8");
 const orderOutbox = await readFile(new URL("../src/order-outbox.js", import.meta.url), "utf8");
@@ -75,7 +75,8 @@ test("checkout modal state is scoped to the current visit and ignores late prior
   assert.match(source, /setCheckoutState\(\{ loading: false, error: false, errorDetails: null, checkout: nextCheckout, visitContextId: checkoutVisitContextId, loaded: true \}\)/);
   assert.match(source, /\[apiMode, modal, orderClient, checkoutRefreshKey, checkoutVisitContextId\]/);
   assert.match(source, /checkoutVisitContextRef\.current !== requestVisitContextId\) return/);
-  assert.match(source, /modal === "checkout" && \(!apiMode \|\| checkoutState\.visitContextId === checkoutVisitContextId\)/);
+  assert.match(source, /isCheckoutModalForCurrentVisit\(\{ modal, openedForVisitContextId: checkoutModalVisitContextRef\.current, currentVisitContextId: checkoutVisitContextId \}\)/);
+  assert.match(source, /\(!apiMode \|\| checkoutState\.visitContextId === checkoutVisitContextId\)/);
   assert.match(source, /setModal\(\(current\) => current === "checkout" \? null : current\)/);
   const invalidation = source.slice(source.indexOf('if (resource === "deviceConfig")'), source.indexOf('if (resource === "orders")'));
   assert.match(invalidation, /checkoutReadGenerationRef\.current \+= 1;[\s\S]*refreshVisitState\(\)\.then/);
@@ -111,4 +112,23 @@ test("same-visit checkout refetch keeps the rendered state stable while the GET 
   const newVisitRead = beginCheckoutRead(waiting, "visit-b");
   assert.equal(newVisitRead.loading, true);
   assert.equal(newVisitRead.visitContextId, "visit-b");
+});
+
+test("passive missing-session GET clears stale checkout UI but explicit checkout keeps its error", () => {
+  const missingSession = { status: 404, code: "CHECKOUT_SESSION_NOT_FOUND" };
+  assert.equal(isPassiveMissingCheckoutSession(missingSession), true);
+  assert.equal(isPassiveMissingCheckoutSession(missingSession, { explicitlyOpened: true }), false);
+  assert.equal(isPassiveMissingCheckoutSession({ status: 404, code: "MENU_NOT_FOUND" }), false);
+  assert.equal(isPassiveMissingCheckoutSession({ status: 500, code: "CHECKOUT_SESSION_NOT_FOUND" }), false);
+  assert.equal(isCheckoutModalForCurrentVisit({ modal: "checkout", openedForVisitContextId: "visit-old", currentVisitContextId: "visit-new" }), false);
+  assert.equal(isCheckoutModalForCurrentVisit({ modal: "checkout", openedForVisitContextId: "visit-new", currentVisitContextId: "visit-new" }), true);
+
+  const reproducedOldState = { modal: "checkout", checkoutStateVisitContextId: "visit-new", openedForVisitContextId: "visit-old", currentVisitContextId: "visit-new" };
+  assert.equal(reproducedOldState.checkoutStateVisitContextId === reproducedOldState.currentVisitContextId, true, "the prior render guard admitted a stale modal after its background 404 was stamped with the new context");
+  assert.equal(isCheckoutModalForCurrentVisit({ modal: reproducedOldState.modal, openedForVisitContextId: reproducedOldState.openedForVisitContextId, currentVisitContextId: reproducedOldState.currentVisitContextId }), false);
+
+  assert.match(source, /checkoutModalVisitContextRef = useRef\(checkoutVisitContextId\)/);
+  assert.match(source, /checkoutExplicitReadRef\.current = true/);
+  assert.match(source, /if \(isPassiveMissingCheckoutSession\(error, \{ explicitlyOpened \}\)\)[\s\S]*setModal\(\(current\) => current === "checkout" \? null : current\)/);
+  assert.match(source, /isCheckoutModalForCurrentVisit\(\{ modal, openedForVisitContextId: checkoutModalVisitContextRef\.current, currentVisitContextId: checkoutVisitContextId \}\)/);
 });
