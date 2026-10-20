@@ -126,6 +126,39 @@ const FORMATS = new Map([
   ['image/webp', { extension: 'webp', matches: isWebp }],
 ]);
 
+export function readImageDimensions(bytes, mimeType) {
+  if (!(bytes instanceof Uint8Array)) return null;
+  if (mimeType === 'image/png' && bytes.length >= 24) return { width: bytes.readUInt32BE(16), height: bytes.readUInt32BE(20) };
+  if (mimeType === 'image/jpeg') {
+    let offset = 2;
+    while (offset + 4 <= bytes.length && bytes[offset] === 0xff) {
+      while (bytes[offset] === 0xff) offset += 1;
+      const marker = bytes[offset++];
+      if (marker === 0xda || marker === 0xd9) break;
+      const length = bytes.readUInt16BE(offset);
+      if (length < 2 || offset + length > bytes.length) return null;
+      if ([0xc0,0xc1,0xc2,0xc3,0xc5,0xc6,0xc7,0xc9,0xca,0xcb,0xcd,0xce,0xcf].includes(marker) && length >= 7) {
+        return { height: bytes.readUInt16BE(offset + 3), width: bytes.readUInt16BE(offset + 5) };
+      }
+      offset += length;
+    }
+  }
+  if (mimeType === 'image/webp' && bytes.length >= 25) {
+    const chunk = bytes.toString('ascii', 12, 16);
+    const data = 20;
+    if (chunk === 'VP8X' && bytes.length >= 30) return {
+      width: 1 + bytes[data + 4] + (bytes[data + 5] << 8) + (bytes[data + 6] << 16),
+      height: 1 + bytes[data + 7] + (bytes[data + 8] << 8) + (bytes[data + 9] << 16),
+    };
+    if (chunk === 'VP8 ' && bytes.length >= 30) return { width: bytes.readUInt16LE(data + 6) & 0x3fff, height: bytes.readUInt16LE(data + 8) & 0x3fff };
+    if (chunk === 'VP8L' && bytes.length >= 25 && bytes[data] === 0x2f) {
+      const b1=bytes[data+1],b2=bytes[data+2],b3=bytes[data+3],b4=bytes[data+4];
+      return { width: 1 + ((b2 & 0x3f) << 8) + b1, height: 1 + ((b4 & 0x0f) << 10) + (b3 << 2) + ((b2 & 0xc0) >> 6) };
+    }
+  }
+  return null;
+}
+
 export class ProductImageError extends Error {
   constructor(statusCode, code, message) {
     super(message);

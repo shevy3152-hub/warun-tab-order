@@ -123,7 +123,7 @@ test("run-server starts without product image storage, rejects uploads, and rele
   const webPort = 15173;
   const child = spawn(process.execPath, ["src/run-server.mjs"], {
     cwd: serverRoot,
-    env: { ...process.env, WARUN_ENV: "production", WARUN_DB_PATH: databasePath, WARUN_WEB_ROOT: DEFAULT_WEB_ROOT, WARUN_PRODUCT_IMAGE_STORAGE_PATH: "", WARUN_ADMIN_API_TOKEN: adminToken, WARUN_SERVER_PORT: String(apiPort), WARUN_WEB_PORT: String(webPort) },
+    env: { ...process.env, WARUN_ENV: "production", WARUN_DB_PATH: databasePath, WARUN_WEB_ROOT: DEFAULT_WEB_ROOT, WARUN_PRODUCT_IMAGE_STORAGE_PATH: "", WARUN_CUSTOMER_THEME_IMAGE_STORAGE_PATH: join(root, "customer-theme-images"), WARUN_ADMIN_API_TOKEN: adminToken, WARUN_SERVER_PORT: String(apiPort), WARUN_WEB_PORT: String(webPort) },
     stdio: ["ignore", "pipe", "pipe"],
   });
   let output = "";
@@ -166,7 +166,10 @@ test("run-server starts without product image storage, rejects uploads, and rele
     await assert.rejects(() => fetch(`http://127.0.0.1:${webPort}/`));
     await assert.rejects(() => fetch(`http://127.0.0.1:${apiPort}/v1/health`));
   } finally {
-    if (child.exitCode === null) child.kill();
+    if (child.exitCode === null) {
+      child.kill();
+      await Promise.race([once(child, "exit"), new Promise((resolveStop) => setTimeout(resolveStop, 3000))]);
+    }
     await rm(root, { recursive: true, force: true });
   }
 });

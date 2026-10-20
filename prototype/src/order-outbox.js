@@ -1,4 +1,4 @@
-import { CUSTOMER_THEME_DEFINITIONS } from "../../shared/customer-theme-definitions.mjs";
+import { CUSTOMER_THEME_DEFINITIONS, registerCustomerThemeDefinitions } from "../../shared/customer-theme-definitions.mjs";
 
 export const OUTBOX_DB_NAME = "warun-customer-order-outbox";
 export const OUTBOX_DB_VERSION = 1;
@@ -450,6 +450,7 @@ export async function fetchCustomerThemeConfig({ config, fetchImpl = globalThis.
   });
   if (response.status !== 200) throw new Error("Customer theme config request failed.");
   const body = await response.json();
+  registerCustomerThemeDefinitions(body?.definitions ?? (body?.theme && body?.definition ? { [body.theme]: body.definition } : undefined));
   if (!body || !Object.hasOwn(CUSTOMER_THEME_DEFINITIONS, body.theme)
     || typeof body.positionX !== "number" || !Number.isFinite(body.positionX) || body.positionX < 0 || body.positionX > 1
     || typeof body.positionY !== "number" || !Number.isFinite(body.positionY) || body.positionY < 0 || body.positionY > 1

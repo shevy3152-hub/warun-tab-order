@@ -88,7 +88,7 @@ import {
   readOrderJsonBody,
   readJsonBody,
 } from './json-body.mjs';
-import { ProductImageError, readProductImageRequest } from '../product-images/product-image-store.mjs';
+import { ProductImageError, readImageDimensions, readProductImageRequest } from '../product-images/product-image-store.mjs';
 
 const ROUTE_METHODS = new Map([
   ['/v1/health', 'GET'],
@@ -141,6 +141,7 @@ const ROUTE_METHODS = new Map([
   ['/v1/admin/business-hours', new Set(['GET', 'PUT'])],
   ['/v1/admin/customer-theme', new Set(['GET', 'PUT'])],
   ['/v1/admin/customer-theme-config', new Set(['GET', 'PUT'])],
+  ['/v1/admin/customer-theme-images', 'POST'],
   ['/v1/admin/customer-order-start-notice', new Set(['GET', 'PUT'])],
   ['/v1/admin/ride-guidance', 'GET'],
   ['/v1/admin/ride-guidance/pickup', 'PUT'],
@@ -934,6 +935,8 @@ function createConfiguredHttpServer({
   sessionMenuAccess = undefined,
   productImageStore = undefined,
   productImageUploadsEnabled = true,
+  customerThemeImageStore = productImageStore,
+  customerThemeImageUploadsEnabled = true,
 } = {}, { integrated }) {
   if (
     !authenticator
@@ -1004,6 +1007,8 @@ function createConfiguredHttpServer({
       }
       const productImageMatch = target.path.match(/^\/v1\/product-images\/([0-9a-f-]{36}\.(?:png|jpg|webp))$/);
       if (!configuredMethods && productImageMatch) configuredMethods = 'GET';
+      const customerThemeImageMatch = target.path.match(/^\/v1\/customer-theme-images\/([0-9a-f-]{36}\.(?:png|jpg|webp))$/);
+      if (!configuredMethods && customerThemeImageMatch) configuredMethods = 'GET';
       if (!configuredMethods) {
         drainRequest(request);
         throw createHttpError(HTTP_ERROR_CODES.NOT_FOUND);
@@ -1050,6 +1055,15 @@ function createConfiguredHttpServer({
           'Content-Type': image.contentType,
           'X-Content-Type-Options': 'nosniff',
         });
+        response.end(image.bytes);
+        return;
+      }
+
+      if (customerThemeImageMatch) {
+        drainRequest(request);
+        const image = await requireService(customerThemeImageStore, 'read').read(customerThemeImageMatch[1]);
+        if (!image) throw createHttpError(HTTP_ERROR_CODES.NOT_FOUND);
+        response.writeHead(200, { 'Cache-Control': 'public, max-age=31536000, immutable', 'Content-Length': image.bytes.length, 'Content-Type': image.contentType, 'X-Content-Type-Options': 'nosniff' });
         response.end(image.bytes);
         return;
       }
@@ -1257,6 +1271,32 @@ function createConfiguredHttpServer({
           body: mapCustomerThemeConfigResponse(result, { includeVersion: true }),
           requestId,
         });
+        return;
+      }
+
+      if (target.path === '/v1/admin/customer-theme-images') {
+        authorizeDeviceRole(principal, ['admin']);
+        try {
+          if (!customerThemeImageUploadsEnabled) {
+            drainRequest(request);
+            throw new ProductImageError(503, 'IMAGE_STORAGE_NOT_CONFIGURED', '客席レール画像の保存先が設定されていません。');
+          }
+          const label = target.parsed.searchParams.get('label');
+          const themeKey = target.parsed.searchParams.get('themeKey') || undefined;
+          const { bytes, format } = await readProductImageRequest(request);
+          const contentType = String(request.headers['content-type'] || '').split(';')[0].trim().toLowerCase();
+          const image = readImageDimensions(bytes, contentType);
+          if (!image || image.width < 1 || image.height < 1 || image.width > 12000 || image.height > 24000 || image.width * image.height > 100_000_000) {
+            throw new ProductImageError(400, 'IMAGE_DIMENSIONS_INVALID', '画像の寸法を取得できないか、大きすぎます。');
+          }
+          const saved = await requireService(customerThemeImageStore, 'save').save(bytes, format);
+          const registration = requireService(customerTheme, 'registerThemeAsset').registerThemeAsset(principal, { themeKey, label, filename: saved.filename, width: image.width, height: image.height });
+          await notifyCommittedSafely(sseHub, registration);
+          writeJsonResponse(response, { statusCode: 201, body: { themeKey: registration.themeKey, definition: registration.definition }, requestId });
+        } catch (error) {
+          if (!(error instanceof ProductImageError)) throw error;
+          writeJsonResponse(response, { statusCode: error.statusCode, body: { error: { code: error.code, message: error.message, requestId } }, requestId });
+        }
         return;
       }
 

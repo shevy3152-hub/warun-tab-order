@@ -1,4 +1,4 @@
-﻿[CmdletBinding()]
+[CmdletBinding()]
 param(
   [string]$ProjectRoot = '',
   [switch]$NoBrowser
@@ -6,7 +6,7 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
-$TargetSchemaVersion = 23
+$TargetSchemaVersion = 24
 
 $ProjectRoot = if ([string]::IsNullOrWhiteSpace($ProjectRoot)) {
   Split-Path -Parent $PSScriptRoot

@@ -5,7 +5,7 @@ import { DatabaseSync } from 'node:sqlite';
 
 export const LEGACY_SCHEMA_VERSION = 1;
 export const SESSION_SCHEMA_VERSION = 2;
-export const SCHEMA_VERSION = 23;
+export const SCHEMA_VERSION = 24;
 
 export const REQUIRED_TABLES = Object.freeze([
   'system_state',
@@ -171,6 +171,7 @@ export const DEFAULT_V22_MIGRATION_PATH = resolve(
 export const DEFAULT_V23_MIGRATION_PATH = resolve(
   moduleDirectory, '..', '..', '..', 'docs', 'schema-v23-migration.sql',
 );
+export const DEFAULT_V24_MIGRATION_PATH = resolve(moduleDirectory, '..', '..', '..', 'docs', 'schema-v24-migration.sql');
 
 export class DatabaseInitializationError extends Error {
   constructor(code, message, options = undefined) {
@@ -843,6 +844,7 @@ function assertRequiredNames(actualNames, requiredNames, objectType) {
 
 function validateSchema(database) {
   assertRequiredNames(schemaObjectNames(database, 'table'), REQUIRED_TABLES, 'tables');
+  assertRequiredNames(schemaObjectNames(database, 'table'), ['customer_theme_assets'], 'tables');
   assertRequiredNames(schemaObjectNames(database, 'table'), ['customer_theme_settings'], 'tables');
   assertRequiredNames(schemaObjectNames(database, 'table'), ['customer_theme_variants'], 'tables');
   assertRequiredNames(schemaObjectNames(database, 'table'), ['customer_order_start_notice_settings'], 'tables');
@@ -1014,6 +1016,7 @@ export function initializeDatabase({
   v21MigrationPath = DEFAULT_V21_MIGRATION_PATH,
   v22MigrationPath = DEFAULT_V22_MIGRATION_PATH,
   v23MigrationPath = DEFAULT_V23_MIGRATION_PATH,
+  v24MigrationPath = DEFAULT_V24_MIGRATION_PATH,
 } = {}) {
   const resolvedDatabasePath = resolveFilePath(databasePath, 'databasePath');
   const resolvedSchemaPath = resolveFilePath(schemaPath, 'schemaPath');
@@ -1038,6 +1041,7 @@ export function initializeDatabase({
   const resolvedV21MigrationPath = resolveFilePath(v21MigrationPath, 'v21MigrationPath');
   const resolvedV22MigrationPath = resolveFilePath(v22MigrationPath, 'v22MigrationPath');
   const resolvedV23MigrationPath = resolveFilePath(v23MigrationPath, 'v23MigrationPath');
+  const resolvedV24MigrationPath = resolveFilePath(v24MigrationPath, 'v24MigrationPath');
 
   mkdirSync(dirname(resolvedDatabasePath), { recursive: true });
 
@@ -1165,6 +1169,12 @@ export function initializeDatabase({
     }
     if (currentVersion === 22) {
       migrateSchemaV22ToV23(database, resolvedV23MigrationPath);
+      enableWriteAheadLogging(database);
+      currentVersion = 23;
+    }
+    if (currentVersion === 23) {
+      try { database.exec(readFileSync(resolvedV24MigrationPath, 'utf8')); }
+      catch (error) { try { if (database.isTransaction) database.exec('ROLLBACK;'); } catch {} throw new DatabaseInitializationError('MIGRATION_FAILED', 'The customer theme asset migration failed.', { cause: error }); }
       enableWriteAheadLogging(database);
       currentVersion = SCHEMA_VERSION;
     }

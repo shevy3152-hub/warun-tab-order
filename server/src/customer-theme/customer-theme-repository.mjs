@@ -20,6 +20,8 @@ const DEFAULT_VARIANTS = Object.freeze(Object.fromEntries(Object.entries(CUSTOME
   zoom: DEFAULT_ZOOM,
 })])));
 
+const THEME_KEY_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
+
 function repositoryError(code, message, options = undefined) {
   return new CustomerThemeRepositoryError(code, message, options);
 }
@@ -98,18 +100,18 @@ function normalizeVariant(theme, value) {
   };
 }
 
-function normalizeThemeVariants(request) {
+function normalizeThemeVariants(request, themeKeys) {
   if (request.themes === null || typeof request.themes !== 'object' || Array.isArray(request.themes)) {
     throw repositoryError(CUSTOMER_THEME_ERROR_CODES.INVALID_WRITE_REQUEST, 'themes must be an object.');
   }
-  rejectUnknownKeys(request.themes, [...CUSTOMER_THEME_VALUES], 'themes');
-  return Object.fromEntries([...CUSTOMER_THEME_VALUES].map((theme) => [
+  rejectUnknownKeys(request.themes, themeKeys, 'themes');
+  return Object.fromEntries(themeKeys.map((theme) => [
     theme,
     normalizeVariant(theme, request.themes[theme]),
   ]));
 }
 
-export function normalizeCustomerThemeWriteRequest(request, { includeThemes = false } = {}) {
+export function normalizeCustomerThemeWriteRequest(request, { includeThemes = false, allowedThemes = [...CUSTOMER_THEME_VALUES] } = {}) {
   if (request === null || typeof request !== 'object' || Array.isArray(request)) {
     throw repositoryError(CUSTOMER_THEME_ERROR_CODES.INVALID_WRITE_REQUEST, 'Customer theme request must be an object.');
   }
@@ -119,7 +121,7 @@ export function normalizeCustomerThemeWriteRequest(request, { includeThemes = fa
     'Customer theme request',
   );
   const expectedVersion = requireExpectedVersion(request);
-  if (!CUSTOMER_THEME_VALUES.has(request.theme)) {
+  if (!allowedThemes.includes(request.theme)) {
     throw repositoryError(CUSTOMER_THEME_ERROR_CODES.INVALID_WRITE_REQUEST, 'theme must be a supported customer theme.');
   }
   return { expectedVersion, theme: request.theme };
@@ -133,10 +135,10 @@ function mapSettings(row) {
   };
 }
 
-function mapFullConfig(settings, rows) {
+function mapFullConfig(settings, rows, themeKeys = [...CUSTOMER_THEME_VALUES]) {
   return {
     ...settings,
-    themes: Object.fromEntries([...CUSTOMER_THEME_VALUES].map((theme) => [theme, mapVariant(theme, rows.get(theme))])),
+    themes: Object.fromEntries(themeKeys.map((theme) => [theme, mapVariant(theme, rows.get(theme))])),
   };
 }
 
@@ -168,6 +170,80 @@ export function createCustomerThemeRepository({ database, now = Date.now } = {})
     FROM customer_theme_variants
     ORDER BY theme_key
   `).all();
+  const findAssetRows = () => database.prepare('SELECT theme_key, label, asset_filename, image_width, image_height FROM customer_theme_assets ORDER BY theme_key').all();
+
+  function getDefinitions() {
+    const definitions = Object.fromEntries(Object.entries(CUSTOMER_THEME_DEFINITIONS));
+    for (const row of findAssetRows()) {
+      if (!THEME_KEY_PATTERN.test(row.theme_key)) continue;
+      CUSTOMER_THEME_VALUES.add(row.theme_key);
+      const base = definitions[row.theme_key] ?? {};
+      definitions[row.theme_key] = {
+        ...base,
+        id: row.theme_key,
+        label: row.label,
+        assetPath: `/v1/customer-theme-images/${row.asset_filename}`,
+        image: { width: row.image_width, height: row.image_height },
+        available: true,
+      };
+      CUSTOMER_THEME_DEFINITIONS[row.theme_key] = Object.freeze({ ...definitions[row.theme_key], image: Object.freeze({ ...definitions[row.theme_key].image }) });
+    }
+    return definitions;
+  }
+
+  function normalizeThemeLabel(value) {
+    if (typeof value !== 'string' || [...value.trim()].length < 1 || [...value.trim()].length > 80) {
+      throw repositoryError(CUSTOMER_THEME_ERROR_CODES.INVALID_WRITE_REQUEST, 'theme name must be between 1 and 80 characters.');
+    }
+    return value.trim();
+  }
+
+  function registerThemeAsset(principal, { themeKey, label, filename, width, height, nowMs = now() } = {}) {
+    ensureOpen();
+    try { authorizeDeviceRole(principal, ['admin']); }
+    catch (error) { throw repositoryError(CUSTOMER_THEME_ERROR_CODES.DATABASE_FAILURE, 'An authenticated admin device is required.', { cause: error }); }
+    const normalizedLabel = normalizeThemeLabel(label);
+    if (themeKey !== undefined && (!THEME_KEY_PATTERN.test(themeKey) || !CUSTOMER_THEME_VALUES.has(themeKey))) {
+      throw repositoryError(CUSTOMER_THEME_ERROR_CODES.INVALID_WRITE_REQUEST, 'theme key is invalid.');
+    }
+    if (typeof filename !== 'string' || !/^[0-9a-f-]{36}\.(png|jpg|webp)$/.test(filename)
+      || !Number.isSafeInteger(width) || width < 1 || width > 12000
+      || !Number.isSafeInteger(height) || height < 1 || height > 24000
+      || width * height > 100_000_000 || !Number.isSafeInteger(nowMs) || nowMs < 0) {
+      throw repositoryError(CUSTOMER_THEME_ERROR_CODES.INVALID_WRITE_REQUEST, 'image metadata is invalid.');
+    }
+    let key = themeKey;
+    if (!key) {
+      key = normalizedLabel.toLocaleLowerCase('en').normalize('NFKD').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 48);
+      if (!key) key = 'theme';
+      const baseKey = key;
+      let suffix = 2;
+      while (CUSTOMER_THEME_VALUES.has(key) || database.prepare('SELECT 1 FROM customer_theme_assets WHERE theme_key = ?').get(key)) key = `${baseKey.slice(0, 55)}-${suffix++}`;
+    }
+    let transactionOpen = false;
+    try {
+      database.exec('BEGIN IMMEDIATE;');
+      transactionOpen = true;
+      const existing = database.prepare('SELECT created_at_ms FROM customer_theme_assets WHERE theme_key = ?').get(key);
+      database.prepare(`INSERT INTO customer_theme_assets (theme_key,label,asset_filename,image_width,image_height,created_at_ms,updated_at_ms)
+        VALUES (?,?,?,?,?,?,?) ON CONFLICT(theme_key) DO UPDATE SET label=excluded.label, asset_filename=excluded.asset_filename,
+        image_width=excluded.image_width,image_height=excluded.image_height,updated_at_ms=excluded.updated_at_ms`)
+        .run(key, normalizedLabel, filename, width, height, existing?.created_at_ms ?? nowMs, nowMs);
+      if (!existing) {
+        const definition = CUSTOMER_THEME_DEFINITIONS[key] ?? {};
+        const fallback = { prompt: definition.prompt ?? '', notes: definition.notes ?? '', positionX: definition.initialPositionX ?? 0.5, positionY: 0.5, zoom: 1 };
+        database.prepare(`INSERT OR IGNORE INTO customer_theme_variants (theme_key,prompt_text,production_notes,position_x,position_y,zoom,created_at_ms,updated_at_ms)
+          VALUES (?,?,?,?,?,?,?,?)`).run(key, fallback.prompt, fallback.notes, fallback.positionX, fallback.positionY, fallback.zoom, nowMs, nowMs);
+      }
+      database.exec('COMMIT;');
+      transactionOpen = false;
+    } catch (error) {
+      if (transactionOpen) { try { database.exec('ROLLBACK;'); } catch {} }
+      throw repositoryError(CUSTOMER_THEME_ERROR_CODES.DATABASE_FAILURE, 'The customer-theme image registration failed.', { cause: error });
+    }
+    CUSTOMER_THEME_VALUES.add(key);
+    return { themeKey: key, definition: getDefinitions()[key], sseNotification: themeSseNotification(database, nowMs) };
+  }
 
   const ensureOpen = () => {
     if (closed) throw repositoryError(CUSTOMER_THEME_ERROR_CODES.DATABASE_FAILURE, 'The customer-theme repository is closed.');
@@ -176,6 +252,7 @@ export function createCustomerThemeRepository({ database, now = Date.now } = {})
   function getCustomerTheme() {
     ensureOpen();
     try {
+      getDefinitions();
       return mapSettings(findRow());
     } catch (error) {
       throw repositoryError(CUSTOMER_THEME_ERROR_CODES.DATABASE_FAILURE, 'The customer-theme read failed.', { cause: error });
@@ -189,9 +266,11 @@ export function createCustomerThemeRepository({ database, now = Date.now } = {})
   function getCustomerThemeConfig() {
     ensureOpen();
     try {
+      const definitions = getDefinitions();
       const settings = mapSettings(findRow());
       const rows = new Map(findVariantRows().map((row) => [row.theme_key, row]));
-      return mapFullConfig(settings, rows);
+      const themeKeys = Object.keys(definitions);
+      return { ...mapFullConfig(settings, rows, themeKeys), definitions };
     } catch (error) {
       if (error instanceof CustomerThemeRepositoryError) throw error;
       throw repositoryError(CUSTOMER_THEME_ERROR_CODES.DATABASE_FAILURE, 'The customer-theme config read failed.', { cause: error });
@@ -203,6 +282,7 @@ export function createCustomerThemeRepository({ database, now = Date.now } = {})
     const variant = config.themes[config.theme] ?? DEFAULT_VARIANTS.standard;
     return {
       theme: config.theme,
+      definitions: config.definitions,
       positionX: variant.positionX,
       positionY: variant.positionY,
       zoom: variant.zoom,
@@ -273,8 +353,10 @@ export function createCustomerThemeRepository({ database, now = Date.now } = {})
 
   function writeCustomerThemeConfig(principal, request) {
     ensureOpen();
-    const normalizedRequest = normalizeCustomerThemeWriteRequest(request, { includeThemes: true });
-    const themes = normalizeThemeVariants(request);
+    const definitions = getDefinitions();
+    const themeKeys = Object.keys(definitions);
+    const normalizedRequest = normalizeCustomerThemeWriteRequest(request, { includeThemes: true, allowedThemes: themeKeys });
+    const themes = normalizeThemeVariants(request, themeKeys);
     try {
       authorizeDeviceRole(principal, ['admin']);
     } catch (error) {
@@ -325,7 +407,7 @@ export function createCustomerThemeRepository({ database, now = Date.now } = {})
           zoom = excluded.zoom,
           updated_at_ms = excluded.updated_at_ms
       `);
-      for (const theme of Object.values(CUSTOMER_THEME_KEYS)) {
+      for (const theme of themeKeys) {
         const variant = themes[theme];
         upsertVariant.run(theme, variant.prompt, variant.notes, variant.positionX, variant.positionY, variant.zoom, timestamp, timestamp);
       }
@@ -341,7 +423,8 @@ export function createCustomerThemeRepository({ database, now = Date.now } = {})
           position_x: value.positionX,
           position_y: value.positionY,
           zoom: value.zoom,
-        }]))),
+        }])), themeKeys),
+        definitions,
         idempotencyResult: 'created',
         sseNotification,
       };
@@ -358,6 +441,8 @@ export function createCustomerThemeRepository({ database, now = Date.now } = {})
     getCustomerTheme,
     getPublicCustomerTheme,
     getCustomerThemeConfig,
+    getDefinitions,
+    registerThemeAsset,
     getPublicCustomerThemeConfig,
     writeCustomerTheme,
     writeCustomerThemeConfig,

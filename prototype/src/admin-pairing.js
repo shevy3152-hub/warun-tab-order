@@ -1,4 +1,4 @@
-import { CUSTOMER_THEME_DEFINITIONS } from "../../shared/customer-theme-definitions.mjs";
+import { CUSTOMER_THEME_DEFINITIONS, registerCustomerThemeDefinitions } from "../../shared/customer-theme-definitions.mjs";
 import { normalizeBusinessHours } from "./business-hours.js";
 import { withBusinessHoursNotice } from "./business-hours-notice.js";
 
@@ -355,7 +355,8 @@ function normalizeCustomerThemeVariant(value) {
 }
 
 export function normalizeAdminCustomerThemeConfig(body) {
-  const themeKeys = Object.keys(CUSTOMER_THEME_DEFINITIONS);
+  registerCustomerThemeDefinitions(body?.definitions);
+  const themeKeys = Object.keys(body?.definitions ?? CUSTOMER_THEME_DEFINITIONS);
   if (!body || !themeKeys.includes(body.theme)
     || !Number.isSafeInteger(body.version) || body.version < 0
     || !Number.isSafeInteger(body.updatedAtMs) || body.updatedAtMs < 0
@@ -366,8 +367,35 @@ export function normalizeAdminCustomerThemeConfig(body) {
     theme: body.theme,
     version: body.version,
     updatedAtMs: body.updatedAtMs,
+    definitions: Object.fromEntries(themeKeys.map((key) => [key, body.definitions?.[key] ?? CUSTOMER_THEME_DEFINITIONS[key]])),
     themes: Object.fromEntries(themeKeys.map((theme) => [theme, normalizeCustomerThemeVariant(body.themes[theme])])),
   };
+}
+
+export async function uploadAdminCustomerThemeImage({ env = globalThis, file, themeKey, label, fetchImpl = env.fetch } = {}) {
+  const { token, base, fetchImpl: request } = assertAdminTransport({ env, fetchImpl });
+  const params = new URLSearchParams({ label: String(label ?? "") });
+  if (themeKey) params.set("themeKey", themeKey);
+  let response;
+  try {
+    response = await request(`${base}/admin/customer-theme-images?${params}`, {
+      method: "POST",
+      headers: { Accept: "application/json", "Content-Type": file?.type || "application/octet-stream", Authorization: `Bearer ${token}` },
+      body: file,
+    });
+  } catch {
+    throw new AdminPairingError("客席レール画像をアップロードできません。", { status: 503, code: "API_UNAVAILABLE" });
+  }
+  if (!response.ok) await responseError(response, "客席レール画像をアップロードできません。", "CUSTOMER_THEME_UPLOAD_FAILED");
+  try {
+    const body = await response.json();
+    if (typeof body?.themeKey !== "string" || typeof body?.definition?.assetPath !== "string"
+      || !Number.isSafeInteger(body.definition.image?.width) || !Number.isSafeInteger(body.definition.image?.height)) throw new Error("invalid response");
+    registerCustomerThemeDefinitions({ [body.themeKey]: body.definition });
+    return body;
+  } catch {
+    throw new AdminPairingError("客席レール画像の登録応答が不正です。", { status: 503, code: "API_UNAVAILABLE" });
+  }
 }
 
 export async function fetchAdminCustomerThemeConfig({ env = globalThis, fetchImpl = env.fetch } = {}) {

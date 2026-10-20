@@ -1,4 +1,4 @@
-﻿[CmdletBinding()]
+[CmdletBinding()]
 param(
   [ValidateSet('start', 'stop', 'status')]
   [string]$Action = 'start',
@@ -18,7 +18,7 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
-$TargetSchemaVersion = 23
+$TargetSchemaVersion = 24
 
 $ServerRoot = $PSScriptRoot
 $ProjectRoot = Split-Path -Parent $ServerRoot
@@ -38,6 +38,7 @@ $KitchenTokenProvisionScript = Join-Path $ServerRoot 'scripts\provision-safe-cop
 $PairingDiagnosticLogPath = Join-Path $LogRoot 'pairing-claims.ndjson'
 $CommunicationDiagnosticLogPath = Join-Path $LogRoot 'communication.ndjson'
 $ProductImageStoragePath = if ([string]::IsNullOrWhiteSpace($env:WARUN_PRODUCT_IMAGE_STORAGE_PATH)) { Join-Path $env:LOCALAPPDATA 'WarunTabOrder\product-images' } else { $env:WARUN_PRODUCT_IMAGE_STORAGE_PATH }
+$CustomerThemeImageStoragePath = if ([string]::IsNullOrWhiteSpace($env:WARUN_CUSTOMER_THEME_IMAGE_STORAGE_PATH)) { Join-Path $env:LOCALAPPDATA 'WarunTabOrder\customer-theme-images' } else { $env:WARUN_CUSTOMER_THEME_IMAGE_STORAGE_PATH }
 $MenuDiagnosticLogPath = Join-Path $LogRoot 'menu-requests.ndjson'
 $MutexName = 'WarunTabOrder.SafeCopy.AdminLauncher'
 $mutex = $null
@@ -490,6 +491,7 @@ try {
     $startInfo.EnvironmentVariables.Clear()
     foreach ($entry in (Get-ChildProcessEnvironment).GetEnumerator()) { $startInfo.EnvironmentVariables[$entry.Key] = $entry.Value }
     $startInfo.EnvironmentVariables['WARUN_PRODUCT_IMAGE_STORAGE_PATH'] = $ProductImageStoragePath
+$startInfo.EnvironmentVariables['WARUN_CUSTOMER_THEME_IMAGE_STORAGE_PATH'] = $CustomerThemeImageStoragePath
     $process = [Diagnostics.Process]::new()
     $process.StartInfo = $startInfo
     $process.Start()

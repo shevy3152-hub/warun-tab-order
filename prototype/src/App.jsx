@@ -30,7 +30,7 @@ import * as React from "react";
 import { createClientOrderId, createCustomerOrderClient, resolveOrderApiConfig } from "./order-outbox.js";
 import { claimCustomerDevice, createIndexedDbCredentialStore, loadOrCreateCustomerDevice, pairingClaimErrorMessage, runtimeForCustomerCredentials } from "./device-credentials.js";
 import { customerOrderErrorCategory, customerOrderNoticeFromOutboxEvent } from "./customer-order-notice.js";
-import { AdminPairingError, configuredAdminToken, createAdminRideGuidanceContact, deleteAdminRideGuidanceContact, fetchAdminBusinessHours, fetchAdminCheckoutRequests, fetchAdminCustomerOrderStartNotice, fetchAdminCustomerThemeConfig, fetchAdminDiagnostics, fetchAdminMenu, fetchAdminSessionMenuAccess, fetchArchivedAdminMenuItems, previewAdminMenuItemLifecycle, executeAdminMenuItemLifecycle, restoreArchivedAdminMenuItem, allowAdminSessionMenuItem, confirmAndCloseAdminEmptySession, revokeAdminSessionMenuItem, fetchAdminOrderHistory, fetchAdminPaymentHistory, fetchAdminPairingPreflight, fetchAdminRideGuidance, issueCustomerPairingCode, revokeAdminDevice, saveAdminBusinessHours, saveAdminCustomerOrderStartNotice, saveAdminCustomerThemeConfig, saveAdminImageLayouts, saveAdminCategory, saveAdminMenuItem, saveAdminMenuOrdering, saveAdminRideGuidanceOrdering, saveAdminRideGuidancePickup, updateAdminRideGuidanceContact, voidAdminPayment } from "./admin-pairing.js";
+import { AdminPairingError, configuredAdminToken, createAdminRideGuidanceContact, deleteAdminRideGuidanceContact, fetchAdminBusinessHours, fetchAdminCheckoutRequests, fetchAdminCustomerOrderStartNotice, fetchAdminCustomerThemeConfig, fetchAdminDiagnostics, fetchAdminMenu, fetchAdminSessionMenuAccess, fetchArchivedAdminMenuItems, previewAdminMenuItemLifecycle, executeAdminMenuItemLifecycle, restoreArchivedAdminMenuItem, allowAdminSessionMenuItem, confirmAndCloseAdminEmptySession, revokeAdminSessionMenuItem, fetchAdminOrderHistory, fetchAdminPaymentHistory, fetchAdminPairingPreflight, fetchAdminRideGuidance, issueCustomerPairingCode, revokeAdminDevice, saveAdminBusinessHours, saveAdminCustomerOrderStartNotice, saveAdminCustomerThemeConfig, uploadAdminCustomerThemeImage, saveAdminImageLayouts, saveAdminCategory, saveAdminMenuItem, saveAdminMenuOrdering, saveAdminRideGuidanceOrdering, saveAdminRideGuidancePickup, updateAdminRideGuidanceContact, voidAdminPayment } from "./admin-pairing.js";
 import { adjustKitchenItemUnitPrice, adjustKitchenOrderItemQuantity as adjustKitchenItemQuantityRequest, cancelKitchenCheckout, cancelKitchenOrderItem, closeKitchenTableSession, createKitchenOrder, fetchKitchenCheckoutRequests, fetchKitchenOrderHistory, fetchKitchenPaymentHistory, fetchKitchenSnapshot, kitchenAdditionRequestItem, kitchenApiConfigured, KitchenApiError, markKitchenItemServed, payKitchenCheckout, readyKitchenCheckout, resolveKitchenStaffCall, restoreKitchenOrderItem, saveKitchenCheckoutAdjustments, subscribeKitchenInvalidations, voidKitchenPayment } from "./kitchen-api.js";
 import { buildKitchenTableGroups } from "./kitchen-order-board.js";
 import { bootstrapCustomerOrderClient } from "./customer-bootstrap.js";
@@ -2719,8 +2719,9 @@ const DEFAULT_CUSTOMER_THEME_VARIANTS = Object.freeze(Object.fromEntries(Object.
   zoom: 1,
 })])));
 
-function cloneCustomerThemeVariants(source = DEFAULT_CUSTOMER_THEME_VARIANTS) {
-  return Object.fromEntries(Object.entries(DEFAULT_CUSTOMER_THEME_VARIANTS).map(([theme, fallback]) => {
+function cloneCustomerThemeVariants(source = DEFAULT_CUSTOMER_THEME_VARIANTS, definitions = CUSTOMER_THEME_DEFINITIONS) {
+  return Object.fromEntries(Object.entries(definitions).map(([theme, definition]) => {
+    const fallback = DEFAULT_CUSTOMER_THEME_VARIANTS[theme] ?? { prompt: definition.prompt ?? "", notes: definition.notes ?? "", positionX: definition.initialPositionX ?? 0.5, positionY: 0.5, zoom: 1 };
     const variant = { ...fallback, ...(source?.[theme] ?? {}) };
     return [theme, { ...variant, ...normalizeCustomerThemeLayout(variant) }];
   }));
@@ -2912,6 +2913,9 @@ function CustomerThemeEditor({ adminApiMode }) {
   const [copyMessage, setCopyMessage] = useState("");
   const [generationCopyMessage, setGenerationCopyMessage] = useState("");
   const [imageFolderCopyMessage, setImageFolderCopyMessage] = useState("");
+  const [themeUploadLabel, setThemeUploadLabel] = useState("");
+  const [themeUploadFile, setThemeUploadFile] = useState(null);
+  const [themeUploading, setThemeUploading] = useState(false);
 
   const load = async ({ keepMessage = false } = {}) => {
     if (!adminApiMode) return null;
@@ -2936,7 +2940,8 @@ function CustomerThemeEditor({ adminApiMode }) {
   }, [adminApiMode]);
 
   const selectedVariant = state.draftThemes[state.editingTheme] ?? DEFAULT_CUSTOMER_THEME_VARIANTS.standard;
-  const sourceDefinition = CUSTOMER_THEME_DEFINITIONS[state.editingTheme] ?? CUSTOMER_THEME_DEFINITIONS.standard;
+  const availableDefinitions = state.formal?.definitions ?? CUSTOMER_THEME_DEFINITIONS;
+  const sourceDefinition = availableDefinitions[state.editingTheme] ?? CUSTOMER_THEME_DEFINITIONS.standard;
   useEffect(() => {
     let active = true;setActualImage(null);
     if (!sourceDefinition.assetPath) return undefined;
@@ -3027,6 +3032,33 @@ function CustomerThemeEditor({ adminApiMode }) {
       setState((current) => ({ ...current, saving: false, error: customerThemeErrorMessage(error, "テーマ設定の保存"), message: "" }));
     }
   };
+  const uploadThemeImage = async (replace = false) => {
+    if (!themeUploadFile || themeUploading) return;
+    if (!replace && !themeUploadLabel.trim()) {
+      setState((current) => ({ ...current, error: "追加するテーマ名を入力してください。" }));
+      return;
+    }
+    setThemeUploading(true);
+    setState((current) => ({ ...current, error: "", message: "" }));
+    try {
+      const result = await uploadAdminCustomerThemeImage({
+        env: window,
+        file: themeUploadFile,
+        themeKey: replace ? state.editingTheme : undefined,
+        label: themeUploadLabel.trim() || sourceDefinition.label,
+      });
+      const formal = await fetchAdminCustomerThemeConfig({ env: window });
+      setState((current) => ({ ...current, formal, draft: replace ? current.draft : result.themeKey, editingTheme: result.themeKey, draftThemes: cloneCustomerThemeVariants(formal.themes), error: "", message: replace ? "画像を差し替えました。旧画像は保全されています。" : "テーマを追加しました。選択状態は未保存です。配置を調整してテーマを保存してください。" }));
+      setThemeUploadFile(null);
+      setThemeUploadLabel("");
+      const input = document.getElementById("customer-theme-image-upload");
+      if (input) input.value = "";
+    } catch (error) {
+      setState((current) => ({ ...current, error: customerThemeErrorMessage(error, "客席レール画像の登録") }));
+    } finally {
+      setThemeUploading(false);
+    }
+  };
   const discard = () => setState((current) => current.formal ? ({ ...current, draft: current.formal.theme, editingTheme: current.formal.theme, draftThemes: cloneCustomerThemeVariants(current.formal.themes), message: "", error: "" }) : current);
   const previewTheme = state.editingTheme;
   return <section className="customer-theme-editor" aria-label="客席左レールテーマ設定">
@@ -3035,7 +3067,7 @@ function CustomerThemeEditor({ adminApiMode }) {
     {!adminApiMode ? <p className="customer-theme-editor__status">管理API接続時に編集できます。</p> : null}
     <fieldset className="customer-theme-editor__options" disabled={!adminApiMode || state.loading || state.saving}>
       <legend className="sr-only">客席レールテーマ</legend>
-      {Object.values(CUSTOMER_THEME_DEFINITIONS).map((definition) => {
+      {Object.values(availableDefinitions).map((definition) => {
         const available = definition.available;
         const isSelected = state.draft === definition.id;
         return <div className={`customer-theme-option${available ? "" : " customer-theme-option--unavailable"}`} key={definition.id}>
@@ -3044,6 +3076,14 @@ function CustomerThemeEditor({ adminApiMode }) {
         </div>;
       })}
     </fieldset>
+    <section className="customer-theme-upload" aria-label="客席レール画像の追加・差替え">
+      <strong>レール画像を追加・差替え</strong>
+      <label>テーマ名<input type="text" maxLength={80} value={themeUploadLabel} onChange={(event) => setThemeUploadLabel(event.target.value)} placeholder="例：春の桜" disabled={!adminApiMode || themeUploading} /></label>
+      <label>画像ファイル<input id="customer-theme-image-upload" type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => setThemeUploadFile(event.target.files?.[0] ?? null)} disabled={!adminApiMode || themeUploading} /></label>
+      <small>PNG・JPEG・WebP、5MB以下。実寸は画像から取得します。旧画像は削除せず保全します。</small>
+      <div><button type="button" className="button button--outline" onClick={() => void uploadThemeImage(false)} disabled={!adminApiMode || !themeUploadFile || !themeUploadLabel.trim() || themeUploading}>{themeUploading ? "登録中…" : "新しいテーマとして追加"}</button>
+        {sourceDefinition.assetPath ? <button type="button" className="button button--quiet" onClick={() => void uploadThemeImage(true)} disabled={!adminApiMode || !themeUploadFile || themeUploading}>「{sourceDefinition.label}」の画像を差替え</button> : null}</div>
+    </section>
     <div className="customer-theme-editor__details">
       <div className="customer-theme-editor__metadata">
         <label className="customer-theme-editor__field" htmlFor="customer-theme-display-condition">制作する表示条件<select id="customer-theme-display-condition" value={displayCondition} onChange={event => { setDisplayCondition(event.target.value); setGuideMeasurements(null); setPreviewMetrics(null); }}><option value="management">現在の管理画面条件</option><option value="a90">A90キオスク実測条件</option></select></label>

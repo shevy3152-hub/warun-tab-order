@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { confirmAndCloseAdminEmptySession, createAdminRideGuidanceContact, deleteAdminRideGuidanceContact, fetchAdminCheckoutRequests, fetchAdminCustomerTheme, fetchAdminCustomerThemeConfig, fetchAdminRideGuidance, saveAdminCustomerTheme, saveAdminCustomerThemeConfig, saveAdminRideGuidanceOrdering, saveAdminRideGuidancePickup, updateAdminRideGuidanceContact, fetchAdminBusinessHours, saveAdminBusinessHours, saveAdminCategory, saveAdminMenuItem, saveAdminMenuOrdering, fetchAdminSessionMenuAccess, allowAdminSessionMenuItem, revokeAdminSessionMenuItem, fetchAdminCustomerOrderStartNotice, saveAdminCustomerOrderStartNotice, uploadAdminProductImage } from '../src/admin-pairing.js';
+import { confirmAndCloseAdminEmptySession, createAdminRideGuidanceContact, deleteAdminRideGuidanceContact, fetchAdminCheckoutRequests, fetchAdminCustomerTheme, fetchAdminCustomerThemeConfig, fetchAdminRideGuidance, saveAdminCustomerTheme, saveAdminCustomerThemeConfig, saveAdminRideGuidanceOrdering, saveAdminRideGuidancePickup, updateAdminRideGuidanceContact, fetchAdminBusinessHours, saveAdminBusinessHours, saveAdminCategory, saveAdminMenuItem, saveAdminMenuOrdering, fetchAdminSessionMenuAccess, allowAdminSessionMenuItem, revokeAdminSessionMenuItem, fetchAdminCustomerOrderStartNotice, saveAdminCustomerOrderStartNotice, uploadAdminProductImage, uploadAdminCustomerThemeImage } from '../src/admin-pairing.js';
+import { CUSTOMER_THEME_DEFINITIONS } from '../../shared/customer-theme-definitions.mjs';
 
 const env = {
   WARUN_ADMIN_API_TOKEN: 'admin-token-for-test',
@@ -54,12 +55,14 @@ test('customer theme config client preserves prompt metadata and sends normalize
     theme: 'camellia',
     version: 4,
     updatedAtMs: 1234,
+    definitions: CUSTOMER_THEME_DEFINITIONS,
     themes: {
       standard: { prompt: 'red', notes: 'fallback', positionX: 0.5, positionY: 0.5, zoom: 1 },
       camellia: { prompt: '椿。文字なし', notes: '426x1587', positionX: 0.2, positionY: 0.8, zoom: 1.25 },
       'autumn-leaves': { prompt: '紅葉', notes: '426x1587', positionX: 0.5, positionY: 0.5, zoom: 1 },
       'moon-susuki': { prompt: '月とすすき', notes: '426x1587', positionX: 0.5, positionY: 0.5, zoom: 1 },
       'japanese-halloween': { prompt: '和風ハロウィン', notes: '426x1587', positionX: 0.5, positionY: 0.5, zoom: 1 },
+      christmas: { prompt: 'Christmas', notes: '816x1968', positionX: 0.5, positionY: 0.5, zoom: 1 },
     },
   };
   const loaded = await fetchAdminCustomerThemeConfig({ env, fetchImpl: async () => ({ ok: true, json: async () => responseBody }) });
@@ -237,6 +240,21 @@ test('customer rail theme admin client preserves version conflicts', async () =>
     }),
     (error) => error.code === 'CUSTOMER_THEME_CONFLICT' && error.status === 409,
   );
+});
+
+test('customer rail image upload uses authenticated admin transport and accepts runtime definitions', async () => {
+  let captured;
+  const file = new Blob(['image bytes'], { type: 'image/png' });
+  const result = await uploadAdminCustomerThemeImage({ env, file, label: '春の桜', fetchImpl: async (url, options) => {
+    captured = { url, options };
+    return { ok: true, json: async () => ({ themeKey: 'spring-sakura-test', definition: { id: 'spring-sakura-test', label: '春の桜', assetPath: '/v1/customer-theme-images/00000000-0000-4000-8000-000000000000.png', available: true, image: { width: 640, height: 1600 } } }) };
+  } });
+  assert.match(captured.url, /\/admin\/customer-theme-images\?label=/);
+  assert.equal(captured.options.method, 'POST');
+  assert.equal(captured.options.headers.Authorization, 'Bearer admin-token-for-test');
+  assert.equal(captured.options.headers['Content-Type'], 'image/png');
+  assert.equal(captured.options.body, file);
+  assert.deepEqual(result.definition.image, { width: 640, height: 1600 });
 });
 
 test('ride-guidance admin client uses the authenticated CRUD and ordering contracts', async () => {

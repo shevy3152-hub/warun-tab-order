@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import http from 'node:http';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { deflateSync } from 'node:zlib';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -15,6 +16,7 @@ import { createSnapshotService } from '../src/events/snapshot-service.mjs';
 import { createSseHub } from '../src/events/sse-hub.mjs';
 import { createHttpServer } from '../src/http/http-server.mjs';
 import { createOrderRepository } from '../src/orders/order-repository.mjs';
+import { createProductImageStore } from '../src/product-images/product-image-store.mjs';
 
 const uuid = (number) => `00000000-0000-4000-8000-${String(number).padStart(12, '0')}`;
 const ADMIN_ID = uuid(1);
@@ -25,6 +27,26 @@ const hash = (token) => createHash('sha256').update(token, 'utf8').digest('hex')
 const ADMIN_TOKEN = tokenFor(0x31);
 const CUSTOMER_TOKEN = tokenFor(0x32);
 const KITCHEN_TOKEN = tokenFor(0x33);
+
+function tinyPng() {
+  const crc32 = (bytes) => {
+    let crc = 0xffffffff;
+    for (const byte of bytes) {
+      crc ^= byte;
+      for (let bit = 0; bit < 8; bit += 1) crc = crc & 1 ? 0xedb88320 ^ (crc >>> 1) : crc >>> 1;
+    }
+    return (crc ^ 0xffffffff) >>> 0;
+  };
+  const chunk = (type, data) => {
+    const name = Buffer.from(type);
+    const body = Buffer.concat([name, data]);
+    const length = Buffer.alloc(4); length.writeUInt32BE(data.length);
+    const checksum = Buffer.alloc(4); checksum.writeUInt32BE(crc32(body));
+    return Buffer.concat([length, body, checksum]);
+  };
+  const header = Buffer.alloc(13); header.writeUInt32BE(1, 0); header.writeUInt32BE(1, 4); header[8] = 8; header[9] = 6;
+  return Buffer.concat([Buffer.from([137,80,78,71,13,10,26,10]), chunk('IHDR', header), chunk('IDAT', deflateSync(Buffer.from([0,0,0,0,255]))), chunk('IEND', Buffer.alloc(0))]);
+}
 
 function seed(database) {
   const insertDevice = database.prepare(`
@@ -52,7 +74,7 @@ async function listen(server) {
   return server.address().port;
 }
 
-function request({ port, token, method = 'GET', path, body }) {
+function request({ port, token, method = 'GET', path, body, rawBody, contentType }) {
   return new Promise((resolve, reject) => {
     const client = http.request({
       host: '127.0.0.1',
@@ -61,19 +83,20 @@ function request({ port, token, method = 'GET', path, body }) {
       method,
       headers: {
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
+        ...(body === undefined && rawBody === undefined ? {} : { 'Content-Type': contentType ?? (rawBody === undefined ? 'application/json' : 'application/octet-stream') }),
       },
       agent: false,
     }, (response) => {
       const chunks = [];
       response.on('data', (chunk) => chunks.push(chunk));
       response.on('end', () => {
-        const raw = Buffer.concat(chunks).toString('utf8');
-        resolve({ statusCode: response.statusCode, json: raw ? JSON.parse(raw) : null });
+        const bytes = Buffer.concat(chunks);
+        const raw = bytes.toString('utf8');
+        resolve({ statusCode: response.statusCode, json: String(response.headers['content-type'] || '').includes('application/json') && raw ? JSON.parse(raw) : null, bytes });
       });
     });
     client.on('error', reject);
-    client.end(body === undefined ? undefined : JSON.stringify(body));
+    client.end(rawBody ?? (body === undefined ? undefined : JSON.stringify(body)));
   });
 }
 
@@ -140,6 +163,7 @@ async function withFixture(run) {
       authenticator,
       catalog,
       customerTheme: theme,
+      customerThemeImageStore: createProductImageStore({ root: join(directory, 'theme-images') }),
       eventRepository: events,
       orderRepository: orders,
       snapshotService: snapshots,
@@ -323,7 +347,7 @@ test('customer theme config persists production metadata, exposes only safe plac
 
     const customerInitial = await request({ port, token: CUSTOMER_TOKEN, path: '/v1/customer/theme-config' });
     assert.equal(customerInitial.statusCode, 200);
-    assert.deepEqual(customerInitial.json, { theme: 'standard', positionX: 0.5, positionY: 0.5, zoom: 1 });
+    assert.deepEqual(customerInitial.json, { theme: 'standard', definition: { id: 'standard', label: '標準（赤レール）', assetPath: null, available: true }, positionX: 0.5, positionY: 0.5, zoom: 1 });
     assert.equal(Object.hasOwn(customerInitial.json, 'prompt'), false);
     assert.equal(Object.hasOwn(customerInitial.json, 'notes'), false);
     assert.equal(Object.hasOwn(customerInitial.json, 'version'), false);
@@ -352,7 +376,11 @@ test('customer theme config persists production metadata, exposes only safe plac
     assert.equal(database.prepare("SELECT zoom FROM customer_theme_variants WHERE theme_key = 'autumn-leaves'").get().zoom, 1.4);
 
     const customerAfterSave = await request({ port, token: CUSTOMER_TOKEN, path: '/v1/customer/theme-config' });
-    assert.deepEqual(customerAfterSave.json, { theme: 'camellia', positionX: 0.2, positionY: 0.8, zoom: 0.5 });
+    assert.equal(customerAfterSave.json.theme, 'camellia');
+    assert.equal(customerAfterSave.json.positionX, 0.2);
+    assert.equal(customerAfterSave.json.positionY, 0.8);
+    assert.equal(customerAfterSave.json.zoom, 0.5);
+    assert.equal(customerAfterSave.json.definition.image.width, 426);
     assert.equal(JSON.stringify(customerAfterSave.json).includes('制作確認用メモ'), false);
 
     const invalid = await request({
@@ -439,5 +467,51 @@ test('customer theme config persists production metadata, exposes only safe plac
     assert.equal(database.prepare("SELECT theme_key FROM customer_theme_settings").get().theme_key, 'christmas');
     assert.equal(database.prepare('PRAGMA integrity_check').get().integrity_check, 'ok');
     assert.deepEqual(database.prepare('PRAGMA foreign_key_check').all(), []);
+  });
+});
+
+test('admin can add and replace isolated rail images with detected dimensions and preserved theme settings', async () => {
+  await withFixture(async ({ port, database }) => {
+    const png = tinyPng();
+    const wrongType = await request({ port, token: ADMIN_TOKEN, method: 'POST', path: '/v1/admin/customer-theme-images?label=test', rawBody: png, contentType: 'application/octet-stream' });
+    assert.equal(wrongType.statusCode, 415);
+    const invalidImage = await request({ port, token: ADMIN_TOKEN, method: 'POST', path: '/v1/admin/customer-theme-images?label=test', rawBody: Buffer.from('not an image'), contentType: 'image/png' });
+    assert.equal(invalidImage.statusCode, 400);
+    assert.equal((await request({ port, method: 'POST', path: '/v1/admin/customer-theme-images?label=%E6%98%A5%E3%81%AE%E6%A1%9C', rawBody: png, contentType: 'image/png' })).statusCode, 401);
+    const added = await request({ port, token: ADMIN_TOKEN, method: 'POST', path: '/v1/admin/customer-theme-images?label=%E6%98%A5%E3%81%AE%E6%A1%9C', rawBody: png, contentType: 'image/png' });
+    assert.equal(added.statusCode, 201, JSON.stringify(added.json));
+    assert.equal(added.json.definition.label, '春の桜');
+    assert.deepEqual(added.json.definition.image, { width: 1, height: 1 });
+    const themeKey = added.json.themeKey;
+    const initialConfig = await request({ port, token: ADMIN_TOKEN, path: '/v1/admin/customer-theme-config' });
+    assert.equal(initialConfig.json.definitions[themeKey].assetPath, added.json.definition.assetPath);
+    assert.deepEqual(initialConfig.json.themes[themeKey], { prompt: '', notes: '', positionX: 0.5, positionY: 0.5, zoom: 1 });
+
+    const selected = { ...initialConfig.json.themes, [themeKey]: { prompt: '桜', notes: '保全するメモ', positionX: 0.7, positionY: 0.2, zoom: 1.3 } };
+    const saved = await request({ port, token: ADMIN_TOKEN, method: 'PUT', path: '/v1/admin/customer-theme-config', body: { expectedVersion: 0, theme: themeKey, themes: selected } });
+    assert.equal(saved.statusCode, 200);
+    const publicConfig = await request({ port, token: CUSTOMER_TOKEN, path: '/v1/customer/theme-config' });
+    assert.equal(publicConfig.json.theme, themeKey);
+    assert.equal(publicConfig.json.positionX, 0.7);
+    assert.equal(publicConfig.json.definition.label, '春の桜');
+    assert.equal(Object.hasOwn(publicConfig.json, 'notes'), false);
+
+    const oldUri = initialConfig.json.definitions.camellia.assetPath;
+    const replaced = await request({ port, token: ADMIN_TOKEN, method: 'POST', path: '/v1/admin/customer-theme-images?themeKey=camellia&label=%E6%A4%BF', rawBody: png, contentType: 'image/png' });
+    assert.equal(replaced.statusCode, 201);
+    const afterReplace = await request({ port, token: ADMIN_TOKEN, path: '/v1/admin/customer-theme-config' });
+    assert.equal(afterReplace.json.themes[themeKey].notes, '保全するメモ');
+    assert.equal(afterReplace.json.themes[themeKey].positionY, 0.2);
+    assert.notEqual(afterReplace.json.definitions.camellia.assetPath, oldUri);
+    assert.match(oldUri, /^\/customer-rail-washi-camellia-accepted\.png$/);
+    const oldFile = await readFile(new URL('../../prototype/public/customer-rail-washi-camellia-accepted.png', import.meta.url));
+    assert.ok(oldFile.length > 0);
+    const managedOldUri = initialConfig.json.definitions[themeKey].assetPath;
+    const reuploaded = await request({ port, token: ADMIN_TOKEN, method: 'POST', path: `/v1/admin/customer-theme-images?themeKey=${themeKey}&label=%E6%98%A5%E3%81%AE%E6%A1%9C`, rawBody: png, contentType: 'image/png' });
+    assert.equal(reuploaded.statusCode, 201);
+    const preservedManagedFile = await request({ port, path: managedOldUri });
+    assert.equal(preservedManagedFile.statusCode, 200);
+    assert.deepEqual(preservedManagedFile.bytes, png);
+    assert.equal(database.prepare('SELECT COUNT(*) AS count FROM customer_theme_assets').get().count, 2);
   });
 });

@@ -38,6 +38,7 @@ const DEFAULT_WEB_PORT = 5173;
 const SERVER_SOURCE_DIRECTORY = dirname(fileURLToPath(import.meta.url));
 export const DEFAULT_DATABASE_PATH = resolve(SERVER_SOURCE_DIRECTORY, '..', 'var', 'warun.sqlite3');
 export const DEFAULT_PRODUCT_IMAGE_STORAGE_PATH = resolve(SERVER_SOURCE_DIRECTORY, '..', 'var', 'product-images');
+export const DEFAULT_CUSTOMER_THEME_IMAGE_STORAGE_PATH = resolve(SERVER_SOURCE_DIRECTORY, '..', 'var', 'customer-theme-images');
 export const DEFAULT_WEB_ROOT = resolve(SERVER_SOURCE_DIRECTORY, '..', '..', 'prototype', 'dist', 'client');
 const CONTENT_TYPES = Object.freeze({
   ".css": "text/css; charset=utf-8",
@@ -125,7 +126,7 @@ function validateProductImageStoragePath({ storagePath, repositoryRoot, producti
   }
 }
 
-export function createWarunServer({ databasePath, productImageStoragePath = DEFAULT_PRODUCT_IMAGE_STORAGE_PATH, productImageUploadsEnabled = true, runtimeInfo = undefined, now = Date.now } = {}) {
+export function createWarunServer({ databasePath, productImageStoragePath = DEFAULT_PRODUCT_IMAGE_STORAGE_PATH, productImageUploadsEnabled = true, customerThemeImageStoragePath = DEFAULT_CUSTOMER_THEME_IMAGE_STORAGE_PATH, customerThemeImageUploadsEnabled = true, runtimeInfo = undefined, now = Date.now } = {}) {
   const connection = initializeDatabase({ databasePath });
   const { database } = connection;
   const authenticator = createDeviceAuthenticator({ database });
@@ -141,6 +142,7 @@ export function createWarunServer({ databasePath, productImageStoragePath = DEFA
   const staffCallRepository = createStaffCallRepository({ database, now });
   const pairingService = createPairingService({ database, now });
   const productImageStore = createProductImageStore({ root: resolveOperationalPath({ value: productImageStoragePath, name: 'WARUN_PRODUCT_IMAGE_STORAGE_PATH' }) });
+  const customerThemeImageStore = createProductImageStore({ root: resolveOperationalPath({ value: customerThemeImageStoragePath, name: 'WARUN_CUSTOMER_THEME_IMAGE_STORAGE_PATH' }) });
   const snapshotService = createSnapshotService({ catalog, eventRepository });
   const sseHub = createSseHub({ eventRepository });
   const pairingDiagnosticLogger = createPairingDiagnosticLogger(process.env.WARUN_PAIRING_DIAGNOSTIC_LOG_PATH);
@@ -179,6 +181,8 @@ export function createWarunServer({ databasePath, productImageStoragePath = DEFA
     checkout,
     productImageStore,
     productImageUploadsEnabled,
+    customerThemeImageStore,
+    customerThemeImageUploadsEnabled,
   });
 
   const closeDependencies = () => {
@@ -274,6 +278,9 @@ async function main() {
   if (configuredProductImageStoragePath) {
     validateProductImageStoragePath({ storagePath: productImageStoragePath, repositoryRoot, productionMode });
   }
+  const configuredCustomerThemeImageStoragePath = process.env.WARUN_CUSTOMER_THEME_IMAGE_STORAGE_PATH?.trim() || '';
+  const customerThemeImageStoragePath = resolveOperationalPath({ value: configuredCustomerThemeImageStoragePath, fallback: DEFAULT_CUSTOMER_THEME_IMAGE_STORAGE_PATH, name: 'WARUN_CUSTOMER_THEME_IMAGE_STORAGE_PATH', requireExplicit: productionMode || safeCopyMode });
+  if (configuredCustomerThemeImageStoragePath) validateProductImageStoragePath({ storagePath: customerThemeImageStoragePath, repositoryRoot, productionMode });
   const runtimeInfo = createRuntimeInfo({
     databasePath,
     repositoryRoot,
@@ -286,7 +293,7 @@ async function main() {
   if (safeCopyMode && !isSafeCopyRuntime(runtimeInfo)) {
     throw new Error("WARUN_ENV=safe-copy requires a database under server/var/safe-copies and refuses production DB.");
   }
-  const application = createWarunServer({ databasePath, productImageStoragePath, productImageUploadsEnabled: Boolean(configuredProductImageStoragePath), runtimeInfo });
+  const application = createWarunServer({ databasePath, productImageStoragePath, productImageUploadsEnabled: Boolean(configuredProductImageStoragePath), customerThemeImageStoragePath, customerThemeImageUploadsEnabled: Boolean(configuredCustomerThemeImageStoragePath), runtimeInfo });
   const webRoot = resolveOperationalPath({
     value: process.env.WARUN_WEB_ROOT,
     fallback: DEFAULT_WEB_ROOT,

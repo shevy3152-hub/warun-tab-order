@@ -50,7 +50,7 @@ const EVENT_TYPES_BY_ROLE = Object.freeze({
     'customer_order_start_notice.updated',
   ]),
 });
-const SUPPORTED_SCHEMA_VERSION = 23;
+const SUPPORTED_SCHEMA_VERSION = 24;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const OPAQUE_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
 
@@ -626,10 +626,26 @@ function mapCustomerThemeVariant(variant) {
 
 export function mapCustomerThemeConfigResponse(settings, { includeVersion = false, publicOnly = false } = {}) {
   requireObject(settings);
-  const theme = requireOneOf(settings.theme, new Set(Object.keys(CUSTOMER_THEME_DEFINITIONS)));
+  const definitions = settings.definitions ?? CUSTOMER_THEME_DEFINITIONS;
+  requireObject(definitions);
+  const themeKeys = Object.keys(definitions);
+  const theme = requireOneOf(settings.theme, new Set(themeKeys));
+  const safeDefinitions = Object.fromEntries(themeKeys.map((key) => {
+    const definition = requireObject(definitions[key]);
+    const image = definition.image === undefined ? undefined : requireObject(definition.image);
+    return [key, {
+      id: key,
+      label: requireString(definition.label),
+      assetPath: definition.assetPath === null ? null : requireString(definition.assetPath),
+      available: requireBoolean(definition.available),
+      ...(image ? { image: { width: requireInteger(image.width, 1), height: requireInteger(image.height, 1) } } : {}),
+      ...(definition.railPalette ? { railPalette: definition.railPalette } : {}),
+    }];
+  }));
   if (publicOnly) {
     return {
       theme,
+      definition: safeDefinitions[theme],
       positionX: requireNumber(settings.positionX),
       positionY: requireNumber(settings.positionY),
       zoom: requireNumber(settings.zoom),
@@ -638,7 +654,8 @@ export function mapCustomerThemeConfigResponse(settings, { includeVersion = fals
   requireObject(settings.themes);
   const response = {
     theme,
-    themes: Object.fromEntries(Object.keys(CUSTOMER_THEME_DEFINITIONS).map((key) => [key, mapCustomerThemeVariant(settings.themes[key])])),
+    definitions: safeDefinitions,
+    themes: Object.fromEntries(themeKeys.map((key) => [key, mapCustomerThemeVariant(settings.themes[key])])),
   };
   if (includeVersion) {
     response.version = requireInteger(settings.version);

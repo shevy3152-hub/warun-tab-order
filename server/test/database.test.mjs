@@ -193,19 +193,19 @@ function createV14Database(databasePath) {
   return database;
 }
 
-test('new database creates its parent directory and applies schema v23', async () => {
+test('new database creates its parent directory and applies schema v24', async () => {
   await withTemporaryDatabase(({ databasePath }) => {
     const connection = initializeDatabase({ databasePath });
     assert.equal(existsSync(databasePath), true);
-    assert.equal(connection.schemaVersion, 23);
+    assert.equal(connection.schemaVersion, 24);
     connection.close();
   });
 });
 
-test('new database records PRAGMA user_version = 23 and customer notice defaults', async () => {
+test('new database records PRAGMA user_version = 24 and customer notice defaults', async () => {
   await withTemporaryDatabase(({ databasePath }) => {
     const connection = initializeDatabase({ databasePath });
-    assert.equal(pragmaValue(connection.database, 'user_version'), 23);
+    assert.equal(pragmaValue(connection.database, 'user_version'), 24);
     assert.deepEqual({ ...connection.database.prepare('SELECT heading_text, body_text, version FROM customer_order_start_notice_settings WHERE singleton_id = 1').get() }, {
       heading_text: 'ご注文の前にご確認ください',
       body_text: '20歳未満の入店禁止\n飲酒運転しません・させません\nSNS投稿・LIVE配信禁止\nお支払いは現金のみ',
@@ -217,7 +217,7 @@ test('new database records PRAGMA user_version = 23 and customer notice defaults
   });
 });
 
-test('schema v22 to v23 keeps existing catalog rows and initializes archive state to NULL', async () => {
+test('schema v22 through v24 keeps catalog rows and initializes archive state to NULL', async () => {
   await withTemporaryDatabase(({ databasePath }) => {
     const initial = initializeDatabase({ databasePath });
     const database = initial.database;
@@ -225,15 +225,15 @@ test('schema v22 to v23 keeps existing catalog rows and initializes archive stat
     database.prepare(`INSERT INTO menu_items (menu_item_id, category_id, formal_name, kitchen_alias, description, price_yen, is_sold_out, is_active, sort_order, image_uri, version, created_at_ms, updated_at_ms, section_key) VALUES ('migration-product', 'migration-fixture', '保持する商品', '保持名', '保持する説明', 480, 0, 1, 9, '/menu-images/keep.webp', 4, 101, 201, 'dish')`).run();
     initial.close();
 
-    // Recreate the v22 schema shape in this isolated fixture to exercise the real v22->v23 runner.
+    // Recreate the v22 schema shape in this isolated fixture to exercise the v22->v24 runners.
     const v22 = new DatabaseSync(databasePath);
-    v22.exec('DROP INDEX idx_menu_items_archived_category; ALTER TABLE menu_items DROP COLUMN archived_at_ms; PRAGMA user_version = 22;');
+    v22.exec('DROP TABLE customer_theme_assets; DROP INDEX idx_menu_items_archived_category; ALTER TABLE menu_items DROP COLUMN archived_at_ms; PRAGMA user_version = 22;');
     v22.close();
 
     const migrated = initializeDatabase({ databasePath });
     try {
-      assert.equal(migrated.schemaVersion, 23);
-      assert.equal(pragmaValue(migrated.database, 'user_version'), 23);
+      assert.equal(migrated.schemaVersion, 24);
+      assert.equal(pragmaValue(migrated.database, 'user_version'), 24);
       assert.deepEqual({ ...migrated.database.prepare(`SELECT category_id, formal_name, kitchen_alias, description, price_yen, is_active, sort_order, image_uri, version, archived_at_ms FROM menu_items WHERE menu_item_id = 'migration-product'`).get() }, {
         category_id: 'migration-fixture', formal_name: '保持する商品', kitchen_alias: '保持名', description: '保持する説明', price_yen: 480, is_active: 1, sort_order: 9, image_uri: '/menu-images/keep.webp', version: 4, archived_at_ms: null,
       });
@@ -260,8 +260,8 @@ test('schema v14 migrates to v17 without changing order-time snapshots or existi
 
     const connection = initializeDatabase({ databasePath });
     const database = connection.database;
-    assert.equal(connection.schemaVersion, 23);
-    assert.equal(pragmaValue(database, 'user_version'), 23);
+    assert.equal(connection.schemaVersion, 24);
+    assert.equal(pragmaValue(database, 'user_version'), 24);
     assert.equal(database.prepare('SELECT schema_version FROM system_state').get().schema_version, 16);
     assert.deepEqual({ ...database.prepare('SELECT unit_price_yen_snapshot, line_total_yen, is_cancelled FROM order_items WHERE order_id = ?').get(ORDER_ID) }, {
       unit_price_yen_snapshot: 380,
@@ -315,14 +315,14 @@ test('schema v17 migration adds theme objects without rebuilding event infrastru
       eventLog: connection.database.prepare('SELECT COUNT(*) AS count FROM event_log').get().count,
       systemState: connection.database.prepare('SELECT COUNT(*) AS count FROM system_state').get().count,
     }, beforeCounts);
-    assert.equal(pragmaValue(connection.database, 'user_version'), 23);
+    assert.equal(pragmaValue(connection.database, 'user_version'), 24);
     assert.equal(connection.database.prepare('SELECT schema_version FROM system_state').get().schema_version, 16);
     assert.equal(connection.database.prepare('SELECT COUNT(*) AS count FROM customer_theme_variants').get().count, 2);
     connection.close();
   });
 });
 
-test('schema v19 through v23 preserves operational data, non-theme objects, and theme settings', async () => {
+test('schema v19 through v24 preserves operational data, non-theme objects, and theme settings', async () => {
   await withTemporaryDatabase(({ databasePath }) => {
     let v17;
     try {
@@ -436,7 +436,7 @@ test('schema v19 through v23 preserves operational data, non-theme objects, and 
       table,
       database.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all().map((row) => ({ ...row })),
     ])), beforeHistory);
-    assert.equal(pragmaValue(database, 'user_version'), 23);
+    assert.equal(pragmaValue(database, 'user_version'), 24);
     assert.deepEqual({ ...database.prepare('SELECT heading_text, body_text, version FROM customer_order_start_notice_settings WHERE singleton_id = 1').get() }, {
       heading_text: 'ご注文の前にご確認ください',
       body_text: '20歳未満の入店禁止\n飲酒運転しません・させません\nSNS投稿・LIVE配信禁止\nお支払いは現金のみ',
@@ -506,7 +506,7 @@ test('schema v21 migration preserves existing staff calls without guessing their
 
     const migrated = initializeDatabase({ databasePath });
     try {
-      assert.equal(migrated.schemaVersion, 23);
+      assert.equal(migrated.schemaVersion, 24);
       const afterMigration = migrated.database.prepare(`
         SELECT staff_call_id, client_call_id, customer_device_id, table_id,
           table_number_snapshot, call_type, status, created_at_ms, version, table_session_id
@@ -612,8 +612,8 @@ test('schema v7 migrates to v8 with every existing menu item in normal mode', as
     raw.close();
 
     const connection = initializeDatabase({ databasePath });
-    assert.equal(connection.schemaVersion, 23);
-    assert.equal(pragmaValue(connection.database, 'user_version'), 23);
+    assert.equal(connection.schemaVersion, 24);
+    assert.equal(pragmaValue(connection.database, 'user_version'), 24);
     assert.equal(connection.database.prepare('SELECT schema_version FROM system_state').get().schema_version, 16);
     assert.equal(connection.database.prepare("SELECT COUNT(*) AS count FROM menu_items WHERE ordering_mode = 'normal'").get().count, 1);
     assert.equal(connection.database.prepare('SELECT COUNT(*) AS count FROM menu_items').get().count, 1);
@@ -676,8 +676,8 @@ test('schema v9 clone migrates through v10, v11, and v12 with notice defaults an
     raw.close();
 
     const connection = initializeDatabase({ databasePath });
-    assert.equal(connection.schemaVersion, 23);
-    assert.equal(pragmaValue(connection.database, 'user_version'), 23);
+    assert.equal(connection.schemaVersion, 24);
+    assert.equal(pragmaValue(connection.database, 'user_version'), 24);
     const noticeDefaults = connection.database.prepare('SELECT notice_text, notice_enabled FROM business_hours').get();
     assert.equal(noticeDefaults.notice_text, '');
     assert.equal(noticeDefaults.notice_enabled, 0);
@@ -723,7 +723,7 @@ test('a valid schema v17 database can be closed and reopened', async () => {
   await withTemporaryDatabase(({ databasePath }) => {
     initializeDatabase({ databasePath }).close();
     const reopened = initializeDatabase({ databasePath });
-    assert.equal(reopened.schemaVersion, 23);
+    assert.equal(reopened.schemaVersion, 24);
     assert.equal(reopened.database.prepare('SELECT COUNT(*) AS count FROM customer_theme_settings').get().count, 0);
     reopened.close();
   });
@@ -860,8 +860,8 @@ test('legacy schema v1 migrates through schema v10 and assigns existing orders t
       WHERE order_id = ?
     `).get(ORDER_ID);
 
-    assert.equal(connection.schemaVersion, 23);
-    assert.equal(pragmaValue(connection.database, 'user_version'), 23);
+    assert.equal(connection.schemaVersion, 24);
+    assert.equal(pragmaValue(connection.database, 'user_version'), 24);
     assert.equal(connection.database.prepare('SELECT schema_version FROM system_state').get().schema_version, 16);
     assert.deepEqual({
       orders: connection.database.prepare('SELECT COUNT(*) AS count FROM orders').get().count,
@@ -934,8 +934,8 @@ test('schema v4 fixture migrates through the formal v7 path while preserving cat
 
     const connection = initializeDatabase({ databasePath: v4Path });
     const database = connection.database;
-    assert.equal(connection.schemaVersion, 23);
-    assert.equal(pragmaValue(database, 'user_version'), 23);
+    assert.equal(connection.schemaVersion, 24);
+    assert.equal(pragmaValue(database, 'user_version'), 24);
     assert.equal(database.prepare('PRAGMA integrity_check').get().integrity_check, 'ok');
     assert.deepEqual({
       orders: database.prepare('SELECT COUNT(*) AS count FROM orders').get().count,
@@ -1012,11 +1012,11 @@ test('invalid item quantities are rejected by CHECK constraints', async () => {
   });
 });
 
-test('schema versions newer than v23 are rejected without migration', async () => {
+test('schema versions newer than v24 are rejected without migration', async () => {
   await withTemporaryDatabase(({ directory }) => {
     const databasePath = join(directory, 'version-5.sqlite3');
     const raw = new DatabaseSync(databasePath);
-    raw.exec('PRAGMA user_version = 24;');
+    raw.exec('PRAGMA user_version = 25;');
     raw.close();
 
     assert.throws(
