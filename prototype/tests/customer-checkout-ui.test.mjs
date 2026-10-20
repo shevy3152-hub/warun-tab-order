@@ -76,6 +76,24 @@ test("checkout modal state is scoped to the current visit and ignores late prior
   assert.match(source, /checkoutVisitContextRef\.current !== requestVisitContextId\) return/);
   assert.match(source, /modal === "checkout" && \(!apiMode \|\| checkoutState\.visitContextId === checkoutVisitContextId\)/);
   assert.match(source, /setModal\(\(current\) => current === "checkout" \? null : current\)/);
-  assert.match(source, /if \(resource === "deviceConfig"\) \{[\s\S]*checkoutReadGenerationRef\.current \+= 1;[\s\S]*setCheckoutState\(\{ loading: false, error: false, errorDetails: null, checkout: null, visitContextId: checkoutVisitContextId \}\)[\s\S]*setModal\(\(current\) => current === "checkout" \? null : current\)/);
+  const invalidation = source.slice(source.indexOf('if (resource === "deviceConfig")'), source.indexOf('if (resource === "orders")'));
+  assert.match(invalidation, /checkoutReadGenerationRef\.current \+= 1;[\s\S]*refreshVisitState\(\)\.then/);
+  assert.doesNotMatch(invalidation, /setModal\(\(current\) => current === "checkout" \? null/);
   assert.match(source, /requestGeneration !== checkoutReadGenerationRef\.current/);
+});
+
+test("checkout refresh preserves receipt choice and modal for the same visit", () => {
+  assert.match(source, /if \(nextCheckout\) setCheckoutReceiptRequested\(nextCheckout\.receiptRequested === true\)/);
+  const visitEffect = source.slice(source.indexOf("const checkoutVisitContextRef = useRef"), source.indexOf("const customerMajorCategories"));
+  assert.match(visitEffect, /if \(previousVisitContextId\) setModal\(\(current\) => current === "checkout" \? null : current\)/);
+  assert.match(visitEffect, /else if \(checkoutVisitContextId && modal === "checkout"\) setCheckoutRefreshKey/);
+  const invalidation = source.slice(source.indexOf('if (resource === "deviceConfig")'), source.indexOf('if (resource === "orders")'));
+  assert.match(invalidation, /refreshedConfig\.visitContextId !== visitContextBeforeRefresh\) return/);
+  assert.doesNotMatch(invalidation, /setCheckoutReceiptRequested\(false\)|setModal\(\(current\) => current === "checkout" \? null/);
+});
+
+test("checkout request modal includes the specified exit notice without another confirmation", () => {
+  assert.match(modal, /checkout-customer-exit-notice[^>]*>会計後は10分ほどで退店して頂きます。/);
+  assert.match(modal, /手書き領収書を希望する/);
+  assert.doesNotMatch(modal, /checkbox|確認してから依頼/);
 });

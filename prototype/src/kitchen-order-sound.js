@@ -17,6 +17,7 @@ function readKitchenSoundSettings(storage, storageKey) {
     volume: normalizeKitchenSoundVolume(stored.volume),
     seenIds: Array.isArray(stored.seenIds) ? stored.seenIds.filter((id) => typeof id === "string") : [],
     seenCallIds: Array.isArray(stored.seenCallIds) ? stored.seenCallIds.filter((id) => typeof id === "string") : [],
+    seenCheckoutIds: Array.isArray(stored.seenCheckoutIds) ? stored.seenCheckoutIds.filter((id) => typeof id === "string") : [],
     storageAvailable,
   };
 }
@@ -67,12 +68,13 @@ export function createKitchenSoundEngine({ env = globalThis, onStateChange = () 
       const peak = KITCHEN_NOTIFICATION_GAIN * volume / DEFAULT_KITCHEN_SOUND_VOLUME;
       const reservationStart = Math.max(context.currentTime, nextStart);
       const isStaffCall = kind === "staffCall";
+      const isCheckout = kind === "checkout";
       const start = reservationStart + (isStaffCall ? 0.5 : 0);
-      nextStart = start + (isStaffCall ? 2.2 : 0.42);
+      nextStart = start + (isStaffCall ? 2.2 : isCheckout ? 1.5 : 0.42);
       const callPair = [{ frequency: 523, duration: 0.18, holdAt: 0.12 }, { frequency: 659, duration: 0.18, holdAt: 0.12 }];
       const notes = isStaffCall
         ? Array.from({ length: 3 }, (_, repeat) => callPair.map((note, index) => ({ ...note, at: repeat * 0.85 + index * 0.27 }))).flat()
-        : [{ frequency: 880, at: 0, endFrequency: 1174, sweepAt: 0.14, duration: 0.34, holdAt: 0.20 }];
+        : Array.from({ length: isCheckout ? 3 : 1 }, (_, repeat) => ({ frequency: 880, at: repeat * 0.5, endFrequency: 1174, sweepAt: 0.14, duration: 0.34, holdAt: 0.20 }));
       for (const note of notes) {
         const oscillator = context.createOscillator();
         const gain = context.createGain();
@@ -109,6 +111,7 @@ export function createKitchenOrderSound({ storage, storageKey, engine, loadBasel
   let storageAvailable = settings.storageAvailable;
   const seen = new Set(settings.seenIds);
   const seenCallIds = new Set(settings.seenCallIds);
+  const seenCheckoutIds = new Set(settings.seenCheckoutIds);
   let volume = settings.volume;
   engine.setVolume?.(volume);
   let requestedOn = settings.requestedOn;
@@ -145,7 +148,7 @@ export function createKitchenOrderSound({ storage, storageKey, engine, loadBasel
     if (!storageAvailable) return;
     try {
       if (!storage?.setItem) throw new Error("Storage unavailable");
-      storage.setItem(storageKey, JSON.stringify({ requestedOn, seenIds: [...seen], seenCallIds: [...seenCallIds], volume }));
+      storage.setItem(storageKey, JSON.stringify({ requestedOn, seenIds: [...seen], seenCallIds: [...seenCallIds], seenCheckoutIds: [...seenCheckoutIds], volume }));
     } catch { storageAvailable = false; publish(); }
   };
   const fail = (error = {}, stage = error.stage || "audio") => {
@@ -166,7 +169,7 @@ export function createKitchenOrderSound({ storage, storageKey, engine, loadBasel
         : error.status ? `厨房の新着一覧取得に失敗しました（HTTP ${error.status}）`
         : error.code === "INVALID_RESPONSE" ? "厨房の新着一覧応答形式が不正です"
         : "厨房の新着一覧を取得できませんでした（通信・応答エラー）";
-    message = `${reason}。通知音の設定はONですが、音声は再生できる状態ではありません。注文とスタッフ呼出の画面表示は続きます。「音を有効にする」を押して再試行してください。`;
+    message = `${reason}。通知音の設定はONですが、音声は再生できる状態ではありません。注文・スタッフ呼出・会計依頼の画面表示は続きます。「音を有効にする」を押して再試行してください。`;
     publish();
   };
   return {
@@ -207,7 +210,7 @@ export function createKitchenOrderSound({ storage, storageKey, engine, loadBasel
         // Both operations start in the click handler; only a completed baseline can confirm ON.
         const activation = bounded(engine.activate(), "audio", signal).then(() => progress("audio"));
         const baselineRead = bounded(loadBaseline({ signal }), "baseline", signal).then(baseline => {
-          if (!Array.isArray(baseline) && (!baseline || !Array.isArray(baseline.orders) || !Array.isArray(baseline.staffCalls ?? []))) throw { stage: "baseline", code: "INVALID_RESPONSE" };
+          if (!Array.isArray(baseline) && (!baseline || !Array.isArray(baseline.orders) || !Array.isArray(baseline.staffCalls ?? []) || !Array.isArray(baseline.checkoutRequests ?? []))) throw { stage: "baseline", code: "INVALID_RESPONSE" };
           progress("baseline");
           return baseline;
         });
@@ -217,16 +220,20 @@ export function createKitchenOrderSound({ storage, storageKey, engine, loadBasel
         pending = null;
         const baselineOrders = Array.isArray(baseline) ? baseline : baseline.orders;
         const baselineCalls = Array.isArray(baseline) ? [] : baseline.staffCalls ?? [];
+        const baselineCheckouts = Array.isArray(baseline) ? [] : baseline.checkoutRequests ?? [];
         for (const order of baselineOrders) if (typeof order?.id === "string" && order.id) seen.add(order.id);
         for (const call of baselineCalls) {
           const id = call?.id ?? call?.staffCallId;
           if (typeof id === "string" && id) seenCallIds.add(id);
         }
+        for (const checkout of baselineCheckouts) {
+          if (typeof checkout?.checkoutRequestId === "string" && checkout.checkoutRequestId) seenCheckoutIds.add(checkout.checkoutRequestId);
+        }
         initialized = true;
         status = "on";
         requestedOn = true;
         enabledAt = activationStartedAt;
-        message = "通知音ON：新着注文またはスタッフ呼出を受信すると鳴ります。";
+        message = "通知音ON：新着注文・スタッフ呼出・お会計依頼を受信すると鳴ります。";
         persist();
         publish();
       } catch (error) { if (!disposed && attempt === generation) fail(error); }
@@ -262,12 +269,13 @@ export function createKitchenOrderSound({ storage, storageKey, engine, loadBasel
         publish();
       }
     },
-    observe(orders, { staffCalls = [], suppressStaffCalls = false, ready = true, requestStartedAt, allowUnversioned = false } = {}) {
-      if (disposed || !ready || !Array.isArray(orders) || !Array.isArray(staffCalls)) return;
+    observe(orders, { staffCalls = [], checkoutRequests = [], suppressStaffCalls = false, ready = true, requestStartedAt, allowUnversioned = false } = {}) {
+      if (disposed || !ready || !Array.isArray(orders) || !Array.isArray(staffCalls) || !Array.isArray(checkoutRequests)) return;
       const first = !initialized;
       initialized = true;
       const addedOrders = [];
       const addedCalls = [];
+      const addedCheckouts = [];
       for (const order of orders) {
         if (typeof order?.id !== "string" || !order.id || seen.has(order.id)) continue;
         seen.add(order.id);
@@ -279,7 +287,13 @@ export function createKitchenOrderSound({ storage, storageKey, engine, loadBasel
         seenCallIds.add(id);
         if (!suppressStaffCalls) addedCalls.push(call);
       }
-      if (addedOrders.length || addedCalls.length) persist();
+      for (const checkout of checkoutRequests) {
+        const id = checkout?.checkoutRequestId;
+        if (typeof id !== "string" || !id || seenCheckoutIds.has(id)) continue;
+        seenCheckoutIds.add(id);
+        addedCheckouts.push(checkout);
+      }
+      if (addedOrders.length || addedCalls.length || addedCheckouts.length) persist();
       if (first || status !== "on" || !Number.isFinite(requestStartedAt) || requestStartedAt < enabledAt) return;
       const notifications = [];
       for (const order of addedOrders) {
@@ -290,6 +304,9 @@ export function createKitchenOrderSound({ storage, storageKey, engine, loadBasel
       for (const call of addedCalls) {
         if (!Number.isFinite(Number(call.createdAtMs ?? (call.createdAt ? Date.parse(call.createdAt) : NaN)))) continue;
         notifications.push("staffCall");
+      }
+      for (const checkout of addedCheckouts) {
+        if (checkout.status === "requested") notifications.push("checkout");
       }
       for (const notification of notifications) {
         try { if (volume > 0) engine.play(notification); } catch { fail(); break; }

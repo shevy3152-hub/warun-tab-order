@@ -753,7 +753,7 @@ function CustomerCheckoutModal({ checkoutState, checkoutRequestError, receiptReq
   const splitAmount = ready ? Math.ceil(checkout.grandTotalYen / splitCount) : null;
   const error = checkoutState.error;
   return <Modal title="お会計" onClose={onClose} className="modal--checkout">
-    {checkoutState.loading ? <div className="checkout-customer-state"><p className="checkout-customer-state__large">会計状態を確認中です</p></div> : error ? <div className="checkout-customer-state"><p className="checkout-customer-state__error" role="alert">会計状態を取得できませんでした。</p><p className="checkout-customer-state__diagnostic">失敗段階: {checkoutState.errorDetails?.stage ?? "unknown"} / HTTP status: {checkoutState.errorDetails?.status ?? "なし"} / error code: {checkoutState.errorDetails?.code ?? "UNKNOWN_ERROR"}</p><button type="button" className="button button--primary button--large" onClick={onRetry}>再試行</button></div> : ready ? <div className="checkout-customer-ready"><p className="checkout-customer-state__large">お会計金額</p><strong className="checkout-customer-total" aria-live="polite">税込 {yen(checkout.grandTotalYen)}</strong>{checkout.receiptRequested ? <p className="checkout-receipt-note">手書き領収書を希望済み</p> : null}<section className="checkout-split" aria-label="割り勘"><h3>割り勘</h3><div className="checkout-split__control"><button type="button" aria-label="人数を1人減らす" onClick={() => setSplitCount((current) => Math.max(2, current - 1))} disabled={splitCount <= 2}>−</button><strong>{splitCount}人</strong><button type="button" aria-label="人数を1人増やす" onClick={() => setSplitCount((current) => Math.min(20, current + 1))} disabled={splitCount >= 20}>＋</button></div><p className="checkout-split__amount">おひとり {checkout.grandTotalYen % splitCount === 0 ? "" : "約"}{yen(splitAmount)}</p></section></div> : waiting ? <div className="checkout-customer-state"><p className="checkout-customer-state__large">しばらくお待ちください</p><p>ただいま会計を確認しています</p>{checkout.receiptRequested ? <p className="checkout-receipt-note">手書き領収書を希望済み</p> : null}</div> : cancelled ? <div className="checkout-customer-state"><p className="checkout-customer-state__error" role="alert">会計依頼が取り消されました</p><p>必要であれば、あらためて会計を依頼できます。</p><button type="button" className="button button--primary button--large" onClick={onResetCancelled}>新しく会計を依頼する</button></div> : <div className="checkout-customer-request"><p className="modal-lead">会計の準備をスタッフへ依頼します</p><button type="button" className={`checkout-receipt-toggle ${receiptRequested ? "is-selected" : ""}`} aria-pressed={receiptRequested} onClick={() => onReceiptChange(!receiptRequested)} disabled={submitting}><Receipt size={26} weight={receiptRequested ? "fill" : "regular"} /><span>手書き領収書を希望する</span><b>{receiptRequested ? "選択中" : ""}</b></button>{checkoutRequestError ? <p className="checkout-customer-state__error" role="alert">会計依頼を送信できませんでした。もう一度お試しください。</p> : null}<div className="modal-actions checkout-modal__actions"><button type="button" className="button button--quiet" onClick={onClose} disabled={submitting}>キャンセル</button><button type="button" className="button button--primary button--large" onClick={onRequest} disabled={submitting}>{submitting ? "送信中…" : "お会計を依頼する"}</button></div></div>}
+    {checkoutState.loading ? <div className="checkout-customer-state"><p className="checkout-customer-state__large">会計状態を確認中です</p></div> : error ? <div className="checkout-customer-state"><p className="checkout-customer-state__error" role="alert">会計状態を取得できませんでした。</p><p className="checkout-customer-state__diagnostic">失敗段階: {checkoutState.errorDetails?.stage ?? "unknown"} / HTTP status: {checkoutState.errorDetails?.status ?? "なし"} / error code: {checkoutState.errorDetails?.code ?? "UNKNOWN_ERROR"}</p><button type="button" className="button button--primary button--large" onClick={onRetry}>再試行</button></div> : ready ? <div className="checkout-customer-ready"><p className="checkout-customer-state__large">お会計金額</p><strong className="checkout-customer-total" aria-live="polite">税込 {yen(checkout.grandTotalYen)}</strong>{checkout.receiptRequested ? <p className="checkout-receipt-note">手書き領収書を希望済み</p> : null}<section className="checkout-split" aria-label="割り勘"><h3>割り勘</h3><div className="checkout-split__control"><button type="button" aria-label="人数を1人減らす" onClick={() => setSplitCount((current) => Math.max(2, current - 1))} disabled={splitCount <= 2}>−</button><strong>{splitCount}人</strong><button type="button" aria-label="人数を1人増やす" onClick={() => setSplitCount((current) => Math.min(20, current + 1))} disabled={splitCount >= 20}>＋</button></div><p className="checkout-split__amount">おひとり {checkout.grandTotalYen % splitCount === 0 ? "" : "約"}{yen(splitAmount)}</p></section></div> : waiting ? <div className="checkout-customer-state"><p className="checkout-customer-state__large">しばらくお待ちください</p><p>ただいま会計を確認しています</p>{checkout.receiptRequested ? <p className="checkout-receipt-note">手書き領収書を希望済み</p> : null}</div> : cancelled ? <div className="checkout-customer-state"><p className="checkout-customer-state__error" role="alert">会計依頼が取り消されました</p><p>必要であれば、あらためて会計を依頼できます。</p><button type="button" className="button button--primary button--large" onClick={onResetCancelled}>新しく会計を依頼する</button></div> : <div className="checkout-customer-request"><p className="modal-lead">会計の準備をスタッフへ依頼します</p><p className="checkout-customer-exit-notice">会計後は10分ほどで退店して頂きます。</p><button type="button" className={`checkout-receipt-toggle ${receiptRequested ? "is-selected" : ""}`} aria-pressed={receiptRequested} onClick={() => onReceiptChange(!receiptRequested)} disabled={submitting}><Receipt size={26} weight={receiptRequested ? "fill" : "regular"} /><span>手書き領収書を希望する</span><b>{receiptRequested ? "選択中" : ""}</b></button>{checkoutRequestError ? <p className="checkout-customer-state__error" role="alert">会計依頼を送信できませんでした。もう一度お試しください。</p> : null}<div className="modal-actions checkout-modal__actions"><button type="button" className="button button--quiet" onClick={onClose} disabled={submitting}>キャンセル</button><button type="button" className="button button--primary button--large" onClick={onRequest} disabled={submitting}>{submitting ? "送信中…" : "お会計を依頼する"}</button></div></div>}
   </Modal>;
 }
 
@@ -1023,6 +1023,7 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
   const otherRef = useRef(null);
   useEffect(() => {
     if (checkoutVisitContextRef.current === checkoutVisitContextId) return;
+    const previousVisitContextId = checkoutVisitContextRef.current;
     checkoutVisitContextRef.current = checkoutVisitContextId;
     checkoutReadGenerationRef.current += 1;
     checkoutRequestIdRef.current = null;
@@ -1030,8 +1031,9 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
     setCheckoutReceiptRequested(false);
     setCheckoutState({ loading: false, error: false, errorDetails: null, checkout: null, visitContextId: checkoutVisitContextId });
     setCheckoutRequestError(false);
-    setModal((current) => current === "checkout" ? null : current);
-  }, [checkoutVisitContextId]);
+    if (previousVisitContextId) setModal((current) => current === "checkout" ? null : current);
+    else if (checkoutVisitContextId && modal === "checkout") setCheckoutRefreshKey((current) => current + 1);
+  }, [checkoutVisitContextId, modal]);
   const customerMajorCategories = buildCustomerMajorCategories(apiMenu?.categories, CUSTOMER_MAJOR_CATEGORIES);
   const currentMajorCategory = customerMajorCategories.find((category) => category.id === majorCategoryId) ?? customerMajorCategories[0];
   const currentSubcategories = currentMajorCategory.subcategories;
@@ -1149,13 +1151,11 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
       if (resource === "menu") setMenuRefreshKey((current) => current + 1);
       if (resource === "deviceConfig") {
         checkoutReadGenerationRef.current += 1;
-        checkoutPreviousRef.current = null;
-        checkoutRequestIdRef.current = null;
-        setCheckoutReceiptRequested(false);
-        setCheckoutState({ loading: false, error: false, errorDetails: null, checkout: null, visitContextId: checkoutVisitContextId });
-        setCheckoutRequestError(false);
-        setModal((current) => current === "checkout" ? null : current);
-        void refreshVisitState();
+        const visitContextBeforeRefresh = checkoutVisitContextId;
+        void refreshVisitState().then((refreshedConfig) => {
+          if (!refreshedConfig || refreshedConfig.visitContextId !== visitContextBeforeRefresh) return;
+          setCheckoutRefreshKey((current) => current + 1);
+        });
       }
       if (resource === "orders") setHistoryRefreshKey((current) => current + 1);
       if (resource === "checkout" || String(event?.payload?.type || event?.type || "").startsWith("checkout.")) setCheckoutRefreshKey((current) => current + 1);
@@ -1196,7 +1196,7 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
           playCheckoutBell(checkoutAudioRef);
         }
       }
-      setCheckoutReceiptRequested(nextCheckout?.receiptRequested === true);
+      if (nextCheckout) setCheckoutReceiptRequested(nextCheckout.receiptRequested === true);
       setCheckoutState({ loading: false, error: false, errorDetails: null, checkout: nextCheckout, visitContextId: checkoutVisitContextId });
     }).catch((error) => {
       if (!cancelled && requestGeneration === checkoutReadGenerationRef.current) {
@@ -2369,7 +2369,7 @@ function KitchenScreen({ state, updateState, apiState, checkoutState, onServe, o
   const displayedCalls = callPanelTableId === null ? activeCalls : activeCalls.filter((call) => String(call.tableId) === callPanelTableId);
   return <StaffShell route="/kitchen" title="新着注文" subtitle="未提供の注文をテーブルごとに表示します。提供完了後も来店・注文履歴は保持されます。" state={state} newOrderCount={activeOrders.length} clock={<time className="kitchen-clock" aria-label={`現在時刻 ${formatTime(new Date())}`}>{formatTime(new Date())}</time>} status={<div className="staff-topbar__right"><div className="staff-call-rail"><button type="button" className="staff-call-button" aria-label="スタッフ呼出" title="スタッフ呼出" onClick={() => openCallPanel()}><Bell size={26} weight="fill" /><span className="kitchen-sidebar__call-label">スタッフ呼出</span> {activeCalls.length ? <b>{activeCalls.length}</b> : null}</button></div>{activeCallGroups.length ? <div className="staff-call-rail__list" aria-label="未対応のスタッフ呼び出し一覧">{activeCallGroups.map((group) => <button type="button" className="staff-call-rail__item" key={group.tableId} aria-label={`テーブル ${group.tableId} のスタッフ呼び出し ${group.calls.length}件を確認`} onClick={() => openCallPanel(group.tableId)}><span>T{group.tableId}</span></button>)}</div> : null}<ConnectionBadge online announceStatus /></div>}>
     <section className="kitchen-content">
-      <KitchenOrderSound orders={activeOrders} staffCalls={activeCalls} suppressStaffCalls={apiState?.suppressStaffCalls} ready={demoMode || (apiMode && !apiState.loading && !apiState.error)} requestStartedAt={apiState?.notificationRequestStartedAt} demoMode={demoMode} />
+      <KitchenOrderSound orders={activeOrders} staffCalls={activeCalls} checkoutRequests={activeCheckouts} suppressStaffCalls={apiState?.suppressStaffCalls} ready={demoMode || (apiMode && !apiState.loading && !apiState.error)} requestStartedAt={apiState?.notificationRequestStartedAt} demoMode={demoMode} />
       {apiMode && apiState.loading ? <div className="kitchen-empty"><p>注文を読み込み中です。</p></div> : null}
       {apiMode && apiState.error ? <div className="kitchen-empty" role="alert"><p>注文情報を取得できません。</p></div> : null}
       {!apiMode && !tables.length ? <div className="kitchen-empty"><CheckCircle size={54} weight="thin" /><h2>すべて提供済みです</h2><p>新しい注文が届くと、テーブルごとに表示されます。</p></div> : null}

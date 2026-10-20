@@ -68,7 +68,32 @@ test("new staff calls use their own sound, suppress baseline and reconnect calls
   f.controller.observe([], { staffCalls: [reconnectedCall], requestStartedAt: 60 });
   assert.deepEqual(f.playKinds, ["staffCall"]);
 });
-test("staff calls received while notifications are OFF stay silent after enabling", async () => {
+test("new checkout requests sound once; baseline, refetches, reconnects and ready updates stay silent", async () => {
+  const existing = { checkoutRequestId: "checkout-existing", status: "requested" };
+  const f = fixture({ loadBaseline: async () => ({ orders: [], staffCalls: [], checkoutRequests: [existing] }) });
+  f.controller.observe([], { checkoutRequests: [existing] });
+  await f.controller.enable();
+  f.controller.observe([], { checkoutRequests: [existing], requestStartedAt: 20 });
+  assert.deepEqual(f.playKinds, []);
+  const next = { checkoutRequestId: "checkout-new", status: "requested" };
+  f.controller.observe([], { checkoutRequests: [existing, next], requestStartedAt: 30 });
+  assert.deepEqual(f.playKinds, ["checkout"]);
+  f.controller.observe([], { checkoutRequests: [existing, next], requestStartedAt: 40 });
+  f.controller.observe([], { checkoutRequests: [existing, { ...next, status: "ready" }], requestStartedAt: 50 });
+  f.controller.observe([], { ready: false, checkoutRequests: [] });
+  f.controller.observe([], { checkoutRequests: [existing, { ...next, status: "ready" }], requestStartedAt: 60 });
+  assert.deepEqual(f.playKinds, ["checkout"]);
+  assert.deepEqual(JSON.parse(f.store.getItem("test")).seenCheckoutIds, ["checkout-existing", "checkout-new"]);
+});
+test("checkout IDs received while OFF stay silent after enabling", async () => {
+  const f = fixture();
+  const checkout = { checkoutRequestId: "checkout-while-off", status: "requested" };
+  f.controller.disable();
+  f.controller.observe([], { checkoutRequests: [checkout], requestStartedAt: 11 });
+  await f.controller.enable();
+  f.controller.observe([], { checkoutRequests: [checkout], requestStartedAt: 20 });
+  assert.deepEqual(f.playKinds, []);
+});test("staff calls received while notifications are OFF stay silent after enabling", async () => {
   const f = fixture();
   f.controller.observe([]);
   const call = { id: "call-off", status: "open", createdAtMs: 10 };
@@ -109,8 +134,9 @@ test("reload preserves known IDs but requires a new activation click", async () 
   await f.controller.enable();
   f.controller.observe([], { requestStartedAt: 10 });
   const knownCall = { id: "call-before-reload", status: "open", createdAtMs: 20 };
-  f.controller.observe([order("notified")], { staffCalls: [knownCall], requestStartedAt: 20 });
-  assert.deepEqual(f.playKinds, ["order", "staffCall"]);
+  const knownCheckout = { checkoutRequestId: "checkout-before-reload", status: "requested" };
+  f.controller.observe([order("notified")], { staffCalls: [knownCall], checkoutRequests: [knownCheckout], requestStartedAt: 20 });
+  assert.deepEqual(f.playKinds, ["order", "staffCall", "checkout"]);
   f.controller.dispose();
   const reloaded = fixture({ storage: f.store });
   assert.equal(reloaded.controller.getState().status, "needs-activation");
@@ -119,8 +145,8 @@ test("reload preserves known IDs but requires a new activation click", async () 
   reloaded.controller.observe([]);
   await reloaded.controller.enable();
   reloaded.controller.observe([], { requestStartedAt: 10 });
-  reloaded.controller.observe([order("notified"), order("next")], { staffCalls: [knownCall], requestStartedAt: 20 });
-  assert.equal(reloaded.plays(), 1);
+  reloaded.controller.observe([order("notified"), order("next")], { staffCalls: [knownCall], checkoutRequests: [knownCheckout, { checkoutRequestId: "checkout-after-reload", status: "requested" }], requestStartedAt: 20 });
+  assert.equal(reloaded.plays(), 2);
 });
 test("OFF cancels a late activation or test without scheduling a sound", async () => {
   let release;
@@ -154,7 +180,7 @@ test("activation and playback failures stop audio and do not retry on incoming o
   playback.engine.play = () => { throw new Error("suspended"); };
   playback.controller.observe([order("a")], { requestStartedAt: 20 });
   assert.equal(playback.controller.getState().status, "blocked");
-  assert.match(playback.controller.getState().message, /注文とスタッフ呼出の画面表示は続きます/);
+  assert.match(playback.controller.getState().message, /注文・スタッフ呼出・会計依頼の画面表示は続きます/);
 });
 test("test while OFF does not enable new-order sounds; audio suspension shows a blocked state", async () => {
   const f = fixture();
@@ -243,8 +269,9 @@ test("staff-call lead-in and reservation are based on AudioContext time after re
 test("sound controls belong only to kitchen and use snapshot request timing", async () => {
   const app = await readFile(new URL("../src/App.jsx", import.meta.url), "utf8");
   const kitchen = app.slice(app.indexOf("function KitchenScreen"));
-  assert.match(kitchen, /<KitchenOrderSound orders=\{liveOrders\}/);
+  assert.match(kitchen, /<KitchenOrderSound orders=\{activeOrders\}/);
   assert.match(kitchen, /staffCalls=\{activeCalls\}/);
+  assert.match(kitchen, /checkoutRequests=\{activeCheckouts\}/);
   assert.match(app, /onReconnect: \(\) => \{ suppressStaffCallsUntilSnapshot = true; void load\(\); \}/);
   assert.equal((app.match(/<KitchenOrderSound /g) || []).length, 1);
   assert.match(app, /notificationRequestStartedAt: snapshot.notificationRequestStartedAt/);
@@ -545,7 +572,7 @@ test("rendered switch invokes activation, never test; ON survives order and volu
     createGain(){return {gain:{setValueAtTime(){},linearRampToValueAtTime(){},exponentialRampToValueAtTime(){}},connect(){},disconnect(){}};}
   }
   const values=new Map();
-  globalThis.window={location:{origin:'https://qa.example.test',search:''},performance:{now:()=>clock},AudioContext:Context,WARUN_KITCHEN_API_TOKEN:'fixture-only-token',localStorage:{getItem:k=>values.get(k),setItem:(k,v)=>values.set(k,v)},fetch:async()=>{reads++;return {ok:true,json:async()=>({activeOrders:[]})};}};
+  globalThis.window={location:{origin:'https://qa.example.test',search:''},performance:{now:()=>clock},AudioContext:Context,WARUN_KITCHEN_API_TOKEN:'fixture-only-token',localStorage:{getItem:k=>values.get(k),setItem:(k,v)=>values.set(k,v)},fetch:async(url)=>{reads++;return {ok:true,json:async()=>String(url).includes("checkout-requests")?{checkouts:[]}:{activeOrders:[]}};}};
   try {
     component=(await import('data:text/javascript;base64,'+Buffer.from(transformed.code).toString('base64'))).KitchenOrderSound;
     props={orders:[],ready:true,requestStartedAt:10,demoMode:false};render();
@@ -557,7 +584,7 @@ test("rendered switch invokes activation, never test; ON survives order and volu
     activate.props.onClick();render();
     assert.equal(toggle().props['aria-busy'],true);
     await new Promise(resolve=>setImmediate(resolve));render();
-    assert.equal(reads,1);assert.equal(plays,0);
+    assert.equal(reads,2);assert.equal(plays,0);
     assert.equal(toggle().props['aria-checked'],true);
     clock=20;props={...props,orders:[order('new')],requestStartedAt:20};render();
     assert.equal(toggle().props['aria-checked'],true);assert.equal(plays,1);
@@ -574,8 +601,55 @@ test("rendered switch invokes activation, never test; ON survives order and volu
     const staffTrial=find(n=>n.type==='button'&&n.props.children.includes('呼出音を試す（隔離）'));
     assert.ok(staffTrial);
     await staffTrial.props.onClick();await new Promise(resolve=>setImmediate(resolve));render();
-    assert.equal(plays,9);assert.equal(reads,1);
+    assert.equal(plays,9);assert.equal(reads,2);
   } finally {
     for(const slot of slots)slot?.cleanup?.();globalThis.window=priorWindow;delete globalThis.__kitchenSoundHooks;
   }
+});
+
+test("checkout isolation preview invokes the audio-only controller test in demo mode", async () => {
+  const source = await readFile(new URL("../src/KitchenOrderSound.jsx", import.meta.url), "utf8");
+  const sound = await readFile(new URL("../src/kitchen-order-sound.js", import.meta.url), "utf8");
+  assert.ok(source.includes('{demoMode ? <><button type="button" className="button button--quiet" disabled={enabling} onClick={() => void controller.current?.test("staffCall")}>呼出音を試す（隔離）</button><button type="button" className="button button--quiet" disabled={enabling} onClick={() => void controller.current?.test("checkout")}>お会計依頼音を試す（隔離）</button></> : null}'));
+  const audioTrial = sound.slice(sound.indexOf('async test(kind = "order")'), sound.indexOf("observe(orders"));
+  assert.match(audioTrial, /engine\.activate\(\)[\s\S]*engine\.play\(kind\)/);
+  assert.doesNotMatch(audioTrial, /fetch|requestCheckout|POST/);
+});
+
+test("checkout notification and preview each schedule one three-tone group, with duplicate IDs silent", async () => {
+  const oscillators = [];
+  class Context {
+    constructor() { this.state = "running"; this.currentTime = 0; this.destination = {}; }
+    async resume() {} async close() {}
+    createOscillator() {
+      const node = { frequencyValues: [], frequency: { setValueAtTime(value, at) { node.frequencyValues.push([value, at]); } }, connect() {}, disconnect() {}, start(at) { this.startTime = at; }, stop(at) { this.stopTime = at; this.stopCalls = (this.stopCalls ?? 0) + 1; } };
+      oscillators.push(node); return node;
+    }
+    createGain() { return { gain: { setValueAtTime() {}, linearRampToValueAtTime() {}, exponentialRampToValueAtTime() {} }, connect() {}, disconnect() {} }; }
+  }
+  const engine = createKitchenSoundEngine({ env: { AudioContext: Context } });
+  const values = new Map();
+  let baselineReads = 0;
+  const controller = createKitchenOrderSound({ storage: { getItem: key => values.get(key), setItem: (key, value) => values.set(key, value) }, storageKey: "triple-checkout", engine, now: () => 10, loadBaseline: async () => { baselineReads++; return { orders: [], staffCalls: [], checkoutRequests: [] }; } });
+  try {
+    controller.observe([]);
+    await controller.enable();
+    const checkout = { checkoutRequestId: "fixture-triple-checkout", status: "requested" };
+    controller.observe([], { checkoutRequests: [checkout], requestStartedAt: 20 });
+    assert.equal(oscillators.length, 3);
+    controller.observe([], { checkoutRequests: [checkout], requestStartedAt: 30 });
+    controller.observe([], { ready: false, checkoutRequests: [] });
+    controller.observe([], { checkoutRequests: [checkout], requestStartedAt: 40 });
+    controller.observe([], { checkoutRequests: [{ ...checkout, status: "ready" }], requestStartedAt: 50 });
+    assert.equal(oscillators.length, 3);
+    await controller.test("checkout");
+    assert.equal(baselineReads, 1);
+    assert.deepEqual(oscillators.map(node => node.startTime), [0, 0.5, 1, 1.5, 2, 2.5]);
+    for (const node of oscillators) {
+      assert.deepEqual(node.frequencyValues, [[880, node.startTime], [1174, node.startTime + 0.14]]);
+      assert.ok(Math.abs(node.stopTime - node.startTime - 0.34) < 1e-10);
+    }
+    controller.disable();
+    assert.ok(oscillators.every(node => node.stopCalls === 2));
+  } finally { controller.dispose(); }
 });

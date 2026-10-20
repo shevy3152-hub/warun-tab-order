@@ -67,11 +67,13 @@ test('checkout HTTP contract enforces roles and hides customer breakdown', async
     const created = await request({ port, token: CUSTOMER_TOKEN, method: 'POST', path: '/v1/customer/checkout-requests', body: { checkoutRequestId: CHECKOUT, receiptRequested: true } });
     assert.equal(created.statusCode, 201);
     assert.equal(created.json.status, 'requested');
+    assert.equal(created.json.receiptRequested, true);
     assert.equal(Object.hasOwn(created.json, 'grandTotalYen'), false);
     assert.equal(Object.hasOwn(created.json, 'orderedItemsTotalYen'), false);
     const kitchenList = await request({ port, token: KITCHEN_TOKEN, path: '/v1/kitchen/checkout-requests' });
     assert.equal(kitchenList.statusCode, 200);
     assert.equal(kitchenList.json.checkouts.length, 1);
+    assert.equal(kitchenList.json.checkouts[0].receiptRequested, true);
     assert.equal(kitchenList.json.checkouts[0].tableSessionId, SESSION);
     assert.equal(kitchenList.json.checkouts[0].orderedItemsTotalYen, 700);
     const current = await request({ port, token: CUSTOMER_TOKEN, path: '/v1/customer/checkout-requests/current' });
@@ -132,6 +134,7 @@ test('ready checkout can be cancelled, hidden from customer, and replaced with a
   try {
     const created = await request({ port, token: CUSTOMER_TOKEN, method: 'POST', path: '/v1/customer/checkout-requests', body: { checkoutRequestId: CHECKOUT, receiptRequested: false } });
     assert.equal(created.statusCode, 201);
+    assert.equal(created.json.receiptRequested, false);
     const adjusted = await request({ port, token: KITCHEN_TOKEN, method: 'PUT', path: `/v1/kitchen/checkout-requests/${CHECKOUT}/adjustments`, body: { expectedVersion: 1, adjustments: [{ kind: 'seat_charge', label: '席料', amountYen: 300 }] } });
     const ready = await request({ port, token: KITCHEN_TOKEN, method: 'POST', path: `/v1/kitchen/checkout-requests/${CHECKOUT}/ready`, body: { expectedVersion: adjusted.json.version } });
     assert.equal(ready.statusCode, 200);
@@ -162,6 +165,7 @@ test('ready checkout can be cancelled, hidden from customer, and replaced with a
     const replacementList = await request({ port, token: KITCHEN_TOKEN, path: '/v1/kitchen/checkout-requests' });
     const replacementRequest = replacementList.json.checkouts[0];
     assert.equal(replacementRequest.checkoutRequestId, REPLACEMENT_CHECKOUT);
+    assert.equal(replacementRequest.receiptRequested, false);
     assert.equal(replacementRequest.orderedItemsTotalYen, 1050);
     assert.deepEqual(replacementRequest.adjustments, []);
 
