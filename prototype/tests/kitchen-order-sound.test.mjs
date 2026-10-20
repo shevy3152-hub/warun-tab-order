@@ -278,7 +278,7 @@ test("sound controls belong only to kitchen and use snapshot request timing", as
   assert.match(app, /playCheckoutBell\(checkoutAudioRef\)/);
   const component = await readFile(new URL("../src/KitchenOrderSound.jsx", import.meta.url), "utf8");
   assert.match(component, /音を試す/);
-  assert.ok(component.includes("{demoMode ? <button"));
+  assert.ok(component.includes("{demoMode ? <><button"));
   assert.ok(component.includes('test("staffCall")}>呼出音を試す（隔離）'));
   assert.match(component, /音を有効にする/);
   assert.match(component, /ON（音声未有効）/);
@@ -550,10 +550,11 @@ test("rendered switch invokes activation, never test; ON survives order and volu
   source = source.replace(/import { useEffect, useRef, useState } from "react";/, "const { useEffect, useRef, useState } = globalThis.__kitchenSoundHooks;");
   source = source.replace('"./kitchen-api.js"', JSON.stringify(new URL("../src/kitchen-api.js", import.meta.url).href));
   source = source.replace('"./kitchen-order-sound.js"', JSON.stringify(new URL("../src/kitchen-order-sound.js", import.meta.url).href));
-  const transformed = await transformWithEsbuild(source, "KitchenOrderSound.jsx", { jsx: "transform", jsxFactory: "globalThis.__kitchenSoundHooks.element" });
+  const transformed = await transformWithEsbuild(source, "KitchenOrderSound.jsx", { jsx: "transform", jsxFactory: "globalThis.__kitchenSoundHooks.element", jsxFragment: "globalThis.__kitchenSoundHooks.fragment" });
   let index = 0, component, props, tree; const slots = [], effects = [];
   const same = (a,b) => a && b && a.length === b.length && a.every((v,i) => Object.is(v,b[i]));
   const hooks = {
+    fragment: Symbol.for("test.fragment"),
     element: (type, attributes, ...children) => ({ type, props: { ...attributes, children } }),
     useRef: value => { const i=index++; return slots[i] || (slots[i]={current:value}); },
     useState: value => { const i=index++; if (!slots[i]) slots[i]={value:typeof value==='function'?value():value}; return [slots[i].value, v => { slots[i].value=typeof v==='function'?v(slots[i].value):v; }]; },
@@ -652,4 +653,50 @@ test("checkout notification and preview each schedule one three-tone group, with
     controller.disable();
     assert.ok(oscillators.every(node => node.stopCalls === 2));
   } finally { controller.dispose(); }
+});
+
+test("a requested checkout observed while sound activation is pending plays once after baseline", async () => {
+  let resolveBaseline;
+  const f = fixture({
+    nowEpoch: () => 1000,
+    loadBaseline: () => new Promise(resolve => { resolveBaseline = resolve; }),
+  });
+  f.controller.observe([]);
+  const enabling = f.controller.enable();
+  const arrivedDuringActivation = { checkoutRequestId: "checkout-during-enable", status: "requested", requestedAtMs: 1001 };
+  f.advance(20);
+  f.controller.observe([], { checkoutRequests: [arrivedDuringActivation], requestStartedAt: 15 });
+  assert.deepEqual(f.playKinds, []);
+  resolveBaseline({ orders: [], staffCalls: [], checkoutRequests: [] });
+  await enabling;
+  assert.deepEqual(f.playKinds, ["checkout"]);
+  f.controller.observe([], { checkoutRequests: [arrivedDuringActivation], requestStartedAt: 30 });
+  assert.deepEqual(f.playKinds, ["checkout"]);
+});
+
+test("existing baseline checkout observed while enabling stays silent", async () => {
+  let resolveBaseline;
+  const existing = { checkoutRequestId: "checkout-before-enable", status: "requested", requestedAtMs: 999 };
+  const f = fixture({
+    nowEpoch: () => 1000,
+    loadBaseline: () => new Promise(resolve => { resolveBaseline = resolve; }),
+  });
+  f.controller.observe([]);
+  const enabling = f.controller.enable();
+  f.controller.observe([], { checkoutRequests: [existing], requestStartedAt: 15 });
+  resolveBaseline({ orders: [], staffCalls: [], checkoutRequests: [existing] });
+  await enabling;
+  assert.deepEqual(f.playKinds, []);
+  assert.deepEqual(JSON.parse(f.store.getItem("test")).seenCheckoutIds, [existing.checkoutRequestId]);
+});
+
+test("new checkout created after activation is not lost to a pre-activation snapshot", async () => {
+  const f = fixture({ nowEpoch: () => 1000 });
+  f.controller.observe([]);
+  await f.controller.enable();
+  const arrivedAfterActivation = { checkoutRequestId: "checkout-after-enable", status: "requested", requestedAtMs: 1001 };
+  f.controller.observe([], { checkoutRequests: [arrivedAfterActivation], requestStartedAt: 9 });
+  assert.deepEqual(f.playKinds, ["checkout"]);
+  f.controller.observe([], { checkoutRequests: [arrivedAfterActivation], requestStartedAt: 30 });
+  assert.deepEqual(f.playKinds, ["checkout"]);
 });

@@ -36,6 +36,7 @@ import { buildKitchenTableGroups } from "./kitchen-order-board.js";
 import { bootstrapCustomerOrderClient } from "./customer-bootstrap.js";
 import { createCustomerVisitConfigRefresher } from "./customer-visit-config-refresh.js";
 import { CUSTOMER_STAFF_CALL_COOLDOWN_MS, customerStaffCallCooldownKey, customerStaffCallCooldownSeconds, isCustomerStaffCallSuccessNotice, isMatchingCustomerStaffCallResolution, parseCustomerStaffCallCooldown } from "./customer-staff-call.js";
+import { beginCheckoutRead } from "./customer-checkout-state.js";
 import { createCustomerMenuState, customerMenuStateReducer } from "./customer-menu-state.js";
 import { createCustomerCheckoutReconnectHandler, isMatchingCustomerCheckoutReconnectVisit } from "./customer-checkout-reconnect.js";
 import { addCustomerCartSelection, customerCartRows, removeCustomerCartSelection } from "./customer-cart.js";
@@ -926,7 +927,7 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
   const [apiOrders, setApiOrders] = useState([]);
   const [apiHistoryState, setApiHistoryState] = useState({ loading: false, error: false });
   const [historyRefreshKey, setHistoryRefreshKey] = useState(0);
-  const [checkoutState, setCheckoutState] = useState({ loading: false, error: false, errorDetails: null, checkout: null, visitContextId: null });
+  const [checkoutState, setCheckoutState] = useState({ loading: false, error: false, errorDetails: null, checkout: null, visitContextId: null, loaded: false });
   const [checkoutRequestError, setCheckoutRequestError] = useState(false);
   const [checkoutReceiptRequested, setCheckoutReceiptRequested] = useState(false);
   const [checkoutSubmitting, setCheckoutSubmitting] = useState(false);
@@ -1029,7 +1030,7 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
     checkoutRequestIdRef.current = null;
     checkoutPreviousRef.current = null;
     setCheckoutReceiptRequested(false);
-    setCheckoutState({ loading: false, error: false, errorDetails: null, checkout: null, visitContextId: checkoutVisitContextId });
+    setCheckoutState({ loading: false, error: false, errorDetails: null, checkout: null, visitContextId: checkoutVisitContextId, loaded: false });
     setCheckoutRequestError(false);
     if (previousVisitContextId) setModal((current) => current === "checkout" ? null : current);
     else if (checkoutVisitContextId && modal === "checkout") setCheckoutRefreshKey((current) => current + 1);
@@ -1181,7 +1182,7 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
     if (refreshRequested) checkoutRefreshHandledRef.current = checkoutRefreshKey;
     let cancelled = false;
     const requestGeneration = checkoutReadGenerationRef.current;
-    if (modal === "checkout") setCheckoutState((current) => ({ ...current, loading: true, error: false, errorDetails: null, visitContextId: checkoutVisitContextId }));
+    if (modal === "checkout") setCheckoutState((current) => beginCheckoutRead(current, checkoutVisitContextId));
     void orderClient.getCheckout().then((nextCheckout) => {
       if (cancelled || requestGeneration !== checkoutReadGenerationRef.current) return;
       const previous = checkoutPreviousRef.current;
@@ -1197,13 +1198,13 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
         }
       }
       if (nextCheckout) setCheckoutReceiptRequested(nextCheckout.receiptRequested === true);
-      setCheckoutState({ loading: false, error: false, errorDetails: null, checkout: nextCheckout, visitContextId: checkoutVisitContextId });
+      setCheckoutState({ loading: false, error: false, errorDetails: null, checkout: nextCheckout, visitContextId: checkoutVisitContextId, loaded: true });
     }).catch((error) => {
       if (!cancelled && requestGeneration === checkoutReadGenerationRef.current) {
         const code = typeof error?.code === "string" && /^[A-Z0-9_:-]{1,64}$/.test(error.code) ? error.code : "UNKNOWN_ERROR";
         const status = Number.isInteger(error?.status) && error.status > 0 ? error.status : null;
         const stage = ["configuration", "network", "http", "response"].includes(error?.stage) ? error.stage : "client";
-        setCheckoutState((current) => ({ ...current, loading: false, error: true, errorDetails: { stage, status, code }, checkout: null, visitContextId: checkoutVisitContextId }));
+        setCheckoutState((current) => ({ ...current, loading: false, error: true, errorDetails: { stage, status, code }, checkout: null, visitContextId: checkoutVisitContextId, loaded: true }));
       }
     });
     return () => { cancelled = true; };
@@ -1654,11 +1655,11 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
       if (checkoutVisitContextRef.current !== requestVisitContextId) return;
       checkoutPreviousRef.current = checkout;
       setCheckoutRequestError(false);
-      setCheckoutState({ loading: false, error: false, errorDetails: null, checkout, visitContextId: requestVisitContextId });
+      setCheckoutState({ loading: false, error: false, errorDetails: null, checkout, visitContextId: requestVisitContextId, loaded: true });
     } catch (error) {
       if (checkoutVisitContextRef.current === requestVisitContextId) {
         setCheckoutRequestError(true);
-        setCheckoutState((current) => ({ ...current, loading: false, error: false, errorDetails: null, visitContextId: requestVisitContextId }));
+        setCheckoutState((current) => ({ ...current, loading: false, error: false, errorDetails: null, visitContextId: requestVisitContextId, loaded: true }));
 
       }
     } finally { setCheckoutSubmitting(false); }
@@ -1671,7 +1672,7 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
     checkoutRequestIdRef.current = null;
     checkoutPreviousRef.current = null;
     setCheckoutReceiptRequested(false);
-    setCheckoutState({ loading: false, error: false, errorDetails: null, checkout: null, visitContextId: checkoutVisitContextId });
+    setCheckoutState({ loading: false, error: false, errorDetails: null, checkout: null, visitContextId: checkoutVisitContextId, loaded: true });
         setCheckoutRequestError(false);
   };
   const closeRideGuidance = () => {

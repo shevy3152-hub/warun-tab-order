@@ -106,7 +106,7 @@ export function createKitchenSoundEngine({ env = globalThis, onStateChange = () 
   };
 }
 
-export function createKitchenOrderSound({ storage, storageKey, engine, loadBaseline = async () => [], now = () => performance.now(), onChange = () => {}, setTimer = setTimeout, clearTimer = clearTimeout, timeoutMs = 8000 } = {}) {
+export function createKitchenOrderSound({ storage, storageKey, engine, loadBaseline = async () => [], now = () => performance.now(), nowEpoch = () => Date.now(), onChange = () => {}, setTimer = setTimeout, clearTimer = clearTimeout, timeoutMs = 8000 } = {}) {
   const settings = readKitchenSoundSettings(storage, storageKey);
   let storageAvailable = settings.storageAvailable;
   const seen = new Set(settings.seenIds);
@@ -117,6 +117,8 @@ export function createKitchenOrderSound({ storage, storageKey, engine, loadBasel
   let requestedOn = settings.requestedOn;
   let initialized = false;
   let enabledAt = Infinity;
+  let activationEpochAt = Infinity;
+  let enablingCheckouts = new Map();
   let generation = 0;
   let disposed = false;
   let status = requestedOn ? "needs-activation" : "off";
@@ -155,6 +157,9 @@ export function createKitchenOrderSound({ storage, storageKey, engine, loadBasel
     generation += 1;
     cancelPending();
     enabledAt = Infinity;
+    for (const checkout of enablingCheckouts.values()) seenCheckoutIds.add(checkout.checkoutRequestId);
+    enablingCheckouts.clear();
+    persist();
     engine.stop();
     status = "blocked";
     if (stage === "audio") audioStatus = "failed";
@@ -194,6 +199,8 @@ export function createKitchenOrderSound({ storage, storageKey, engine, loadBasel
       audioStatus = "pending";
       baselineStatus = "pending";
       enabledAt = Infinity;
+      activationEpochAt = nowEpoch();
+      enablingCheckouts.clear();
       const activationStartedAt = now();
       message = "有効化中：音声と厨房の新着一覧を確認しています。クリックで中止できます。";
       publish();
@@ -234,6 +241,16 @@ export function createKitchenOrderSound({ storage, storageKey, engine, loadBasel
         requestedOn = true;
         enabledAt = activationStartedAt;
         message = "通知音ON：新着注文・スタッフ呼出・お会計依頼を受信すると鳴ります。";
+        const baselineCheckoutIds = new Set(baselineCheckouts.map((checkout) => checkout?.checkoutRequestId).filter((id) => typeof id === "string" && id));
+        for (const checkout of enablingCheckouts.values()) {
+          const requestedAt = Number(checkout.requestedAtMs);
+          const createdAfterActivation = Number.isFinite(requestedAt) ? requestedAt >= activationEpochAt : !baselineCheckoutIds.has(checkout.checkoutRequestId);
+          if (checkout.status === "requested" && createdAfterActivation && volume > 0) {
+            try { engine.play("checkout"); } catch (error) { fail(error); break; }
+          }
+          seenCheckoutIds.add(checkout.checkoutRequestId);
+        }
+        enablingCheckouts.clear();
         persist();
         publish();
       } catch (error) { if (!disposed && attempt === generation) fail(error); }
@@ -245,6 +262,8 @@ export function createKitchenOrderSound({ storage, storageKey, engine, loadBasel
       audioStatus = "idle";
       baselineStatus = "idle";
       enabledAt = Infinity;
+      for (const checkout of enablingCheckouts.values()) seenCheckoutIds.add(checkout.checkoutRequestId);
+      enablingCheckouts.clear();
       requestedOn = false;
       engine.stop();
       status = "off";
@@ -290,23 +309,32 @@ export function createKitchenOrderSound({ storage, storageKey, engine, loadBasel
       for (const checkout of checkoutRequests) {
         const id = checkout?.checkoutRequestId;
         if (typeof id !== "string" || !id || seenCheckoutIds.has(id)) continue;
+        if (status === "enabling" && requestedOn) {
+          enablingCheckouts.set(id, checkout);
+          continue;
+        }
         seenCheckoutIds.add(id);
         addedCheckouts.push(checkout);
       }
       if (addedOrders.length || addedCalls.length || addedCheckouts.length) persist();
-      if (first || status !== "on" || !Number.isFinite(requestStartedAt) || requestStartedAt < enabledAt) return;
+      if (first) return;
       const notifications = [];
+      const freshSnapshot = status === "on" && Number.isFinite(requestStartedAt) && requestStartedAt >= enabledAt;
       for (const order of addedOrders) {
+        if (!freshSnapshot) continue;
         // An unseen restored/edited order is not a newly created order.
         if (!["new", "active"].includes(order.status) || (order.version !== 1 && !(allowUnversioned && order.version == null))) continue;
         notifications.push("order");
       }
       for (const call of addedCalls) {
+        if (!freshSnapshot) continue;
         if (!Number.isFinite(Number(call.createdAtMs ?? (call.createdAt ? Date.parse(call.createdAt) : NaN)))) continue;
         notifications.push("staffCall");
       }
       for (const checkout of addedCheckouts) {
-        if (checkout.status === "requested") notifications.push("checkout");
+        const requestedAt = Number(checkout.requestedAtMs);
+        const createdAfterActivation = Number.isFinite(requestedAt) ? requestedAt >= activationEpochAt : freshSnapshot;
+        if (status === "on" && checkout.status === "requested" && createdAfterActivation) notifications.push("checkout");
       }
       for (const notification of notifications) {
         try { if (volume > 0) engine.play(notification); } catch { fail(); break; }

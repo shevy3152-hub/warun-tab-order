@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { beginCheckoutRead } from "../src/customer-checkout-state.js";
 
 const source = await readFile(new URL("../src/App.jsx", import.meta.url), "utf8");
 const orderOutbox = await readFile(new URL("../src/order-outbox.js", import.meta.url), "utf8");
@@ -54,8 +55,8 @@ test("cancelled checkout hides the old total and uses the existing customer re-r
 
 test("only a current ready checkout response can provide an amount to the customer modal", () => {
   assert.match(modal, /const ready = checkout\?\.status === "ready" && Number\.isSafeInteger\(checkout\.grandTotalYen\)/);
-  assert.match(source, /setCheckoutState\(\(current\) => \(\{ \.\.\.current, loading: true, error: false, errorDetails: null, visitContextId: checkoutVisitContextId \}\)\)/);
-  assert.match(source, /setCheckoutState\(\{ loading: false, error: false, errorDetails: null, checkout: nextCheckout, visitContextId: checkoutVisitContextId \}\)/);
+  assert.match(source, /setCheckoutState\(\(current\) => beginCheckoutRead\(current, checkoutVisitContextId\)\)/);
+  assert.match(source, /setCheckoutState\(\{ loading: false, error: false, errorDetails: null, checkout: nextCheckout, visitContextId: checkoutVisitContextId, loaded: true \}\)/);
   assert.match(orderOutbox, /checkout\.status === "ready" && Number\.isSafeInteger\(checkout\.grandTotalYen\) \? \{ grandTotalYen: checkout\.grandTotalYen \} : \{\}/);
 });
 
@@ -71,7 +72,7 @@ test("checkout GET retry renders safe diagnostics and never sends a checkout req
 
 test("checkout modal state is scoped to the current visit and ignores late prior-visit responses", () => {
   assert.match(source, /checkoutVisitContextRef\.current = checkoutVisitContextId/);
-  assert.match(source, /setCheckoutState\(\{ loading: false, error: false, errorDetails: null, checkout: nextCheckout, visitContextId: checkoutVisitContextId \}\)/);
+  assert.match(source, /setCheckoutState\(\{ loading: false, error: false, errorDetails: null, checkout: nextCheckout, visitContextId: checkoutVisitContextId, loaded: true \}\)/);
   assert.match(source, /\[apiMode, modal, orderClient, checkoutRefreshKey, checkoutVisitContextId\]/);
   assert.match(source, /checkoutVisitContextRef\.current !== requestVisitContextId\) return/);
   assert.match(source, /modal === "checkout" && \(!apiMode \|\| checkoutState\.visitContextId === checkoutVisitContextId\)/);
@@ -96,4 +97,18 @@ test("checkout request modal includes the specified exit notice without another 
   assert.match(modal, /checkout-customer-exit-notice[^>]*>会計後は10分ほどで退店して頂きます。/);
   assert.match(modal, /手書き領収書を希望する/);
   assert.doesNotMatch(modal, /checkbox|確認してから依頼/);
+});
+
+test("same-visit checkout refetch keeps the rendered state stable while the GET is pending", () => {
+  const requestForm = { loading: false, error: false, errorDetails: null, checkout: null, visitContextId: "visit-a", loaded: true };
+  const waiting = { ...requestForm, checkout: { status: "requested" } };
+  const ready = { ...requestForm, checkout: { status: "ready", grandTotalYen: 1234 } };
+  assert.equal(beginCheckoutRead(requestForm, "visit-a"), requestForm);
+  assert.equal(beginCheckoutRead(waiting, "visit-a"), waiting);
+  assert.equal(beginCheckoutRead(ready, "visit-a"), ready);
+  const firstRead = beginCheckoutRead({ ...requestForm, loaded: false }, "visit-a");
+  assert.equal(firstRead.loading, true);
+  const newVisitRead = beginCheckoutRead(waiting, "visit-b");
+  assert.equal(newVisitRead.loading, true);
+  assert.equal(newVisitRead.visitContextId, "visit-b");
 });
