@@ -158,7 +158,7 @@ h1, h2, h3, p { margin: 0; }
 .customer-theme-preview__rail[data-customer-theme="japanese-halloween"]:not(.is-collapsed) button:focus-visible { outline: 3px solid var(--customer-theme-rail-focus); outline-offset: 2px; }
 .category-nav__placeholder { min-height: 55px; border-bottom: 1px solid rgb(255 255 255 / 45%); display: grid; grid-template-columns: 62px minmax(0, 1fr); column-gap: 5px; align-items: center; color: rgb(255 255 255 / 55%); }
 .category-nav__placeholder b { font: 700 20px/1 var(--font-display); text-align: center; }
-.customer-hours { margin: auto 14px 8px; display: flex; flex-direction: column; gap: 4px; color: #fff; }
+.customer-hours { margin: auto 14px 8px; display: flex; flex-direction: column; gap: 4px; color: #fff; transform: translateY(5px); }
 .customer-hours b { font-size: 12px; }
 .customer-hours span { font: 700 17px/1.2 monospace; letter-spacing: .08em; }
 .customer-hours small { font-size: 11px; }
