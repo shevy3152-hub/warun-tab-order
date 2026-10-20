@@ -410,7 +410,6 @@ h1, h2, h3, p { margin: 0; }
 .checkout-split__control button:disabled { background: #d8d4cd; color: #777; }
 .checkout-split__control strong { display: grid; place-items: center; font-size: 23px; }
 .checkout-split__amount { margin: 0; font-size: 24px; font-weight: 900; }
-.checkout-split__amount::first-letter { color: var(--red); }
 .ride-guidance-customer__select { display: grid; gap: 18px; }
 .ride-guidance-customer__lead { margin: 4px 0 8px; text-align: center; font-size: clamp(23px, 3vw, 32px); line-height: 1.45; font-weight: 900; }
 .ride-guidance-customer__choices { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
