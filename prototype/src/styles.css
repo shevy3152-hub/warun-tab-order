@@ -971,6 +971,7 @@ h1, h2, h3, p { margin: 0; }
 .customer-theme-preview__viewport { width: min(100%, calc(var(--customer-rail-expanded-width) * var(--customer-theme-preview-scale, .62))); height: min(540px, calc(100dvh * var(--customer-theme-preview-scale, .62))); overflow: hidden; }
 .customer-theme-preview__viewport.is-collapsed { width: min(100%, calc(var(--customer-rail-collapsed-width) * var(--customer-theme-preview-scale, .62))); }
 .customer-theme-preview__rail { position: relative; width: var(--customer-rail-expanded-width); height: 100dvh; min-height: 0; overflow: hidden; background: var(--customer-theme-rail-background, var(--red)); color: #fff; padding: 24px; box-sizing: border-box; transform: scale(var(--customer-theme-preview-scale, .62)); transform-origin: top left; touch-action: none; user-select: none; }
+.customer-theme-preview__rail.is-collapsed .customer-title { display: none; }
 .customer-theme-preview__rail.is-collapsed { width: var(--customer-rail-collapsed-width); height: 100dvh; min-height: 0; background: var(--red); padding: 18px 10px; }
 .customer-theme-preview__rail[data-customer-theme="japanese-halloween"]:not(.is-collapsed) .customer-theme-preview__hours { color: var(--customer-theme-rail-foreground); border-top-color: var(--customer-theme-rail-separator); }
 .customer-theme-preview__brand { top: 16px; left: 14px; right: 14px; padding-bottom: 8px; border-bottom: 1px solid rgb(255 255 255 / 65%); font-size: 13px; font-weight: 900; letter-spacing: .08em; }

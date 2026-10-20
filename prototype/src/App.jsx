@@ -615,7 +615,7 @@ function CustomerBusinessHours({ settings, onOpenNotice, guideKey = undefined })
 
 function CustomerRailContent({ expanded, categories, currentCategoryId, onSelectCategory, onExpand, businessHours, onOpenNotice }) {
   return <>
-    <div className="customer-title customer-title--horizontal" data-customer-guide="brand"><span>IZAKAYA WARUN</span></div>
+    <div className="customer-title customer-title--horizontal" data-customer-guide="brand"><span>居酒屋 わるん</span></div>
     {expanded ? <nav className="category-nav" aria-label="大分類カテゴリー" data-customer-guide="categories">
       {categories.map((category, index) => category.isPlaceholder
         ? <span key={category.id} className="category-nav__placeholder" aria-hidden="true"><b>{String(index + 1).padStart(2, "0")}</b><span></span></span>
