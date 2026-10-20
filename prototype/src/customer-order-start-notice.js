@@ -10,6 +10,25 @@ export const DEFAULT_CUSTOMER_ORDER_START_NOTICE = Object.freeze({
   ].join("\n"),
 });
 
+export function hasValidCustomerOrderStartNoticeSettings(settings) {
+  return Boolean(
+    settings
+    && typeof settings === "object"
+    && typeof settings.heading === "string"
+    && settings.heading.trim()
+    && typeof settings.body === "string"
+    && settings.body.trim()
+  );
+}
+
+export function beginCustomerOrderStartNoticeRefresh(currentState) {
+  const state = currentState && typeof currentState === "object" ? currentState : {};
+  if (state.error !== true && hasValidCustomerOrderStartNoticeSettings(state.settings)) {
+    return state.loading === false ? state : { ...state, loading: false };
+  }
+  return { ...state, loading: true, error: false };
+}
+
 function devicePrefix(deviceId) {
   return `${ACKNOWLEDGEMENT_PREFIX}${encodeURIComponent(String(deviceId))}:`;
 }

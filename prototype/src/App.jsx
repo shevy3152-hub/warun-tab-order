@@ -52,7 +52,7 @@ import { DEFAULT_BUSINESS_HOURS, businessHoursDisplay, businessHoursHourLabel, c
 import { DEFAULT_BUSINESS_HOURS_NOTICE, withBusinessHoursNotice } from "./business-hours-notice.js";
 import { CHECKOUT_ADJUSTMENT_TYPES, checkoutAdjustmentTotal, normalizeCheckoutAdjustments, parseFixedAdjustment } from "./checkout-adjustments.js";
 import { buildCustomerMajorCategories } from "./customer-category-navigation.js";
-import { acknowledgeCustomerOrderStartNotice, clearCustomerOrderStartNoticeAcknowledgements, createCustomerOrderStartNoticeScopeKey, DEFAULT_CUSTOMER_ORDER_START_NOTICE, hasCustomerOrderStartNoticeAcknowledgement } from "./customer-order-start-notice.js";
+import { acknowledgeCustomerOrderStartNotice, beginCustomerOrderStartNoticeRefresh, clearCustomerOrderStartNoticeAcknowledgements, createCustomerOrderStartNoticeScopeKey, DEFAULT_CUSTOMER_ORDER_START_NOTICE, hasCustomerOrderStartNoticeAcknowledgement, hasValidCustomerOrderStartNoticeSettings } from "./customer-order-start-notice.js";
 
 const STORAGE_KEY = "izakaya-order-prototype-v3";
 
@@ -850,7 +850,7 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
         if (!cancelled) setOrderStartNoticeState({ loading: false, error: true, settings: null });
         return;
       }
-      setOrderStartNoticeState((current) => ({ ...current, loading: true, error: false }));
+      setOrderStartNoticeState(beginCustomerOrderStartNoticeRefresh);
       try {
         const settings = await orderClient.getOrderStartNotice();
         if (!cancelled) setOrderStartNoticeState({ loading: false, error: false, settings });
@@ -1687,7 +1687,7 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
     ? { deviceId: customerDeviceConfig?.deviceId, tableId: customerDeviceConfig?.tableId, visitContextId: customerDeviceConfig?.visitContextId }
     : { deviceId: device.deviceId, tableId: device.tableId, visitContextId: "demo" });
   const orderStartNoticeReady = Boolean(orderStartNoticeScopeKey);
-  const orderStartNoticeCanContinue = orderStartNoticeReady && !orderStartNoticeState.loading && !orderStartNoticeState.error && Boolean(orderStartNoticeState.settings);
+  const orderStartNoticeCanContinue = orderStartNoticeReady && !orderStartNoticeState.loading && !orderStartNoticeState.error && hasValidCustomerOrderStartNoticeSettings(orderStartNoticeState.settings);
   const orderStartNoticeAcknowledged = orderStartNoticeReady && (
     acknowledgedOrderStartNoticeScope === orderStartNoticeScopeKey
     || hasCustomerOrderStartNoticeAcknowledgement({ scopeKey: orderStartNoticeScopeKey })

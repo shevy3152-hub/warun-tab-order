@@ -7,6 +7,8 @@ import {
   createCustomerOrderStartNoticeScopeKey,
   DEFAULT_CUSTOMER_ORDER_START_NOTICE,
   hasCustomerOrderStartNoticeAcknowledgement,
+  beginCustomerOrderStartNoticeRefresh,
+  hasValidCustomerOrderStartNoticeSettings,
 } from "../src/customer-order-start-notice.js";
 
 class MemoryStorage {
@@ -17,6 +19,44 @@ class MemoryStorage {
   setItem(key, value) { this.#values.set(key, String(value)); }
   removeItem(key) { this.#values.delete(key); }
 }
+
+test("background notice refresh preserves loaded content and enabled presentation", () => {
+  const settings = { heading: "Notice heading", body: "Notice body" };
+  const cachedState = { loading: false, error: false, settings };
+  const beforeFixRefreshState = { ...cachedState, loading: true, error: false };
+  const presentation = (state) => ({
+    headingVisible: Boolean(state.settings?.heading),
+    bodyVisible: hasValidCustomerOrderStartNoticeSettings(state.settings),
+    loadingVisible: state.loading,
+    continueDisabled: state.loading || state.error || !hasValidCustomerOrderStartNoticeSettings(state.settings),
+  });
+
+  assert.deepEqual(presentation(beforeFixRefreshState), {
+    headingVisible: true,
+    bodyVisible: true,
+    loadingVisible: true,
+    continueDisabled: true,
+  });
+  const refreshedState = beginCustomerOrderStartNoticeRefresh(cachedState);
+  assert.strictEqual(refreshedState, cachedState);
+  assert.deepEqual(presentation(refreshedState), {
+    headingVisible: true,
+    bodyVisible: true,
+    loadingVisible: false,
+    continueDisabled: false,
+  });
+});
+
+test("initial, invalid, and failed notice states remain blocked", () => {
+  const initial = beginCustomerOrderStartNoticeRefresh({ loading: true, error: false, settings: null });
+  assert.deepEqual(initial, { loading: true, error: false, settings: null });
+  const invalid = beginCustomerOrderStartNoticeRefresh({ loading: false, error: false, settings: { heading: " ", body: "Terms" } });
+  assert.equal(invalid.loading, true);
+  assert.equal(invalid.error, false);
+  assert.equal(hasValidCustomerOrderStartNoticeSettings({ heading: "Heading", body: " " }), false);
+  const failed = { loading: false, error: true, settings: null };
+  assert.equal(failed.loading || failed.error || !hasValidCustomerOrderStartNoticeSettings(failed.settings), true);
+});
 
 test("notice acknowledgement is scoped to the device, table, and visit context", () => {
   const scope = { deviceId: "device-a", tableId: 1, visitContextId: "visit-a" };
@@ -65,6 +105,9 @@ test("customer notice gates only the customer screen and does not touch orders o
   assert.match(app, /orderClient\.start\(\)/);
   assert.match(customer, /subscribeInvalidations|enqueue/);
   assert.match(customer, /orderStartNoticeState\.settings/);
+  assert.match(customer, /setOrderStartNoticeState\(beginCustomerOrderStartNoticeRefresh\)/);
+  assert.match(customer, /hasValidCustomerOrderStartNoticeSettings\(orderStartNoticeState\.settings\)/);
+  assert.match(customer, /loading: false, error: true, settings: null/);
   assert.match(styles, /customer-order-start-notice__body[\s\S]*?white-space:\s*pre-wrap/);
   assert.match(notice, /customer-order-start-notice__body-scroll[\s\S]*customer-order-start-notice__continue/);
   assert.match(styles, /\.customer-order-start-notice \{ height: 100dvh;[\s\S]*overflow: hidden/);
