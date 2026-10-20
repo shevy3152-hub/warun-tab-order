@@ -37,6 +37,7 @@ import { bootstrapCustomerOrderClient } from "./customer-bootstrap.js";
 import { createCustomerVisitConfigRefresher } from "./customer-visit-config-refresh.js";
 import { CUSTOMER_STAFF_CALL_COOLDOWN_MS, customerStaffCallCooldownKey, customerStaffCallCooldownSeconds, isCustomerStaffCallSuccessNotice, isMatchingCustomerStaffCallResolution, parseCustomerStaffCallCooldown } from "./customer-staff-call.js";
 import { createCustomerMenuState, customerMenuStateReducer } from "./customer-menu-state.js";
+import { createCustomerCheckoutReconnectHandler, isMatchingCustomerCheckoutReconnectVisit } from "./customer-checkout-reconnect.js";
 import { addCustomerCartSelection, customerCartRows, removeCustomerCartSelection } from "./customer-cart.js";
 import { taxExcludedYen } from "./pricing.js";
 import { pairingCodeQrSvg } from "./qr-code.js";
@@ -930,6 +931,7 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
   const [checkoutReceiptRequested, setCheckoutReceiptRequested] = useState(false);
   const [checkoutSubmitting, setCheckoutSubmitting] = useState(false);
   const [checkoutRefreshKey, setCheckoutRefreshKey] = useState(0);
+  const [checkoutReconnectRefresh, setCheckoutReconnectRefresh] = useState({ sequence: 0, visitContextId: null });
   const [submitting, setSubmitting] = useState(false);
   const submitLock = useRef(false);
   const staffCallSubmitLock = useRef(false);
@@ -1011,6 +1013,8 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
   const checkoutRequestIdRef = useRef(null);
   const checkoutPreviousRef = useRef(null);
   const checkoutReadGenerationRef = useRef(0);
+  const checkoutRefreshHandledRef = useRef(0);
+  const checkoutReconnectRefreshAppliedSequenceRef = useRef(0);
   const checkoutVisitContextRef = useRef(checkoutVisitContextId);
   const checkoutAudioRef = useRef(null);
   const checkoutSoundKeysRef = useRef(new Set());
@@ -1132,8 +1136,14 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
     });
     const refreshVisitState = () => {
       setMenuRefreshKey((current) => current + 1);
-      void visitConfigRefresher.refresh();
+      return visitConfigRefresher.refresh();
     };
+    const refreshCheckoutAfterReconnect = createCustomerCheckoutReconnectHandler({
+      refreshVisitState,
+      onRefreshReady: (visitContextId) => {
+        if (!cancelled) setCheckoutReconnectRefresh((current) => ({ sequence: current.sequence + 1, visitContextId }));
+      },
+    });
     const unsubscribe = typeof orderClient.subscribeInvalidations === "function" ? orderClient.subscribeInvalidations((event) => {
       const resource = event?.payload?.resource ?? event?.resource;
       if (resource === "menu") setMenuRefreshKey((current) => current + 1);
@@ -1149,7 +1159,7 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
       }
       if (resource === "orders") setHistoryRefreshKey((current) => current + 1);
       if (resource === "checkout" || String(event?.payload?.type || event?.type || "").startsWith("checkout.")) setCheckoutRefreshKey((current) => current + 1);
-    }, { onReconnect: refreshVisitState, onAuthorizationFailure: blockCartAfterAuthenticationFailure }) : () => {};
+    }, { onReconnect: refreshCheckoutAfterReconnect, onAuthorizationFailure: blockCartAfterAuthenticationFailure }) : () => {};
     return () => {
       cancelled = true;
       visitConfigRefresher.stop();
@@ -1158,7 +1168,17 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
   }, [apiMode, orderClient, onCustomerDeviceConfigChange, customerDeviceConfig?.deviceId, checkoutVisitContextId]);
 
   useEffect(() => {
-    if (!apiMode || !orderClient?.getCheckout || (modal !== "checkout" && checkoutRefreshKey === 0)) return undefined;
+    if (!apiMode || checkoutReconnectRefresh.sequence <= checkoutReconnectRefreshAppliedSequenceRef.current) return undefined;
+    if (!isMatchingCustomerCheckoutReconnectVisit({ refreshedVisitContextId: checkoutReconnectRefresh.visitContextId, currentVisitContextId: checkoutVisitContextId })) return undefined;
+    checkoutReconnectRefreshAppliedSequenceRef.current = checkoutReconnectRefresh.sequence;
+    setCheckoutRefreshKey((current) => current + 1);
+  }, [apiMode, checkoutReconnectRefresh.sequence, checkoutReconnectRefresh.visitContextId, checkoutVisitContextId]);
+
+  useEffect(() => {
+    if (!apiMode || !orderClient?.getCheckout) return undefined;
+    const refreshRequested = checkoutRefreshKey !== checkoutRefreshHandledRef.current;
+    if (modal !== "checkout" && !refreshRequested) return undefined;
+    if (refreshRequested) checkoutRefreshHandledRef.current = checkoutRefreshKey;
     let cancelled = false;
     const requestGeneration = checkoutReadGenerationRef.current;
     if (modal === "checkout") setCheckoutState((current) => ({ ...current, loading: true, error: false, errorDetails: null, visitContextId: checkoutVisitContextId }));
@@ -1183,7 +1203,7 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
         const code = typeof error?.code === "string" && /^[A-Z0-9_:-]{1,64}$/.test(error.code) ? error.code : "UNKNOWN_ERROR";
         const status = Number.isInteger(error?.status) && error.status > 0 ? error.status : null;
         const stage = ["configuration", "network", "http", "response"].includes(error?.stage) ? error.stage : "client";
-        setCheckoutState((current) => ({ ...current, loading: false, error: true, errorDetails: { stage, status, code }, visitContextId: checkoutVisitContextId }));
+        setCheckoutState((current) => ({ ...current, loading: false, error: true, errorDetails: { stage, status, code }, checkout: null, visitContextId: checkoutVisitContextId }));
       }
     });
     return () => { cancelled = true; };
