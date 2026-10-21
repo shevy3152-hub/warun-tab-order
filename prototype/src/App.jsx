@@ -1768,7 +1768,7 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
                 const isKushikatsu = item.isKushikatsuVirtual === true;
                 const canOpenDetail = Boolean(item.detail?.imageUri || item.imageUri);
                 const listComment = isDrink ? item.description?.trim() : "";
-                const foodDescription = isFood ? item.description?.trim() : "";
+                const foodDescription = (isFood || currentMajorCategory.id === "winter") ? item.description?.trim() : "";
                 const row = isSake ? (
                   <article className={`menu-row sake-menu-row ${item.isSoldOut ? "is-sold-out" : ""}`} key={item.id}>
                     <div className="menu-row__index">{String(index + 1).padStart(2, "0")}</div>

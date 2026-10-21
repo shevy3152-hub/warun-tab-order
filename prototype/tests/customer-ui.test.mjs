@@ -923,7 +923,7 @@ test("drink list comments reuse description without changing detail behavior", (
 test("food rows show a clamped description and reserve the thumbnail column only for real images", () => {
   assert.match(appSource, /const isFood = currentMajorCategory\.id === "food"/);
   assert.match(customerScreen, /const showListImage = listImageVisible\(item\) && Boolean\(item\.imageUri\)/);
-  assert.match(customerScreen, /const foodDescription = isFood \? item\.description\?\.trim\(\) : ""/);
+  assert.match(customerScreen, /const foodDescription = \(isFood \|\| currentMajorCategory\.id === "winter"\) \? item\.description\?\.trim\(\) : ""/);
   assert.match(customerScreen, /className=\{`menu-row \$\{isFood \? "food-menu-row" : ""\}/);
   assert.match(customerScreen, /className="menu-row__food-description">\{foodDescription\}<\/small>/);
   assert.match(styles, /\.food-menu-row \{[\s\S]*grid-template-columns: 60px 72px minmax\(0, 1fr\) 104px 160px[\s\S]*min-height: 112px/);
@@ -935,6 +935,11 @@ test("food rows show a clamped description and reserve the thumbnail column only
   assert.match(appSource, /\{descriptionFieldLabel\}<textarea name="description"/);
 });
 
+test("winter category descriptions render without broadening shared food behavior", () => {
+  assert.match(appSource, /const isFood = currentMajorCategory\.id === "food"/);
+  assert.match(customerScreen, /const foodDescription = \(isFood \|\| currentMajorCategory\.id === "winter"\) \? item\.description\?\.trim\(\) : ""/);
+  assert.match(customerScreen, /\{foodDescription \? <small className="menu-row__food-description">\{foodDescription\}<\/small> : null\}/);
+});
 test("reservation-only customer rows show only the reservation label", () => {
   assert.match(customerScreen, /className="reservation-only-label"><b>予約限定<\/b><\/div>/);
   assert.doesNotMatch(customerScreen, /スタッフへお声がけください/);
