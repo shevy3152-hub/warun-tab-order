@@ -762,7 +762,6 @@ function CustomerOrderStartNotice({ ready, settings, loading, error, onContinue,
   return <main className="customer-order-start-notice">
     <section className="customer-order-start-notice__card" aria-labelledby="customer-order-start-notice-title">
       <header className="customer-order-start-notice__heading">
-        <p className="customer-order-start-notice__eyebrow">店舗の利用ルール</p>
         <h1 id="customer-order-start-notice-title">{settings?.heading || "注文前の確認"}</h1>
       </header>
       <div className="customer-order-start-notice__body-scroll">
@@ -773,7 +772,7 @@ function CustomerOrderStartNotice({ ready, settings, loading, error, onContinue,
         {error ? <div className="customer-order-start-notice__error" role="alert"><p>注意事項を取得できません。通信状態を確認してください。</p><button type="button" className="button button--outline" onClick={onRetry}>再取得</button></div> : null}
         {!ready && !loading && !error ? <p className="customer-order-start-notice__status" role="status">来店情報を確認しています。</p> : null}
       </div>
-      <button className="customer-order-start-notice__continue" type="button" disabled={!ready} onClick={onContinue}>確認して注文を開始する</button>
+      <button className="customer-order-start-notice__continue" type="button" disabled={!ready} onClick={onContinue}>了承して注文へ進む</button>
     </section>
   </main>;
 }
@@ -3245,7 +3244,7 @@ function CustomerOrderStartNoticeEditor({ adminApiMode }) {
         <small>{[...state.draft.body].length} / 4000文字</small>
       </div>
       <section className="customer-order-notice-editor__preview" aria-label="客席表示プレビュー">
-        <span>客席プレビュー</span><h3>{state.draft.heading || "見出し"}</h3><p>{state.draft.body || "本文"}</p><button type="button" disabled>確認して注文を開始する</button>
+        <span>客席プレビュー</span><h3>{state.draft.heading || "見出し"}</h3><p>{state.draft.body || "本文"}</p><button type="button" disabled>了承して注文へ進む</button>
       </section>
     </div>
     {state.loading ? <p role="status">設定を読み込んでいます。</p> : null}
