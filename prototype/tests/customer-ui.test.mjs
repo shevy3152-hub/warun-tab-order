@@ -667,6 +667,7 @@ test("major category selection collapses to a 78px rail and the rail reopens it"
   assert.match(styles, /--customer-rail-collapsed-width: 78px/);
   assert.match(styles, /\.customer-app\.customer-app--category-collapsed \{ grid-template-columns: var\(--customer-rail-collapsed-width\)/);
   assert.match(styles, /\.customer-sidebar__collapsed-toggle \{/);
+  assert.match(styles, /\.customer-app--category-collapsed \.customer-sidebar__collapsed-toggle > span:last-child \{[^}]*margin-top: 10px; font-size: 21px; font-weight: 900;[^}]*\}/);
 });
 
 test("business-hours settings use the management API and shared public display", () => {
