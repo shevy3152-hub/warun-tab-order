@@ -11,6 +11,7 @@ const appSource = await readFile(new URL("../src/App.jsx", import.meta.url), "ut
 const styles = await readFile(new URL("../src/styles.css", import.meta.url), "utf8");
 const customerScreen = appSource.slice(appSource.indexOf("function CustomerScreen"), appSource.indexOf("const staffNavItems"));
 const visitConfigRefreshSource = await readFile(new URL("../src/customer-visit-config-refresh.js", import.meta.url), "utf8");
+const checkoutReconnectSource = await readFile(new URL("../src/customer-checkout-reconnect.js", import.meta.url), "utf8");
 const staffCallSource = await readFile(new URL("../src/customer-staff-call.js", import.meta.url), "utf8");
 
 test("CustomerScreen renders menu prices but no cart or customer-history totals", () => {
@@ -195,13 +196,13 @@ test("customer menu uses major category navigation with a collapsible rail", () 
   assert.match(customerScreen, /majorNavOpen/);
   assert.match(customerScreen, /customer-app--category-collapsed/);
   assert.match(appSource, /大分類カテゴリー/);
-  assert.match(appSource, /IZAKAYA WARUN/);
-  assert.doesNotMatch(customerScreen, /IZAKAYA WARUN[\s\S]*お品書き/);
+  assert.match(appSource, /居酒屋 わるん/);
+  assert.doesNotMatch(customerScreen, /居酒屋 わるん[\s\S]*お品書き/);
   assert.match(appSource, /id: "drink", name: "飲み物"/);
   assert.match(appSource, /id: "food", name: "お食事"/);
   assert.match(appSource, /id: "seasonal", name: "", isPlaceholder: true/);
   assert.doesNotMatch(customerScreen, /customer-system-label|vertical-copy|IZAKAYA<br \/>ORDER<br \/>SYSTEM/);
-  assert.match(styles, /\.customer-title--horizontal \{[\s\S]*transform: translateY\(-5px\)/);
+  assert.match(styles, /\.customer-title--horizontal \{[\s\S]*transform: translateY\(-8px\)/);
   assert.match(styles, /\.category-nav \{ margin-top: 18px; padding-top: 155px; display: grid; \}/);
   assert.match(styles, /\.customer-title--horizontal strong \{ font-size: clamp\(36px, 4vw, 44px\); \}/);
   assert.match(appSource, /<span>現在<\/span>[\s\S]*メインカテゴリーに戻る/);
@@ -374,7 +375,13 @@ test("customer refreshes menu and device context after session invalidations and
     /if\s*\(\s*resource\s*===\s*["']deviceConfig["']\s*\)/,
   );
   assert.match(deviceConfigBody, /\brefreshVisitState\s*\(\s*\)/);
-  assert.match(customerScreen, /onReconnect: refreshVisitState/);
+  assert.match(customerScreen, /const refreshCheckoutAfterReconnect = createCustomerCheckoutReconnectHandler\(\{\s*refreshVisitState,/);
+  assert.match(customerScreen, /onReconnect:\s*refreshCheckoutAfterReconnect\b/);
+  const reconnectHandlerBody = extractIfStatementBody(
+    checkoutReconnectSource,
+    /return async function refreshCheckoutAfterReconnect\(\)/,
+  );
+  assert.match(reconnectHandlerBody, /config\s*=\s*await\s+refreshVisitState\(\s*\)/);
   assert.match(customerScreen, /getConfig: \(options\) => orderClient\.getDeviceConfig\(options\)/);
   assert.match(customerScreen, /onCustomerDeviceConfigChange\?\.\(\{ \.\.\.currentConfig, deviceId: customerDeviceConfig\?\.deviceId \}\)/);
   assert.match(customerScreen, /currentConfig\.visitContextId !== pinnedVisitContextId/);
@@ -667,7 +674,7 @@ test("major category selection collapses to a 78px rail and the rail reopens it"
   assert.match(styles, /--customer-rail-collapsed-width: 78px/);
   assert.match(styles, /\.customer-app\.customer-app--category-collapsed \{ grid-template-columns: var\(--customer-rail-collapsed-width\)/);
   assert.match(styles, /\.customer-sidebar__collapsed-toggle \{/);
-  assert.match(styles, /\.customer-app--category-collapsed \.customer-sidebar__collapsed-toggle > span:last-child \{[^}]*margin-top: 10px; font-size: 21px; font-weight: 900;[^}]*\}/);
+  assert.match(styles, /\.customer-app--category-collapsed \.customer-sidebar__collapsed-toggle > span:last-child \{[^}]*margin-top: auto; font-size: 18px; font-weight: 900;[^}]*\}/);
 });
 
 test("business-hours settings use the management API and shared public display", () => {
