@@ -572,6 +572,10 @@ h1, h2, h3, p { margin: 0; }
 .kitchen-add-order-modal .modal-lead { padding: 0; font-size: 14px; line-height: 1.35; }
 .kitchen-add-order-form { height: 100%; min-width: 0; display: flex; flex-direction: column; }
 .kitchen-add-order-scroll { min-height: 0; overflow: hidden; overscroll-behavior: contain; display: flex; flex-direction: column; gap: 14px; padding: 0 2px 4px 0; }
+.kitchen-add-order-scroll[hidden] { display: none; }
+.kitchen-add-order-pending { min-height: 0; overflow-y: auto; display: grid; align-content: start; gap: 14px; }
+.kitchen-add-order-pending h3, .kitchen-add-order-pending p { margin: 0; }
+.kitchen-add-order-pending article { display: grid; gap: 8px; padding: 14px; border: 2px solid var(--red); background: #fff2e8; overflow-wrap: anywhere; }
 .kitchen-add-order-form label { display: grid; gap: 5px; font-weight: 900; }
 .kitchen-add-order-form input, .kitchen-add-order-form select { min-height: 46px; padding: 8px 10px; border: 2px solid var(--line); background: #fffdf8; color: var(--ink); font: inherit; font-weight: 800; }
 .kitchen-add-order-tabs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }

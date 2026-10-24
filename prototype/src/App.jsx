@@ -32,6 +32,7 @@ import { claimCustomerDevice, createIndexedDbCredentialStore, loadOrCreateCustom
 import { customerOrderErrorCategory, customerOrderNoticeFromOutboxEvent } from "./customer-order-notice.js";
 import { AdminPairingError, configuredAdminToken, createAdminRideGuidanceContact, deleteAdminRideGuidanceContact, fetchAdminBusinessHours, fetchAdminCheckoutRequests, fetchAdminCustomerOrderStartNotice, fetchAdminCustomerThemeConfig, fetchAdminDiagnostics, fetchAdminMenu, fetchAdminSessionMenuAccess, fetchArchivedAdminMenuItems, previewAdminMenuItemLifecycle, executeAdminMenuItemLifecycle, restoreArchivedAdminMenuItem, allowAdminSessionMenuItem, confirmAndCloseAdminEmptySession, revokeAdminSessionMenuItem, fetchAdminOrderHistory, fetchAdminPaymentHistory, fetchAdminPairingPreflight, fetchAdminRideGuidance, issueCustomerPairingCode, revokeAdminDevice, saveAdminBusinessHours, saveAdminCustomerOrderStartNotice, saveAdminCustomerThemeConfig, uploadAdminCustomerThemeImage, saveAdminImageLayouts, saveAdminCategory, saveAdminMenuItem, saveAdminMenuOrdering, saveAdminRideGuidanceOrdering, saveAdminRideGuidancePickup, updateAdminRideGuidanceContact, voidAdminPayment } from "./admin-pairing.js";
 import { adjustKitchenItemUnitPrice, adjustKitchenOrderItemQuantity as adjustKitchenItemQuantityRequest, cancelKitchenCheckout, cancelKitchenOrderItem, closeKitchenTableSession, createKitchenOrder, fetchKitchenCheckoutRequests, fetchKitchenOrderHistory, fetchKitchenPaymentHistory, fetchKitchenSnapshot, kitchenAdditionRequestItem, kitchenApiConfigured, KitchenApiError, markKitchenItemServed, payKitchenCheckout, readyKitchenCheckout, resolveKitchenStaffCall, restoreKitchenOrderItem, saveKitchenCheckoutAdjustments, subscribeKitchenInvalidations, voidKitchenPayment } from "./kitchen-api.js";
+import { createKitchenOrderAttempts } from "./kitchen-order-attempts.js";
 import { buildKitchenTableGroups } from "./kitchen-order-board.js";
 import { bootstrapCustomerOrderClient } from "./customer-bootstrap.js";
 import { createCustomerVisitConfigRefresher } from "./customer-visit-config-refresh.js";
@@ -2032,6 +2033,17 @@ function KitchenCheckoutPanel({ checkouts, sessions, loading, error, onRefresh, 
   </section>;
 }
 
+const KITCHEN_ADDITION_CONFIRMED_KEY = "warun-kitchen-addition-confirmed-v1";
+const KITCHEN_ADDITION_CONFIRMED_EVENT = "warun-kitchen-addition-confirmed";
+
+function notifyKitchenAdditionConfirmed(id) {
+  // Acknowledgements contain only an operation ID. Send before pending cleanup
+  // so another window can close its matching form without inferring success
+  // from a removed intent (which could also mean a definitive rejection).
+  try { window.localStorage.setItem(KITCHEN_ADDITION_CONFIRMED_KEY, JSON.stringify({ id, confirmedAtMs: Date.now() })); } catch { /* The local acknowledgement remains valid. */ }
+  window.dispatchEvent(new CustomEvent(KITCHEN_ADDITION_CONFIRMED_EVENT, { detail: { id } }));
+}
+
 function KitchenScreen({ state, updateState, apiState, checkoutState, onServe, onSaveItemPrice, onAdjustItemQuantity, onChangeItemCancellation, onRefreshCheckouts, onSaveCheckout, onReadyCheckout, onCancelCheckout, onPayCheckout }) {
   const demoMode = window.WARUN_ORDER_MODE === "demo" || new URLSearchParams(window.location.search).get("demo") === "1";
   const [callPanel, setCallPanel] = useState(false);
@@ -2040,6 +2052,8 @@ function KitchenScreen({ state, updateState, apiState, checkoutState, onServe, o
   const [callResolutionError, setCallResolutionError] = useState("");
   const [priceTarget, setPriceTarget] = useState(null);
   const [priceDraft, setPriceDraft] = useState("");
+  const priceDraftRevision = useRef(0);
+  const priceDraftOpenedRevision = useRef(0);
   const [priceBusy, setPriceBusy] = useState(false);
   const [priceError, setPriceError] = useState("");
   const [quantityBusy, setQuantityBusy] = useState(false);
@@ -2054,6 +2068,61 @@ function KitchenScreen({ state, updateState, apiState, checkoutState, onServe, o
   const [historyState, setHistoryState] = useState({ loading: false, error: false, orders: [] });
   const [additionTarget, setAdditionTarget] = useState(null);
   const apiMode = Boolean(apiState);
+  const orderAttemptCallbacksRef = useRef(null);
+  orderAttemptCallbacksRef.current = { onAdjustItemQuantity };
+  const orderAttemptsRef = useRef(null);
+  if (apiMode && !orderAttemptsRef.current) {
+    let storage;
+    try { storage = window.localStorage; } catch { /* Unavailable storage blocks new additions. */ }
+    orderAttemptsRef.current = createKitchenOrderAttempts({
+      storage, idFactory: createKitchenOperationId,
+      sendAddition: (request) => {
+        return createKitchenOrder({ env: window, ...request }).then((result) => {
+          notifyKitchenAdditionConfirmed(request.clientOrderId);
+          return result;
+        });
+      },
+      sendIncrease: (request) => orderAttemptCallbacksRef.current.onAdjustItemQuantity(request),
+    });
+  }
+  const kitchenOrderAttempts = orderAttemptsRef.current;
+  const [orderAttemptState, setOrderAttemptState] = useState(() => kitchenOrderAttempts?.getState() ?? { busy: false, pending: [], error: "" });
+  const [orderAttemptMessage, setOrderAttemptMessage] = useState("");
+  const pendingOrderAttempt = orderAttemptState.pending[0] ?? null;
+  useEffect(() => {
+    if (!kitchenOrderAttempts) return undefined;
+    const unsubscribe = kitchenOrderAttempts.subscribe((next) => { setOrderAttemptState(next); if (next.busy) setOrderAttemptMessage(""); });
+    const refresh = (event) => {
+      if (event?.key === KITCHEN_ADDITION_CONFIRMED_KEY && event.newValue) {
+        try {
+          const { id } = JSON.parse(event.newValue);
+          if (typeof id === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id)) window.dispatchEvent(new CustomEvent(KITCHEN_ADDITION_CONFIRMED_EVENT, { detail: { id } }));
+        } catch { /* Ignore malformed acknowledgement notifications. */ }
+      }
+      kitchenOrderAttempts.refresh();
+    };
+    window.addEventListener("storage", refresh);
+    refresh();
+    return () => { unsubscribe(); window.removeEventListener("storage", refresh); };
+  }, [kitchenOrderAttempts]);
+  const retryPendingKitchenOrder = async (attempt = pendingOrderAttempt) => {
+    if (!attempt) return false;
+    setOrderAttemptMessage("");
+    try {
+      await kitchenOrderAttempts.retry(attempt.id);
+      setOrderAttemptMessage("追加注文の保存を確認しました。");
+      return true;
+    } catch (error) { setOrderAttemptMessage(error.message); return false; }
+  };
+  const retryPendingKitchenQuantity = async () => {
+    const target = priceTarget;
+    const attempt = pendingOrderAttempt;
+    const revision = priceDraftRevision.current;
+    if (attempt?.kind !== "increase" || attempt.request.orderId !== target?.orderId || Number(attempt.request.orderItemId) !== Number(target?.id)) return;
+    if (await retryPendingKitchenOrder(attempt) && revision === priceDraftOpenedRevision.current) {
+      setPriceTarget((current) => current === target && priceDraftRevision.current === revision ? null : current);
+    }
+  };
   const sessions = apiMode ? apiState.sessions : demoMode ? [
     { sessionId: "demo-session-1", tableId: "1", openedAt: "2026-09-25T08:50:00.000Z" },
     { sessionId: "demo-session-2", tableId: "2", openedAt: "2026-09-25T08:40:00.000Z" },
@@ -2116,14 +2185,15 @@ function KitchenScreen({ state, updateState, apiState, checkoutState, onServe, o
   const activeOrders = liveOrders.filter((order) => order.status === "new" || order.status === "active");
   const tables = buildKitchenTableGroups({ orders: boardOrders, sessions, menuItems: state.menuItems, drinkCategoryIds: CUSTOMER_DRINK_CATEGORY_IDS, checkouts: activeCheckouts, staffCalls: activeCalls });
 
-  const submitKitchenAddition = async ({ tableId, sessionId, item }) => {
-    const clientOrderId = createKitchenOperationId();
+  const submitKitchenAddition = async ({ tableId, sessionId, item, onPrepared, onFailure }) => {
     if (apiMode) {
-      await createKitchenOrder({ env: window, tableId, sessionId, clientOrderId, items: [kitchenAdditionRequestItem(item)] });
-      const snapshot = await fetchKitchenSnapshot({ env: window });
+      const result = await kitchenOrderAttempts.submitAddition({ tableId, sessionId, items: [kitchenAdditionRequestItem(item)] }, {
+        onPrepared: (attempt) => onPrepared?.(attempt.id, attempt.request), onFailure,
+      });
       window.dispatchEvent(new CustomEvent("warun-kitchen-refresh"));
-      return snapshot;
+      return result;
     }
+    const clientOrderId = createKitchenOperationId();
     const now = new Date().toISOString();
     const localItem = { id: `${clientOrderId}-item`, menuItemId: item.menuItemId ?? null, nameSnapshot: item.name, kitchenAlias: item.name.slice(0, 40), unitPriceSnapshot: item.priceYen, unitPriceYenSnapshot: item.priceYen, currentUnitPriceYen: item.priceYen, quantity: item.quantity, billableQuantity: item.quantity, lineTotalYen: item.priceYen * item.quantity, isServed: false, isCancelled: false, servedAt: null };
     updateState((current) => ({ ...current, orders: [...current.orders, { id: clientOrderId, clientOrderId, tableId: String(tableId), sessionId, createdAt: now, status: "new", orderOrigin: "kitchen_addition", totalAmount: localItem.lineTotalYen, items: [localItem] }] }));
@@ -2167,6 +2237,7 @@ function KitchenScreen({ state, updateState, apiState, checkoutState, onServe, o
 
   const submitQuantityAdjustment = async (direction, confirmZero = false) => {
     const target = priceTarget;
+    const revision = priceDraftRevision.current;
     if (!target || target.locked) return;
     const currentQuantity = Number(target.billableQuantity ?? target.quantity ?? 0);
     if (!Number.isSafeInteger(currentQuantity) || currentQuantity < 1) return;
@@ -2176,12 +2247,12 @@ function KitchenScreen({ state, updateState, apiState, checkoutState, onServe, o
       setQuantityError("");
       return;
     }
-    const operationId = createKitchenOperationId();
+    const operationId = apiMode && direction === "increase" ? undefined : createKitchenOperationId();
     setQuantityBusy(true);
     setQuantityError("");
     try {
       if (apiMode) {
-        await onAdjustItemQuantity({
+        const operation = {
           orderId: target.orderId,
           orderItemId: target.id,
           direction,
@@ -2189,7 +2260,9 @@ function KitchenScreen({ state, updateState, apiState, checkoutState, onServe, o
           expectedBillableQuantity: currentQuantity,
           confirmZero,
           reason: confirmZero ? quantityReason.trim() || null : null,
-        });
+        };
+        if (direction === "increase") await kitchenOrderAttempts.submitIncrease(operation);
+        else await onAdjustItemQuantity(operation);
       } else {
         updateState((current) => {
           const occurredAtMs = Date.now();
@@ -2304,7 +2377,9 @@ function KitchenScreen({ state, updateState, apiState, checkoutState, onServe, o
       }
       setQuantityZeroConfirm(false);
       setQuantityReason("");
-      setPriceTarget(null);
+      if (direction !== "increase" || revision === priceDraftOpenedRevision.current) {
+        setPriceTarget((current) => current === target && priceDraftRevision.current === revision ? null : current);
+      }
     } catch (error) {
       setQuantityError(error?.status === 409 ? "注文数量または会計状態が更新されています。最新状態を再読み込みしてください。" : error?.message || "数量を変更できませんでした。");
     } finally {
@@ -2392,6 +2467,11 @@ function KitchenScreen({ state, updateState, apiState, checkoutState, onServe, o
   return <StaffShell route="/kitchen" title="新着注文" subtitle="未提供の注文をテーブルごとに表示します。提供完了後も来店・注文履歴は保持されます。" state={state} newOrderCount={activeOrders.length} clock={<time className="kitchen-clock" aria-label={`現在時刻 ${formatTime(new Date())}`}>{formatTime(new Date())}</time>} status={<div className="staff-topbar__right"><div className="staff-call-rail"><button type="button" className="staff-call-button" aria-label="スタッフ呼出" title="スタッフ呼出" onClick={() => openCallPanel()}><Bell size={26} weight="fill" /><span className="kitchen-sidebar__call-label">スタッフ呼出</span> {activeCalls.length ? <b>{activeCalls.length}</b> : null}</button></div>{activeCallGroups.length ? <div className="staff-call-rail__list" aria-label="未対応のスタッフ呼び出し一覧">{activeCallGroups.map((group) => <button type="button" className="staff-call-rail__item" key={group.tableId} aria-label={`テーブル ${group.tableId} のスタッフ呼び出し ${group.calls.length}件を確認`} onClick={() => openCallPanel(group.tableId)}><span>T{group.tableId}</span></button>)}</div> : null}<ConnectionBadge online announceStatus /></div>}>
     <section className="kitchen-content">
       <KitchenOrderSound orders={activeOrders} staffCalls={activeCalls} checkoutRequests={activeCheckouts} suppressStaffCalls={apiState?.suppressStaffCalls} ready={demoMode || (apiMode && !apiState.loading && !apiState.error)} requestStartedAt={apiState?.notificationRequestStartedAt} demoMode={demoMode} />
+      {apiMode && (pendingOrderAttempt || orderAttemptState.error || orderAttemptMessage) ? <div className="checkout-feedback" role="status">
+        {orderAttemptState.error ? <p role="alert">{orderAttemptState.error}</p> : null}
+        {pendingOrderAttempt ? <><p>{pendingOrderAttempt.kind === "addition" ? "テーブル " + pendingOrderAttempt.request.tableId + " の追加注文" : "注文行への1点追加"}：{orderAttemptState.busy ? "保存を確認中です。" : "結果が未確認です。保存した内容で照合します。"}画面を閉じても確認記録を保持します。</p>{pendingOrderAttempt.kind === "addition" ? <p>保存内容：{pendingOrderAttempt.request.items.map((item) => (item.name || state.menuItems.find((menu) => menu.id === item.menuItemId)?.name || "登録商品") + " ×" + item.quantity).join("、")}</p> : null}<button type="button" className="button button--primary" disabled={orderAttemptState.busy} onClick={() => void retryPendingKitchenOrder()}>{orderAttemptState.busy ? "確認中…" : "同じ内容で照合・再送"}</button></> : null}
+        {orderAttemptMessage ? <p>{orderAttemptMessage}</p> : null}
+      </div> : null}
       {apiMode && apiState.loading ? <div className="kitchen-empty"><p>注文を読み込み中です。</p></div> : null}
       {apiMode && apiState.error ? <div className="kitchen-empty" role="alert"><p>注文情報を取得できません。</p></div> : null}
       {!apiMode && !tables.length ? <div className="kitchen-empty"><CheckCircle size={54} weight="thin" /><h2>すべて提供済みです</h2><p>新しい注文が届くと、テーブルごとに表示されます。</p></div> : null}
@@ -2426,7 +2506,7 @@ function KitchenScreen({ state, updateState, apiState, checkoutState, onServe, o
                     <button type="button" className={`order-item__serve${item.isServed ? " is-served" : ""}`} aria-label={item.isServed ? `${kitchenMenuName(item, kitchenAliases)}は提供済み` : `${kitchenMenuName(item, kitchenAliases)}を提供済みにする`} aria-pressed={item.isServed} aria-busy={servingItemKey === `${orderId}:${item.id}`} onClick={() => void toggleServed(orderId, item.id)} disabled={item.isServed || servingLocked || Boolean(servingItemKey)}>{servingItemKey === `${orderId}:${item.id}` ? <span aria-hidden="true">…</span> : item.isServed ? <Check size={20} weight="bold" aria-hidden="true" /> : null}</button>
                   </div>
                   {servingErrors[`${orderId}:${item.id}`] ? <p className="order-item-serve-error" role="alert">{servingErrors[`${orderId}:${item.id}`]}</p> : null}
-                  <button type="button" className="order-item-price" aria-label={`${kitchenMenuName(item, kitchenAliases)}の単価と数量を編集`} onClick={() => { setPriceTarget({ ...item, id: item.id, orderId, locked: cancellationLocked }); setPriceDraft(String(item.currentUnitPriceYen ?? item.adjustedUnitPriceYen ?? item.unitPriceYenSnapshot ?? item.unitPriceSnapshot ?? 0)); setPriceError(""); setQuantityError(""); setQuantityZeroConfirm(false); }} disabled={cancellationLocked}>単価 {yen(item.currentUnitPriceYen ?? item.adjustedUnitPriceYen ?? item.unitPriceYenSnapshot ?? item.unitPriceSnapshot ?? 0)}</button>
+                  <button type="button" className="order-item-price" aria-label={`${kitchenMenuName(item, kitchenAliases)}の単価と数量を編集`} onClick={() => { priceDraftOpenedRevision.current = ++priceDraftRevision.current; setPriceTarget({ ...item, id: item.id, orderId, locked: cancellationLocked }); setPriceDraft(String(item.currentUnitPriceYen ?? item.adjustedUnitPriceYen ?? item.unitPriceYenSnapshot ?? item.unitPriceSnapshot ?? 0)); setPriceError(""); setQuantityError(""); setQuantityZeroConfirm(false); }} disabled={cancellationLocked}>単価 {yen(item.currentUnitPriceYen ?? item.adjustedUnitPriceYen ?? item.unitPriceYenSnapshot ?? item.unitPriceSnapshot ?? 0)}</button>
                   {item.quantityHistory?.length ? <details className="order-item-quantity-history"><summary>数量操作 {item.quantityHistory.length}件</summary>{item.quantityHistory.map((event) => <p key={event.eventId}>{event.action === "added" ? "追加注文 +1点" : "数量 −1点"}・{event.actorLabel || event.actorDeviceId}・{formatDateTime(new Date(event.occurredAtMs))}・{event.isServedSnapshot ? "操作時：提供済み" : "操作時：未提供"}{event.relatedOrderId ? `・追加注文 ${event.relatedOrderId.slice(0, 8)}` : ""}</p>)}</details> : null}
                 </div>;
                 return <section className={`kitchen-order-card ${order.isDrinkOrder ? "is-drink-order" : ""}`} key={order.id} aria-label={`${order.isDrinkOrder ? "ドリンク注文" : "注文"} ${formatTime(order.createdAt)}`}>
@@ -2463,21 +2543,55 @@ function KitchenScreen({ state, updateState, apiState, checkoutState, onServe, o
         <span>請求対象数量</span>
         <button type="button" onClick={() => void submitQuantityAdjustment("decrease")} disabled={quantityBusy || priceTarget.locked} aria-label="数量を1点減らす"><Minus size={20} weight="bold" /></button>
         <b aria-live="polite">{Number(priceTarget.billableQuantity ?? priceTarget.quantity)}点</b>
-        <button type="button" onClick={() => void submitQuantityAdjustment("increase")} disabled={quantityBusy || priceTarget.locked} aria-label="同じ商品を1点追加注文"><Plus size={20} weight="bold" /></button>
+        <button type="button" onClick={() => void submitQuantityAdjustment("increase")} disabled={quantityBusy || priceTarget.locked || (apiMode && Boolean(pendingOrderAttempt || orderAttemptState.error))} aria-label="同じ商品を1点追加注文"><Plus size={20} weight="bold" /></button>
       </div>
       {quantityZeroConfirm ? <div className="quantity-zero-confirm" role="alert"><b>最後の1点を請求対象から外しますか？</b><p>確認後、この注文行は削除されずキャンセル扱いで履歴に残ります。取消し復元で1点に戻せます。</p><label><span>理由（任意）</span><textarea value={quantityReason} onChange={(event) => setQuantityReason(event.target.value)} maxLength={300} disabled={quantityBusy} /></label><div className="modal-actions"><button type="button" className="button button--quiet" onClick={() => setQuantityZeroConfirm(false)} disabled={quantityBusy}>戻る</button><button type="button" className="button button--primary" onClick={() => void submitQuantityAdjustment("decrease", true)} disabled={quantityBusy || priceTarget.locked}>{quantityBusy ? "保存中…" : "0点にしてキャンセル"}</button></div></div> : null}
-      <label className="price-adjustment-field">変更後の単価<input aria-label="変更後の単価" type="number" min="0" max={priceTarget.unitPriceYenSnapshot ?? priceTarget.unitPriceSnapshot} step="1" value={priceDraft} onChange={(event) => setPriceDraft(event.target.value)} disabled={priceBusy || quantityBusy || priceTarget.locked} />円</label>
+      <label className="price-adjustment-field">変更後の単価<input aria-label="変更後の単価" type="number" min="0" max={priceTarget.unitPriceYenSnapshot ?? priceTarget.unitPriceSnapshot} step="1" value={priceDraft} onChange={(event) => { priceDraftRevision.current += 1; setPriceDraft(event.target.value); }} disabled={priceBusy || quantityBusy || priceTarget.locked} />円</label>
       <p className="price-adjustment-total">変更後の行合計：<b>{yen((Number(priceDraft) || 0) * Number(priceTarget.billableQuantity ?? priceTarget.quantity))}</b></p>
+      {pendingOrderAttempt?.kind === "increase" && pendingOrderAttempt.request.orderId === priceTarget.orderId && Number(pendingOrderAttempt.request.orderItemId) === Number(priceTarget.id) ? <button type="button" className="button button--primary" disabled={orderAttemptState.busy} onClick={() => void retryPendingKitchenQuantity()}>{orderAttemptState.busy ? "保存を確認中…" : "同じ内容で照合・再送"}</button> : null}
       {quantityError ? <p role="alert" className="checkout-feedback checkout-feedback--error">{quantityError}</p> : null}{priceError ? <p role="alert" className="checkout-feedback checkout-feedback--error">{priceError}</p> : null}
       <div className="modal-actions"><button type="button" className="button button--quiet" onClick={() => { setPriceTarget(null); setQuantityZeroConfirm(false); }} disabled={priceBusy || quantityBusy}>閉じる</button><button type="button" className="button button--primary button--large" onClick={() => void saveItemPrice()} disabled={priceBusy || quantityBusy || priceTarget.locked}>{priceBusy ? "保存中…" : "単価を保存"}</button></div>
     </Modal> : null}
     {cancellationTarget ? <OrderItemCancellationModal key={`${cancellationTarget.action}-${cancellationTarget.orderId}-${cancellationTarget.item.id}`} target={cancellationTarget} onClose={() => setCancellationTarget(null)} onSave={saveCancellation} /> : null}
-    {additionTarget ? <KitchenAdditionModal target={additionTarget} menuItems={state.menuItems} busy={false} onClose={() => setAdditionTarget(null)} onSubmit={(item) => submitKitchenAddition({ ...additionTarget, item }).then(() => setAdditionTarget(null))} /> : null}
+    {additionTarget ? <KitchenAdditionModal key={`${additionTarget.tableId}:${additionTarget.sessionId}`} target={additionTarget} menuItems={state.menuItems} busy={orderAttemptState.busy} pending={pendingOrderAttempt} onRetry={retryPendingKitchenOrder} onClose={() => { if (!orderAttemptState.busy) setAdditionTarget((current) => current === additionTarget ? null : current); }} onConfirmed={() => setAdditionTarget((current) => current === additionTarget ? null : current)} onSubmit={(item, onPrepared, onFailure) => submitKitchenAddition({ ...additionTarget, item, onPrepared, onFailure })} /> : null}
     {callPanel ? <Modal title={callPanelTableId === null ? "スタッフ呼び出し" : `テーブル ${callPanelTableId} のスタッフ呼び出し`} onClose={closeCallPanel} wide><div className="call-list">{callResolutionError ? <p className="checkout-feedback checkout-feedback--error" role="alert">{callResolutionError}</p> : null}{displayedCalls.length ? displayedCalls.map((call) => <article key={call.id}><Bell size={28} weight="fill" /><div><b>テーブル {call.tableId}</b><span>{formatTime(call.createdAt)} に呼び出し</span></div><button type="button" className="button button--primary" disabled={Boolean(resolvingCallId)} onClick={() => void resolveCall(call)}>{resolvingCallId === call.id ? "保存中" : "対応完了"}</button></article>) : <div className="empty-state"><Bell size={42} /><p>未対応の呼び出しはありません。</p></div>}</div></Modal> : null}
   </StaffShell>;
 }
 
-function KitchenAdditionModal({ target, menuItems, busy, onClose, onSubmit }) {
+function KitchenAdditionModal({ target, menuItems, busy, pending: sharedPending, onRetry, onClose, onConfirmed = onClose, onSubmit }) {
+  const submitLock = useRef(false);
+  const submissionRef = useRef(null);
+  const confirmedIdRef = useRef(null);
+  const [, setConfirmedOperationId] = useState(null);
+  const openedPending = useRef(sharedPending?.kind === "addition" && sharedPending.request.sessionId === target.sessionId && String(sharedPending.request.tableId) === String(target.tableId) ? sharedPending : null);
+  const ownSubmission = submissionRef.current;
+  const ownAttempt = ownSubmission?.attempt ?? (ownSubmission?.recovery ? { id: ownSubmission.id, kind: "addition", request: ownSubmission.request } : null) ?? openedPending.current;
+  // Removal alone does not prove acknowledgement. If its notification is lost,
+  // keep our submitted intent visible and block an accidental new-ID save.
+  const pending = sharedPending ?? (ownAttempt && (!ownAttempt.id || confirmedIdRef.current !== ownAttempt.id) ? ownAttempt : null);
+  const locked = busy || Boolean(pending);
+  const pendingHere = pending?.kind === "addition" && pending.request.sessionId === target.sessionId && String(pending.request.tableId) === String(target.tableId);
+  const openedPendingId = useRef(openedPending.current?.id ?? null);
+  const draftRevision = useRef(0);
+  const pendingRef = useRef(pending);
+  pendingRef.current = pending;
+  const mountedRef = useRef(false);
+  useEffect(() => { mountedRef.current = true; return () => { mountedRef.current = false; }; }, []);
+  useEffect(() => {
+    const confirmed = (event) => {
+      const id = event.detail?.id;
+      if (typeof id !== "string" || !id) return;
+      const ownSubmission = submissionRef.current;
+      if (id !== (ownSubmission?.id || openedPendingId.current)) return;
+      confirmedIdRef.current = id;
+      setConfirmedOperationId(id);
+      const matches = (openedPendingId.current === id && draftRevision.current === 0)
+        || (ownSubmission?.id === id && ownSubmission.revision === draftRevision.current);
+      if (matches && mountedRef.current && (!pendingRef.current || pendingRef.current.id === id)) onConfirmed();
+    };
+    window.addEventListener(KITCHEN_ADDITION_CONFIRMED_EVENT, confirmed);
+    return () => window.removeEventListener(KITCHEN_ADDITION_CONFIRMED_EVENT, confirmed);
+  }, [onConfirmed]);
   const [kind, setKind] = useState("menu");
   const [menuSection, setMenuSection] = useState("food");
   const availableMenuItems = menuItems.filter((item) => !item.isSoldOut && item.isActive !== false);
@@ -2489,39 +2603,107 @@ function KitchenAdditionModal({ target, menuItems, busy, onClose, onSubmit }) {
   const [error, setError] = useState("");
   const selectedMenuItem = availableMenuItems.find((item) => item.id === menuItemId) ?? null;
   const quantityValue = Number(quantity) || 1;
-  const adjustQuantity = (delta) => setQuantity(String(Math.min(99, Math.max(1, quantityValue + delta))));
+  const editDraft = (setter, value) => { draftRevision.current += 1; setter(value); };
+  const adjustQuantity = (delta) => editDraft(setQuantity, String(Math.min(99, Math.max(1, quantityValue + delta))));
   const selectMenuSection = (section) => {
-    setMenuSection(section);
+    editDraft(setMenuSection, section);
     const firstItem = availableMenuItems.find((item) => section === "drink" ? KITCHEN_DRINK_CATEGORY_IDS.has(item.categoryId) : !KITCHEN_DRINK_CATEGORY_IDS.has(item.categoryId));
     setMenuItemId(firstItem?.id ?? "");
   };
+  const retry = async () => {
+    if (!pendingHere || busy || submitLock.current) return;
+    let attempt = pending;
+    const revision = draftRevision.current;
+    const ownSubmission = submissionRef.current;
+    const closesThisDraft = (openedPendingId.current === attempt.id && revision === 0)
+      || (ownSubmission?.id === attempt.id && ownSubmission.revision === revision);
+    submitLock.current = true;
+    try {
+      if (ownSubmission?.recovery && (!attempt.id || ownSubmission.id === attempt.id)) {
+        const recovery = ownSubmission.recovery.inspect ? await ownSubmission.recovery.inspect() : ownSubmission.recovery;
+        ownSubmission.recovery = recovery;
+        if (!mountedRef.current || submissionRef.current !== ownSubmission) return;
+        if (recovery.canRelease) { submissionRef.current = null; setError(""); return; }
+        if (recovery.state !== "present" || !recovery.attempt?.id) {
+          setError("保存記録の状態を確認できません。新しい追加注文にせず、保存結果を確認してください。");
+          return;
+        }
+        attempt = recovery.attempt;
+      }
+      const confirmed = await onRetry(attempt);
+      setError(confirmed ? "" : "保存結果を確認できません。同じ内容で照合・再送してください。");
+      if (confirmed && closesThisDraft && mountedRef.current && draftRevision.current === revision
+        && (!pendingRef.current || pendingRef.current.id === attempt.id)) onConfirmed();
+    } catch (error) { setError(error?.message || "保存結果を確認できません。"); }
+    finally { submitLock.current = false; }
+  };
   const submit = async (event) => {
     event.preventDefault();
+    if (submitLock.current || locked) return;
     const count = Number(quantity);
     if (!Number.isInteger(count) || count < 1 || count > 99) { setError("数量は1〜99点で入力してください。"); return; }
     const selected = kind === "menu" ? menuItems.find((item) => item.id === menuItemId) : null;
     if (kind === "menu" && (!selected || selected.isSoldOut || selected.isActive === false)) { setError("販売中の商品を選択してください。"); return; }
     if (kind !== "menu" && (!name.trim() || !Number.isSafeInteger(Number(price)) || Number(price) < 0)) { setError("商品名と0円以上の金額を入力してください。"); return; }
     setError("");
-    await onSubmit(kind === "menu"
+    submitLock.current = true;
+    const item = kind === "menu"
       ? { menuItemId: selected.id, name: selected.name, priceYen: Number(selected.price), quantity: count }
-      : { name: name.trim(), priceYen: Number(price), quantity: count });
+      : { name: name.trim(), priceYen: Number(price), quantity: count };
+    const submission = { revision: draftRevision.current, id: null, attempt: null, recovery: null,
+      request: { tableId: Number(target.tableId), sessionId: target.sessionId, items: [kitchenAdditionRequestItem(item)] } };
+    submissionRef.current = submission;
+    try {
+      await onSubmit(item, (id, request) => {
+          submission.id = id;
+          if (request) submission.attempt = { id, kind: "addition", request: { tableId: request.tableId, sessionId: request.sessionId, items: request.items } };
+        }, (recovery) => {
+          submission.recovery = recovery;
+          if (recovery.attempt && (!submission.id || submission.id === recovery.attempt.id)) {
+            submission.id = recovery.attempt.id;
+            submission.attempt = recovery.attempt;
+          }
+        });
+      if (mountedRef.current && draftRevision.current === submission.revision
+        && (!pendingRef.current || pendingRef.current.id === submission.id)) onConfirmed();
+    } catch (error) {
+      if (submission.id && confirmedIdRef.current === submission.id && mountedRef.current && draftRevision.current === submission.revision
+        && (!pendingRef.current || pendingRef.current.id === submission.id)) onConfirmed();
+      else {
+        if (submission.recovery?.canRelease && submissionRef.current === submission) submissionRef.current = null;
+        else if (!submission.recovery) submission.recovery = { state: "unknown", canRelease: false };
+        setError(error?.message || "追加注文の保存結果を確認できません。");
+      }
+    }
+    finally { submitLock.current = false; }
   };
-  return <Modal title={`テーブル ${target.tableId} にメニュー追加`} onClose={onClose} className="kitchen-add-order-modal" footer={<div className="kitchen-add-order-actions"><button type="button" className="button button--quiet" onClick={onClose} disabled={busy}>閉じる</button><button type="submit" form="kitchen-add-order-form" className="button button--primary button--large" disabled={busy}>追加注文を保存</button></div>}>
+  return <Modal title={`テーブル ${target.tableId} にメニュー追加`} onClose={onClose} className="kitchen-add-order-modal" footer={<div className="kitchen-add-order-actions"><button type="button" className="button button--quiet" onClick={onClose} disabled={busy}>閉じる</button><button type={pendingHere ? "button" : "submit"} form="kitchen-add-order-form" className="button button--primary button--large" onClick={pendingHere ? () => void retry() : undefined} disabled={busy || Boolean(pending && !pendingHere)}>{busy ? "保存を確認中…" : pendingHere ? pending.id ? "同じ内容で照合・再送" : "保存状態を確認" : "追加注文を保存"}</button></div>}>
     <form id="kitchen-add-order-form" className="kitchen-add-order-form" onSubmit={submit}>
-      <div className="kitchen-add-order-scroll">
-        <div className="kitchen-add-order-tabs"><button type="button" className={kind === "menu" ? "is-active" : ""} onClick={() => setKind("menu")}>既存メニュー</button><button type="button" className={kind === "food" ? "is-active" : ""} onClick={() => setKind("food")}>その他フード</button><button type="button" className={kind === "drink" ? "is-active" : ""} onClick={() => setKind("drink")}>その他ドリンク</button></div>
+      {pendingHere ? <section className="kitchen-add-order-pending" aria-label={sharedPending ? "照合・再送する保存済みの内容" : "保存状態を確認する内容"}>
+        <h3>{sharedPending ? "照合・再送する保存済みの内容" : "保存状態を確認する内容"}</h3>
+        <p>テーブル {pending.request.tableId} の追加注文です。内容を保持し、保存状態を確認します。</p>
+        {!sharedPending ? <p role="alert" className="checkout-feedback checkout-feedback--error">保存状態の確認が必要です。新しい追加注文にせず、保存結果を確認してください。</p> : null}
+        {pending.request.items.map((item, index) => {
+          const registered = menuItems.find((menuItem) => menuItem.id === item.menuItemId);
+          return <article key={index}><b>{item.menuItemId ? registered?.name || `登録商品（ID：${item.menuItemId}）` : item.name}</b><span>数量：{item.quantity}点</span>{item.menuItemId ? <small>個別オプション指定なし</small> : <small>単価：{yen(item.priceYen)}・指定は商品名の表記どおり</small>}</article>;
+        })}
+        <p className="checkout-feedback" role="status">{(openedPendingId.current === pending.id && draftRevision.current === 0) || (submissionRef.current?.id === pending.id && submissionRef.current.revision === draftRevision.current) ? "この保存済み操作の結果を確認します。" : "入力中の別注文はこの画面に保持しています。照合完了後に入力へ戻ります。"}</p>
+        {error ? <p className="checkout-feedback checkout-feedback--error" role="alert">{error}</p> : null}
+      </section> : null}
+      <div className="kitchen-add-order-scroll" hidden={pendingHere}>
+        <div className="kitchen-add-order-tabs"><button type="button" disabled={locked} className={kind === "menu" ? "is-active" : ""} onClick={() => editDraft(setKind, "menu")}>既存メニュー</button><button type="button" disabled={locked} className={kind === "food" ? "is-active" : ""} onClick={() => editDraft(setKind, "food")}>その他フード</button><button type="button" disabled={locked} className={kind === "drink" ? "is-active" : ""} onClick={() => editDraft(setKind, "drink")}>その他ドリンク</button></div>
         {kind === "menu" ? <>
           <div className="kitchen-add-order-menu-sections" role="tablist" aria-label="メニュー区分">
-            <button type="button" role="tab" aria-selected={menuSection === "food"} className={menuSection === "food" ? "is-active" : ""} onClick={() => selectMenuSection("food")}>フード</button>
-            <button type="button" role="tab" aria-selected={menuSection === "drink"} className={menuSection === "drink" ? "is-active" : ""} onClick={() => selectMenuSection("drink")}>ドリンク</button>
+            <button type="button" disabled={locked} role="tab" aria-selected={menuSection === "food"} className={menuSection === "food" ? "is-active" : ""} onClick={() => selectMenuSection("food")}>フード</button>
+            <button type="button" disabled={locked} role="tab" aria-selected={menuSection === "drink"} className={menuSection === "drink" ? "is-active" : ""} onClick={() => selectMenuSection("drink")}>ドリンク</button>
           </div>
           <div className="kitchen-add-order-menu-grid" role="tabpanel" aria-label={`${menuSection === "food" ? "フード" : "ドリンク"}の商品一覧`}>
-            {menuItemsForSection.length ? menuItemsForSection.map((item) => <button key={item.id} type="button" className={item.id === menuItemId ? "is-selected" : ""} aria-pressed={item.id === menuItemId} onClick={() => { setMenuItemId(item.id); setError(""); }}><span>{kitchenAdditionMenuName(item)}</span></button>) : <p className="kitchen-add-order-empty">販売中の商品がありません。</p>}
+            {menuItemsForSection.length ? menuItemsForSection.map((item) => <button key={item.id} type="button" disabled={locked} className={item.id === menuItemId ? "is-selected" : ""} aria-pressed={item.id === menuItemId} onClick={() => { editDraft(setMenuItemId, item.id); setError(""); }}><span>{kitchenAdditionMenuName(item)}</span></button>) : <p className="kitchen-add-order-empty">販売中の商品がありません。</p>}
           </div>
           {selectedMenuItem ? <div className="kitchen-add-order-selection"><span>選択中</span><b>{kitchenAdditionMenuName(selectedMenuItem)}</b><small>単価 {yen(selectedMenuItem.price)}</small></div> : null}
-        </> : <div className="kitchen-add-order-custom-fields"><label>商品名<input value={name} onChange={(event) => setName(event.target.value)} maxLength={120} autoFocus /></label><label>金額<input type="number" min="0" max="10000000" step="1" value={price} onChange={(event) => setPrice(event.target.value)} />円</label></div>}
-        <div className="kitchen-add-order-quantity"><span>数量</span><div className="kitchen-add-order-quantity-control"><button type="button" aria-label="数量を1減らす" onClick={() => adjustQuantity(-1)} disabled={busy || quantityValue <= 1}>−</button><output aria-label="数量">{quantityValue}点</output><button type="button" aria-label="数量を1増やす" onClick={() => adjustQuantity(1)} disabled={busy || quantityValue >= 99}>＋</button></div></div>
+        </> : <div className="kitchen-add-order-custom-fields"><label>商品名<input value={name} disabled={locked} onChange={(event) => editDraft(setName, event.target.value)} maxLength={120} autoFocus /></label><label>金額<input type="number" disabled={locked} min="0" max="10000000" step="1" value={price} onChange={(event) => editDraft(setPrice, event.target.value)} />円</label></div>}
+        <div className="kitchen-add-order-quantity"><span>数量</span><div className="kitchen-add-order-quantity-control"><button type="button" aria-label="数量を1減らす" onClick={() => adjustQuantity(-1)} disabled={locked || quantityValue <= 1}>−</button><output aria-label="数量">{quantityValue}点</output><button type="button" aria-label="数量を1増やす" onClick={() => adjustQuantity(1)} disabled={locked || quantityValue >= 99}>＋</button></div></div>
+        {pending ? <p className="checkout-feedback" role="status">未確認の内容を保持しています。変更せず同じ操作を照合・再送してください。</p> : null}
         {error ? <p className="checkout-feedback checkout-feedback--error" role="alert">{error}</p> : null}
         <p className="modal-lead">この追加注文は現在のsessionに未提供品として登録されます。</p>
       </div>
@@ -4517,10 +4699,17 @@ export function App() {
   };
 
   const adjustKitchenItemQuantity = async (operation) => {
-    await adjustKitchenItemQuantityRequest({ env: window, ...operation });
-    const [snapshot, checkouts] = await Promise.all([fetchKitchenSnapshot({ env: window }), fetchKitchenCheckoutRequests({ env: window })]);
-    setKitchenApiState({ loading: false, error: false, orders: snapshot.orders, staffCalls: snapshot.staffCalls, sessions: snapshot.sessions, notificationRequestStartedAt: snapshot.notificationRequestStartedAt });
-    setKitchenCheckoutState({ loading: false, error: false, checkouts });
+    const result = await adjustKitchenItemQuantityRequest({ env: window, ...operation });
+    const refresh = async () => {
+      const [snapshot, checkouts] = await Promise.all([fetchKitchenSnapshot({ env: window }), fetchKitchenCheckoutRequests({ env: window })]);
+      setKitchenApiState({ loading: false, error: false, orders: snapshot.orders, staffCalls: snapshot.staffCalls, sessions: snapshot.sessions, notificationRequestStartedAt: snapshot.notificationRequestStartedAt });
+      setKitchenCheckoutState({ loading: false, error: false, checkouts });
+    };
+    // A later display refresh failure must not turn an acknowledged addition
+    // into a new, ambiguous mutation. The existing poll also refreshes the view.
+    if (operation.direction === "increase") void refresh().catch(() => {});
+    else await refresh();
+    return result;
   };
 
   const changeKitchenOrderItemCancellation = async ({ orderId, orderItemId, reason, action }) => {
