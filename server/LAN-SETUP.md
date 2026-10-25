@@ -27,3 +27,37 @@ Open the same LAN Web URL on A90. In API mode, use the A90 camera's QR reader to
 Because schema v1 has no claim ID or encrypted response-recovery field, a lost claim response cannot be safely retried with the same code. Reissue a new pairing code and revoke any orphaned device from the admin client with `POST /v1/admin/devices/revoke`. A used, expired, over-attempt, duplicate-device, or occupied-table code is rejected.
 
 The current HTTP listener is for local verification only. Store operation requires HTTPS (including the LAN Web URL); TLS termination and certificates are outside this change.
+
+## Staff HTML is local to the store PC
+
+Management and kitchen use the same Windows PC that runs the server; the kitchen
+monitor is a video output, not a separate network client. Open
+`http://127.0.0.1:<WebPort>/admin.html#/admin/devices` for management and
+`http://127.0.0.1:<WebPort>/admin.html#/kitchen` for the kitchen. The worktree's
+Windows launcher uses these local staff URLs. The safe-copy launcher already uses
+a local URL. An existing staff bookmark using the PC's LAN address must change.
+
+The combined server requires a loopback TCP peer (IPv4 127/8, IPv6 ::1, or an
+IPv4-mapped IPv6 loopback) before serving staff entries. It also requires a single
+Host containing a literal loopback address or exactly localhost, with this Web
+listener's port, to reject DNS rebinding via arbitrary hostnames. Forwarded, Origin
+and X-Forwarded-For headers do not establish permission. Denials are generic and
+do not read HTML or construct the staff runtime configuration.
+
+Only the exact /admin.html request target receives staff credentials. Staff path
+aliases, case and encoded variants are also subject to the local boundary;
+noncanonical paths that normalize to /admin.html are rejected. Public index.html,
+customer/pairing SPA fallbacks and shared scripts contain no server-injected staff
+credentials, including when a browser adds a staff route in its URL fragment.
+
+Customer HTML, pairing, same-origin /v1 APIs, SSE and images remain LAN accessible;
+existing API device authentication and role authorization remain in place. The
+guard applies in development, safe-copy and production modes of run-server.mjs.
+Vite development/preview and the Sites worker serve tokenless frontend assets;
+the configured Vite proxy forwards only /v1 to the API listener, not staff HTML.
+
+Do not expose the staff endpoint through a LAN-facing proxy or TCP forwarder
+which reconnects from loopback and supplies a local Host. That would cross the
+trusted boundary and must be denied at the proxy/forwarder as well. No staff HTML
+proxy is configured by these repository launchers; externally configured proxies
+and Windows port-forwarding rules need separate deployment review.

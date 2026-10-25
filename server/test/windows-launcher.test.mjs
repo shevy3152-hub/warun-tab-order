@@ -54,3 +54,13 @@ test('Windows wrapper launches PowerShell rather than a URL shortcut', async () 
   assert.match(source, /start-windows\.ps1/);
   assert.doesNotMatch(source, /https?:\/\//i);
 });
+
+test('staff launcher URLs use loopback while customer LAN checks remain', async () => {
+  const source = await readFile(launcherUrl, 'utf8');
+  const assignment = (name) => source.match(new RegExp('^\\$' + name + ' = "([^"]+)"', 'm'))?.[1];
+  assert.equal(assignment('KitchenUrl'), 'http://127.0.0.1:${WebPort}/admin.html#/kitchen');
+  assert.equal(assignment('AdminShellUrl'), 'http://127.0.0.1:${WebPort}/admin.html');
+  assert.equal(assignment('LanWebUrl'), 'http://${TargetIp}:${WebPort}/');
+  assert.equal(assignment('LanHealthUrl'), 'http://${TargetIp}:${ApiPort}/v1/health');
+  assert.match(source, /Start-Process[^\r\n]*\$KitchenUrl|ArgumentList @\(\$KitchenUrl\)/);
+});

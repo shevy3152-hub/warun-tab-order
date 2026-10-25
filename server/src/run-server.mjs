@@ -3,6 +3,7 @@ import { appendFileSync, mkdirSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { dirname, extname, isAbsolute, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { isLocalStaffRequest, isStaffEntryPath } from "./http/staff-shell-access.mjs";
 
 import { createDeviceAuthenticator } from "./auth/device-auth.mjs";
 import { createCatalogRepository } from "./catalog/catalog-repository.mjs";
@@ -212,13 +213,35 @@ export function createSameOriginWebServer({ apiServer, webRoot, adminRuntimeToke
   const resolvedWebRoot = resolve(webRoot);
 
   return createNodeServer(async (request, response) => {
-    const pathname = new URL(request.url || "/", "http://localhost").pathname;
+    const target = request.url || "/";
+    let pathname;
+    let staffEntry;
+    try {
+      if (!target.startsWith("/") || target.startsWith("//")) throw new URIError("Invalid target.");
+      pathname = new URL(target, "http://localhost").pathname;
+      staffEntry = isStaffEntryPath(pathname);
+    } catch {
+      response.writeHead(400, { "Cache-Control": "no-store", "Content-Type": "text/plain; charset=utf-8" });
+      response.end("Bad request");
+      return;
+    }
     if (pathname === "/v1" || pathname.startsWith("/v1/")) {
       apiHandler(request, response);
       return;
     }
 
+    // Check before reading HTML or constructing any credential-bearing body.
+    if (staffEntry && !isLocalStaffRequest(request)) {
+      response.writeHead(403, { "Cache-Control": "no-store", "Content-Type": "text/plain; charset=utf-8" });
+      response.end("Forbidden");
+      return;
+    }
     const adminShell = pathname === "/admin.html";
+    if (adminShell && target.split("?")[0] !== "/admin.html") {
+      response.writeHead(404, { "Cache-Control": "no-store", "Content-Type": "text/plain; charset=utf-8" });
+      response.end("Not found");
+      return;
+    }
     const requestedPath = pathname === "/" || adminShell ? "index.html" : pathname.slice(1);
     const candidate = resolve(resolvedWebRoot, requestedPath);
     const relativePath = relative(resolvedWebRoot, candidate);
