@@ -760,9 +760,9 @@ for (const failureAt of ["list", "update"]) {
       store: {
         ...base,
         async list() { if (failHold && failureAt === "list") throw failure; return base.list(); },
-        async update(id, patch) {
+        async update(id, patch, options) {
           if (failHold && failureAt === "update" && id === uuid(1) && patch.state === "review_required") throw failure;
-          return base.update(id, patch);
+          return base.update(id, patch, options);
         },
       },
       autoRetry: true, now: () => 10_000, setTimeoutImpl: timers.set, clearTimeoutImpl: timers.clear,
@@ -789,3 +789,121 @@ for (const failureAt of ["list", "update"]) {
     assert.equal(timers.active.size, 0);
   });
 }
+
+for (const keepMapAlive of [false, true]) {
+  test("atomic auth hold: a stale snapshot cannot replace success" + (keepMapAlive ? " while callers wait" : " after the caller returns"), async (t) => {
+    const base = createMemoryOutbox();
+    const aStarted = deferred();
+    const aResponse = deferred();
+    const savingP = deferred();
+    const releaseP = deferred();
+    const bLookup = deferred();
+    const releaseBLookup = deferred();
+    const calls = [];
+    let pId;
+    let bId;
+    const store = {
+      ...base,
+      async get(id) {
+        if (keepMapAlive && id === bId) { bLookup.resolve(); await releaseBLookup.promise; }
+        return base.get(id);
+      },
+      async update(id, patch, options) {
+        if (id === pId && patch.state === "review_required") { savingP.resolve(); await releaseP.promise; }
+        return base.update(id, patch, options);
+      },
+    };
+    const service = makeService(async (payload) => {
+      calls.push(payload.clientOrderId);
+      aStarted.resolve();
+      await aResponse.promise;
+      return success();
+    }, { store });
+    t.after(() => { releaseP.resolve(); releaseBLookup.resolve(); return service.stop(); });
+    const p = await service.enqueue({ items });
+    pId = p.clientOrderId;
+    const a = await service.enqueue({ items });
+    const flight = service.flush({ clientOrderId: a.clientOrderId });
+    await aStarted.promise;
+    const b = keepMapAlive ? await service.enqueue({ items }) : null;
+    bId = b?.clientOrderId;
+    const bFlight = b ? service.flush({ clientOrderId: bId }) : null;
+    const holding = service.holdPendingForReview("HTTP_401");
+    await savingP.promise;
+    aResponse.resolve();
+    let aResult;
+    if (b) await bLookup.promise;
+    else aResult = await flight;
+    assert.equal((await base.get(a.clientOrderId)).state, "synced", "A's success is committed before P is released");
+    releaseP.resolve();
+    const heldCount = await holding;
+    releaseBLookup.resolve();
+    aResult ??= await flight;
+    const bResult = b ? await bFlight : null;
+    const storedA = await base.get(a.clientOrderId);
+    t.diagnostic("atomic-hold-observation " + JSON.stringify({
+      keepMapAlive, heldCount, calls, aResult, bResult,
+      storedA: { clientOrderId: storedA.clientOrderId, state: storedA.state, errorCode: storedA.lastErrorCode },
+    }));
+    assert.equal(storedA.state, "synced");
+    assert.equal(storedA.lastErrorCode, null);
+    assert.deepEqual(aResult, { state: "synced", clientOrderId: a.clientOrderId, idempotencyResult: "created" });
+    assert.deepEqual(storedA.payload, a.payload);
+    assert.equal(storedA.attemptCount, 1);
+    assert.equal((await base.get(pId)).state, "review_required");
+    assert.equal(heldCount, b ? 2 : 1, "only records still eligible at write time count as held");
+    assert.deepEqual(calls, [a.clientOrderId]);
+    if (b) {
+      assert.deepEqual(bResult, { state: "review_required", clientOrderId: bId, errorCode: "HTTP_401" });
+      assert.equal((await base.get(bId)).state, "review_required");
+      assert.deepEqual((await base.get(bId)).payload, b.payload);
+    }
+  });
+}
+
+test("atomic auth hold: success arriving after the hold remains authoritative", async (t) => {
+  const base = createMemoryOutbox();
+  const started = deferred();
+  const response = deferred();
+  const calls = [];
+  const service = makeService(async (payload) => {
+    calls.push(payload.clientOrderId);
+    started.resolve();
+    await response.promise;
+    return success("replayed");
+  }, { store: base });
+  t.after(() => service.stop());
+  const p = await service.enqueue({ items });
+  const a = await service.enqueue({ items });
+  const flight = service.flush({ clientOrderId: a.clientOrderId });
+  await started.promise;
+  assert.equal(await service.holdPendingForReview("HTTP_401"), 2);
+  assert.equal((await base.get(a.clientOrderId)).state, "review_required");
+  response.resolve();
+  const result = await flight;
+  assert.deepEqual(result, { state: "synced", clientOrderId: a.clientOrderId, idempotencyResult: "replayed" });
+  assert.equal((await base.get(a.clientOrderId)).state, "synced");
+  assert.equal((await base.get(p.clientOrderId)).state, "review_required");
+  assert.deepEqual(calls, [a.clientOrderId]);
+});
+
+test("atomic auth hold: conditional store update checks the current state", async (t) => {
+  const base = createMemoryOutbox();
+  const service = makeService(async () => success(), { store: base });
+  t.after(() => service.stop());
+  for (const state of ["pending", "sending", "synced", "rejected", "review_required"]) {
+    const saved = await service.enqueue({ items });
+    const current = await base.update(saved.clientOrderId, { state });
+    const held = await base.update(saved.clientOrderId, { state: "review_required", lastErrorCode: "HTTP_401" }, {
+      onlyStates: ["pending", "sending"],
+    });
+    if (["pending", "sending"].includes(state)) {
+      assert.equal(held.state, "review_required");
+      assert.equal((await base.get(saved.clientOrderId)).lastErrorCode, "HTTP_401");
+    } else {
+      assert.equal(held, null, "an ineligible state must not be written");
+      assert.deepEqual(await base.get(saved.clientOrderId), current);
+    }
+  }
+  assert.equal(await base.update(uuid(999), { state: "review_required" }, { onlyStates: ["pending"] }), null);
+});

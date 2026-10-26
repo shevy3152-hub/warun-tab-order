@@ -142,9 +142,9 @@ export function createMemoryOutbox(initialRecords = []) {
     async list() {
       return [...records.values()].map(clone);
     },
-    async update(clientOrderId, patch) {
+    async update(clientOrderId, patch, { onlyStates } = {}) {
       const current = records.get(clientOrderId);
-      if (!current) return null;
+      if (!current || (onlyStates && !onlyStates.includes(current.state))) return null;
       const updated = { ...current, ...clone(patch) };
       records.set(clientOrderId, updated);
       return clone(updated);
@@ -236,10 +236,11 @@ export function createIndexedDbOutbox({ indexedDB: indexedDbApi = globalThis.ind
       const transaction = database.transaction(OUTBOX_STORE_NAME, "readonly");
       return requestResult(transaction.objectStore(OUTBOX_STORE_NAME).getAll()).then((records) => records.map(clone));
     },
-    async update(clientOrderId, patch) {
+    async update(clientOrderId, patch, { onlyStates } = {}) {
       return withTransaction("readwrite", async (store) => {
         const current = await requestResult(store.get(clientOrderId));
-        if (!current) return null;
+        // Eligibility and the write share this transaction.
+        if (!current || (onlyStates && !onlyStates.includes(current.state))) return null;
         const updated = { ...current, ...clone(patch) };
         await requestResult(store.put(updated));
         return clone(updated);
@@ -1007,12 +1008,13 @@ export function createOrderOutbox({
       clearRetryTimer();
       const safeCode = safeErrorCode(errorCode, "HTTP_401");
       let heldCount = 0;
+      const heldStates = [OUTBOX_STATES.PENDING, OUTBOX_STATES.SENDING];
       for (const record of await store.list()) {
-        if (![OUTBOX_STATES.PENDING, OUTBOX_STATES.SENDING].includes(record.state)) continue;
+        if (!heldStates.includes(record.state)) continue;
         const review = await store.update(record.clientOrderId, {
           state: OUTBOX_STATES.REVIEW_REQUIRED,
           lastErrorCode: safeCode,
-        });
+        }, { onlyStates: heldStates });
         if (!review) continue;
         // Publish the committed hold before observers or waiting callers see it.
         recordFlushResult({
