@@ -357,7 +357,7 @@ test("flush handoff: a retry timer expiring during slow B is handed off after B"
 });
 
 for (const failB of [false, true]) {
-  test("flush handoff P2: review-blocked recovery preserves B's targeted " + (failB ? "failure and retry" : "delivery"), async (t) => {
+  test("flush handoff P2: historical review recovery preserves B's targeted " + (failB ? "failure and retry" : "delivery"), async (t) => {
     const base = createMemoryOutbox();
     const started = deferred();
     const response = deferred();
@@ -402,7 +402,7 @@ for (const failB of [false, true]) {
       sentIds: [a.clientOrderId, b.clientOrderId],
       resultId: b.clientOrderId,
       resultState: failB ? "pending" : "synced",
-    }, "the review-blocked global pass must neither consume B nor return R's result to B");
+    }, "the global pass must deliver B once and keep each caller's own result");
     assert.equal(listings, 1, "the queued recovery ran before B's targeted handoff");
     assert.equal(maximumSending, 1);
     assert.equal(aResult.clientOrderId, a.clientOrderId);
@@ -424,13 +424,13 @@ for (const failB of [false, true]) {
       time += 1_000;
       assert.equal(timers.fire(), 1_000);
       await settlePromiseJobs();
-      assert.equal((await service.get(b.clientOrderId)).state, "pending");
-      assert.equal(calls.length, 2, "finding 4 still holds the timer's global retry behind R");
+      assert.equal((await service.get(b.clientOrderId)).state, "synced");
+      assert.equal(calls.length, 3, "historical R must not block the due global retry");
       const retried = await service.flush({ clientOrderId: b.clientOrderId });
       assert.equal(retried.clientOrderId, b.clientOrderId);
       assert.equal(retried.state, "synced");
-      assert.deepEqual(calls[2], calls[1], "the due targeted retry keeps B's ID and payload");
-      assert.equal(calls.length, 3);
+      assert.deepEqual(calls[2], calls[1], "the due automatic retry keeps B's ID and payload");
+      assert.equal(calls.length, 3, "the later targeted check must not duplicate the completed retry");
       assert.equal((await service.get(b.clientOrderId)).attemptCount, 2);
       assert.equal(timers.active.size, 0);
     } else {
@@ -439,7 +439,7 @@ for (const failB of [false, true]) {
     }
     const globalResult = await service.flush({ force: true, connectivityRestored: true });
     assert.equal(globalResult.clientOrderId, r.clientOrderId);
-    assert.equal(globalResult.state, "review_required", "finding 4's global guard is preserved");
+    assert.equal(globalResult.state, "review_required", "R remains held when no pending order is left");
     assert.equal(calls.length, failB ? 3 : 2);
     assert.equal((await service.list()).length, 3);
   });
@@ -906,4 +906,373 @@ test("atomic auth hold: conditional store update checks the current state", asyn
     }
   }
   assert.equal(await base.update(uuid(999), { state: "review_required" }, { onlyStates: ["pending"] }), null);
+});
+
+const currentReviewContext = "v1_" + "b".repeat(64);
+const historicalReviewContext = "v1_" + "a".repeat(64);
+
+for (const rFirst of [true, false]) {
+  for (const errorCode of ["VISIT_CONTEXT_STALE", "HTTP_401", "VISIT_CONTEXT_UNAVAILABLE"]) {
+    for (const recovery of [false, true]) {
+      test("review isolation: " + (rFirst ? "R before B, " : "B before R, ") + errorCode + (recovery ? ", recovery" : ", ordinary"), async (t) => {
+        const base = createMemoryOutbox();
+        const calls = [];
+        const checks = [];
+        const service = makeService(async (payload) => { calls.push(structuredClone(payload)); return success(); }, {
+          store: base,
+          transport: {
+            canAttempt: () => true,
+            async checkVisitContext(id) { checks.push(id); return { status: id === currentReviewContext ? "match" : "stale" }; },
+            async send(payload) { calls.push(structuredClone(payload)); return success(); },
+          },
+        });
+        t.after(() => service.stop());
+        const saveR = async () => {
+          const saved = await service.enqueue({ items, visitContextId: historicalReviewContext, holdForReview: true });
+          return base.update(saved.clientOrderId, { lastErrorCode: errorCode });
+        };
+        const saveB = () => service.enqueue({ items, visitContextId: currentReviewContext });
+        let r, b;
+        if (rFirst) { r = await saveR(); b = await saveB(); }
+        else { b = await saveB(); r = await saveR(); }
+        const aggregate = await service.flush(recovery ? { force: true, connectivityRestored: true } : {});
+        const expected = { state: "synced", clientOrderId: b.clientOrderId, idempotencyResult: "created" };
+        assert.deepEqual(calls, [b.payload], "only the currently valid B is sent once");
+        assert.deepEqual(aggregate, expected);
+        const own = await service.flush({ clientOrderId: b.clientOrderId });
+        assert.deepEqual(own, { state: "synced", clientOrderId: b.clientOrderId });
+        assert.deepEqual(checks, [currentReviewContext], "R is neither checked nor reactivated");
+        assert.deepEqual(await base.get(r.clientOrderId), r);
+        const savedB = await base.get(b.clientOrderId);
+        assert.equal(savedB.state, "synced");
+        assert.equal(savedB.attemptCount, 1);
+        assert.deepEqual(savedB.payload, b.payload);
+        assert.equal((await service.flush({ clientOrderId: r.clientOrderId, force: true })).state, "review_required");
+        assert.deepEqual(calls, [b.payload], "even forced targeted flush does not resend R");
+        t.diagnostic("review-isolation-observation " + JSON.stringify({
+          rFirst, historicalReason: errorCode, recovery,
+          sentIds: calls.map(p => p.clientOrderId), aggregate, own,
+          rState: (await base.get(r.clientOrderId)).state, bState: savedB.state,
+        }));
+      });
+    }
+  }
+}
+
+for (const contextResult of [
+  { status: "stale", errorCode: "VISIT_CONTEXT_STALE" },
+  { status: "unauthorized", errorCode: "HTTP_401" },
+  { status: "unauthorized", errorCode: "HTTP_403" },
+  { status: "unavailable", errorCode: "NETWORK_ERROR" },
+]) {
+  test("review isolation: current " + contextResult.errorCode + " still prevents B's first send", async (t) => {
+    const base = createMemoryOutbox();
+    const calls = [];
+    const checks = [];
+    const service = makeService(async () => { throw new Error("must not send"); }, {
+      store: base,
+      transport: {
+        canAttempt: () => true,
+        async checkVisitContext(id) { checks.push(id); return contextResult; },
+        async send(payload) { calls.push(payload); return success(); },
+      },
+    });
+    t.after(() => service.stop());
+    const r = await service.enqueue({ items, visitContextId: historicalReviewContext, holdForReview: true });
+    const b = await service.enqueue({ items, visitContextId: currentReviewContext });
+    const global = service.flush({ force: true, connectivityRestored: true });
+    const targeted = service.flush({ clientOrderId: b.clientOrderId });
+    const [, result] = await Promise.all([global, targeted]);
+    const saved = await base.get(b.clientOrderId);
+    assert.deepEqual(calls, []);
+    assert.deepEqual(checks, [currentReviewContext]);
+    assert.equal(result.clientOrderId, b.clientOrderId);
+    assert.equal(result.state, contextResult.status === "unavailable" ? "pending" : "review_required");
+    assert.equal(result.errorCode, contextResult.errorCode);
+    assert.equal(saved.state, result.state);
+    assert.equal(saved.attemptCount, 0);
+    assert.deepEqual(saved.payload, b.payload);
+    assert.deepEqual(await base.get(r.clientOrderId), r);
+  });
+}
+
+test("review isolation: active authorization revocation blocks new pending B even on recovery", async (t) => {
+  const base = createMemoryOutbox();
+  const calls = [];
+  const timers = fakeTimers();
+  const service = makeService(async (payload) => { calls.push(payload); return success(); }, {
+    store: base, autoRetry: true, setTimeoutImpl: timers.set, clearTimeoutImpl: timers.clear,
+  });
+  t.after(() => service.stop());
+  const r = await service.enqueue({ items, holdForReview: true });
+  await service.holdPendingForReview("HTTP_401");
+  const b = await service.enqueue({ items, visitContextId: currentReviewContext });
+  const global = service.flush({ force: true, connectivityRestored: true });
+  const targeted = service.flush({ clientOrderId: b.clientOrderId, force: true });
+  const [, result] = await Promise.all([global, targeted]);
+  assert.deepEqual(calls, []);
+  assert.deepEqual(result, { state: "review_required", clientOrderId: b.clientOrderId, errorCode: "HTTP_401" });
+  assert.deepEqual(await base.get(b.clientOrderId), b, "the authorization gate must not send or discard B");
+  assert.deepEqual(await base.get(r.clientOrderId), r);
+  assert.equal(timers.active.size, 0);
+});
+
+test("review isolation: R does not block B's timer and ordinary flush still respects exponential backoff", async (t) => {
+  const base = createMemoryOutbox();
+  const timers = fakeTimers();
+  const calls = [];
+  let time = 10_000;
+  const service = makeService(async (payload) => {
+    calls.push(structuredClone(payload));
+    return calls.length < 3 ? { kind: "retry", errorCode: "NETWORK_ERROR" } : success("replayed");
+  }, { store: base, now: () => time, autoRetry: true, setTimeoutImpl: timers.set, clearTimeoutImpl: timers.clear });
+  t.after(() => service.stop());
+  const r = await service.enqueue({ items, holdForReview: true });
+  const b = await service.enqueue({ items, visitContextId: currentReviewContext });
+  const first = await service.flush();
+  assert.deepEqual(first, { state: "pending", clientOrderId: b.clientOrderId, errorCode: "NETWORK_ERROR" });
+  assert.deepEqual(calls, [b.payload]);
+  time += 999;
+  await service.flush();
+  assert.equal(calls.length, 1, "an ordinary global pass must not defeat backoff");
+  time += 1;
+  assert.equal(timers.fire(), 1_000);
+  await settlePromiseJobs();
+  assert.equal(calls.length, 2);
+  assert.equal((await base.get(b.clientOrderId)).state, "pending");
+  assert.equal(timers.scheduled.length, 2);
+  assert.equal(timers.scheduled[1].delay, 2_000);
+  time += 1_999;
+  await service.flush();
+  assert.equal(calls.length, 2);
+  time += 1;
+  assert.equal(timers.fire(), 2_000);
+  await settlePromiseJobs();
+  assert.deepEqual(calls, [b.payload, b.payload, b.payload]);
+  assert.equal((await base.get(b.clientOrderId)).state, "synced");
+  assert.equal((await base.get(b.clientOrderId)).attemptCount, 3);
+  assert.deepEqual(await base.get(r.clientOrderId), r);
+  assert.equal(timers.active.size, 0);
+  assert.deepEqual(await service.flush({ clientOrderId: b.clientOrderId }), { state: "synced", clientOrderId: b.clientOrderId });
+});
+
+test("review isolation: offline deferral concerns B and recovery never reactivates R", async (t) => {
+  const base = createMemoryOutbox();
+  const timers = fakeTimers();
+  const calls = [];
+  const events = [];
+  let available = false;
+  const service = makeService(async () => { throw new Error("use the explicit transport"); }, {
+    store: base, autoRetry: true, setTimeoutImpl: timers.set, clearTimeoutImpl: timers.clear,
+    transport: {
+      canAttempt: () => available, unavailableCode: "OFFLINE",
+      async send(payload) { calls.push(payload); return success(); },
+    },
+  });
+  t.after(() => service.stop());
+  const r = await service.enqueue({ items, holdForReview: true });
+  const b = await service.enqueue({ items, visitContextId: currentReviewContext });
+  service.subscribe(event => events.push(event));
+  assert.deepEqual(await service.flush(), { state: "pending", clientOrderId: b.clientOrderId, errorCode: "OFFLINE" });
+  assert.deepEqual(calls, []);
+  assert.deepEqual(events.map(event => [event.clientOrderId, event.state]), [[b.clientOrderId, "pending"]]);
+  assert.equal(timers.active.size, 1);
+  assert.equal(timers.scheduled[0].delay, 1_000);
+  available = true;
+  assert.deepEqual(await service.flush({ force: true, connectivityRestored: true }), {
+    state: "synced", clientOrderId: b.clientOrderId, idempotencyResult: "created",
+  });
+  assert.deepEqual(calls, [b.payload]);
+  assert.equal(timers.active.size, 0);
+  assert.deepEqual(await base.get(r.clientOrderId), r);
+  assert.equal((await base.get(b.clientOrderId)).state, "synced");
+});
+
+test("review isolation: an already-attempted B retains the existing replay-first visit policy beside R", async (t) => {
+  const base = createMemoryOutbox();
+  const calls = [];
+  const checks = [];
+  const service = makeService(async () => { throw new Error("use the explicit transport"); }, {
+    store: base, now: () => 10_000,
+    transport: {
+      canAttempt: () => true,
+      async checkVisitContext(id) { checks.push(id); return { status: "stale" }; },
+      async send(payload) { calls.push(payload); return success("replayed"); },
+    },
+  });
+  t.after(() => service.stop());
+  const r = await service.enqueue({ items, holdForReview: true });
+  const b = await service.enqueue({ items, visitContextId: historicalReviewContext });
+  await base.update(b.clientOrderId, { attemptCount: 1, lastAttemptAt: 1, lastErrorCode: "NETWORK_ERROR" });
+  const result = await service.flush();
+  assert.deepEqual(result, { state: "synced", clientOrderId: b.clientOrderId, idempotencyResult: "replayed" });
+  assert.deepEqual(checks, [historicalReviewContext]);
+  assert.deepEqual(calls, [b.payload], "the existing ID/context reach the replay-first server contract");
+  assert.deepEqual(await base.get(r.clientOrderId), r);
+  assert.equal((await base.get(b.clientOrderId)).state, "synced");
+  assert.equal((await base.get(b.clientOrderId)).attemptCount, 2);
+});
+
+async function claimAuthFixture(t, { failureAt = null } = {}) {
+  const base = createMemoryOutbox();
+  const claimStarted = deferred(), releaseClaim = deferred();
+  const holdListed = deferred(), releaseHoldList = deferred();
+  const calls = [], events = [];
+  const failure = new Error("FICTIONAL_CLAIM_AUTH_" + (failureAt || "CONTROL").toUpperCase());
+  let listings = 0, failedSave = false, bId, holding;
+  const store = {
+    ...base,
+    async list() {
+      if (++listings === 2) { holdListed.resolve(); await releaseHoldList.promise; }
+      return base.list();
+    },
+    async claim(id, time) {
+      const claimed = failureAt === "claim" ? null : await base.claim(id, time);
+      claimStarted.resolve();
+      await releaseClaim.promise;
+      if (failureAt === "claim") throw failure;
+      return claimed;
+    },
+    async update(id, patch, options) {
+      if (id === bId && patch.state === "review_required" && failureAt === "save" && !failedSave) {
+        failedSave = true;
+        throw failure;
+      }
+      return base.update(id, patch, options);
+    },
+    async get(id) {
+      if (id === bId && failureAt === "read") throw failure;
+      return base.get(id);
+    },
+  };
+  const service = makeService(async (payload) => { calls.push(structuredClone(payload)); return success(); }, { store });
+  service.subscribe(event => events.push(event));
+  const r = await service.enqueue({ items, holdForReview: true });
+  const b = await service.enqueue({ items, visitContextId: currentReviewContext });
+  bId = b.clientOrderId;
+  const flight = service.flush();
+  const targeted = service.flush({ clientOrderId: bId });
+  flight.catch(() => {}); targeted.catch(() => {});
+  t.after(async () => {
+    releaseClaim.resolve(); releaseHoldList.resolve();
+    await Promise.allSettled([flight, targeted, holding].filter(Boolean));
+    await service.stop();
+  });
+  const startHold = (code = "HTTP_401") => {
+    holding = service.holdPendingForReview(code);
+    holding.catch(() => {});
+    return holding;
+  };
+  await claimStarted.promise;
+  return { base, service, r, b, flight, targeted, calls, events, failure, releaseClaim, holdListed, releaseHoldList, startHold };
+}
+
+for (const code of ["HTTP_401", "HTTP_403"]) {
+  test("claim authorization: revocation during claim stops a new send with " + code, async (t) => {
+    const f = await claimAuthFixture(t);
+    const holding = f.startHold(code);
+    await f.holdListed.promise;
+    f.releaseClaim.resolve();
+    const [aggregate, own] = await Promise.all([f.flight, f.targeted]);
+    const saved = await f.base.get(f.b.clientOrderId);
+    t.diagnostic("claim-auth-observation " + JSON.stringify({
+      code, sendCount: f.calls.length, aggregate, own,
+      saved: { clientOrderId: saved.clientOrderId, state: saved.state, errorCode: saved.lastErrorCode, attemptCount: saved.attemptCount },
+    }));
+    assert.equal(f.calls.length, 0, "authorization was revoked before transport.send began");
+    const expected = { state: "review_required", clientOrderId: f.b.clientOrderId, errorCode: code };
+    assert.deepEqual(aggregate, expected);
+    assert.deepEqual(own, expected);
+    assert.equal(saved.state, "review_required");
+    assert.equal(saved.lastErrorCode, code);
+    assert.equal(saved.attemptCount, 1, "the claim remains accounted for without leaving a sending record");
+    assert.deepEqual(saved.payload, f.b.payload);
+    assert.equal(f.events.some(e => e.clientOrderId === f.b.clientOrderId && e.displayState === "sending"), false);
+    f.releaseHoldList.resolve();
+    assert.equal(await holding, 0, "the later snapshot must not rewrite the already committed hold");
+    assert.deepEqual(await f.base.get(f.r.clientOrderId), f.r);
+  });
+}
+
+test("claim authorization: a claim with no revocation still sends B once", async (t) => {
+  const f = await claimAuthFixture(t);
+  f.releaseClaim.resolve();
+  const [aggregate, own] = await Promise.all([f.flight, f.targeted]);
+  assert.deepEqual(f.calls, [f.b.payload]);
+  assert.deepEqual(aggregate, { state: "synced", clientOrderId: f.b.clientOrderId, idempotencyResult: "created" });
+  assert.deepEqual(own, aggregate);
+  assert.equal((await f.base.get(f.b.clientOrderId)).state, "synced");
+  assert.equal((await f.base.get(f.b.clientOrderId)).attemptCount, 1);
+  assert.deepEqual(await f.base.get(f.r.clientOrderId), f.r);
+});
+
+test("claim authorization: an already committed hold is not followed by a stale claimed send", async (t) => {
+  const f = await claimAuthFixture(t);
+  const holding = f.startHold("HTTP_403");
+  await f.holdListed.promise;
+  f.releaseHoldList.resolve();
+  assert.equal(await holding, 1);
+  const held = await f.base.get(f.b.clientOrderId);
+  assert.equal(held.state, "review_required");
+  f.releaseClaim.resolve();
+  const [aggregate, own] = await Promise.all([f.flight, f.targeted]);
+  assert.deepEqual(f.calls, []);
+  assert.deepEqual(own, { state: "review_required", clientOrderId: f.b.clientOrderId, errorCode: "HTTP_403" });
+  assert.deepEqual(aggregate, own);
+  assert.deepEqual(await f.base.get(f.b.clientOrderId), held);
+});
+
+for (const state of ["synced", "rejected", "review_required"]) {
+  test("claim authorization: the stop preserves a concurrent " + state + " update", async (t) => {
+    const f = await claimAuthFixture(t);
+    const holding = f.startHold();
+    await f.holdListed.promise;
+    const lastErrorCode = state === "synced" ? null : state === "rejected" ? "SOLD_OUT" : "VISIT_CONTEXT_STALE";
+    const current = await f.base.update(f.b.clientOrderId, { state, lastErrorCode });
+    f.releaseClaim.resolve();
+    const [aggregate, own] = await Promise.all([f.flight, f.targeted]);
+    assert.deepEqual(f.calls, []);
+    assert.deepEqual(own, { state, clientOrderId: f.b.clientOrderId, ...(lastErrorCode ? { errorCode: lastErrorCode } : {}) });
+    assert.deepEqual(aggregate, own);
+    assert.deepEqual(await f.base.get(f.b.clientOrderId), current);
+    f.releaseHoldList.resolve();
+    assert.equal(await holding, 0);
+  });
+}
+
+for (const failureAt of ["claim", "save", "read"]) {
+  test("claim authorization: " + failureAt + " failure rejects the waiting callers without a send", async (t) => {
+    const f = await claimAuthFixture(t, { failureAt });
+    const holding = f.startHold();
+    await f.holdListed.promise;
+    if (failureAt === "read") await f.base.update(f.b.clientOrderId, { state: "synced" });
+    const rejected = Promise.all([f.flight, f.targeted].map(p => assert.rejects(p, error => error === f.failure)));
+    f.releaseClaim.resolve();
+    await rejected;
+    assert.deepEqual(f.calls, []);
+    const retained = await f.base.get(f.b.clientOrderId);
+    assert.equal(retained.state, failureAt === "claim" ? "pending" : failureAt === "save" ? "sending" : "synced");
+    assert.deepEqual(retained.payload, f.b.payload);
+    assert.equal(f.events.some(e => e.clientOrderId === f.b.clientOrderId && e.displayState === "review_required"), false, "a failed save/read must not publish a fictitious hold");
+    f.releaseHoldList.resolve();
+    assert.equal(await holding, failureAt === "read" ? 0 : 1);
+    assert.equal((await f.base.get(f.b.clientOrderId)).state, failureAt === "read" ? "synced" : "review_required");
+  });
+}
+
+test("claim authorization: revocation by a sending observer is checked before transport.send", async (t) => {
+  const f = await claimAuthFixture(t);
+  let holding;
+  f.service.subscribe(event => {
+    if (event.clientOrderId === f.b.clientOrderId && event.displayState === "sending") holding = f.startHold();
+  });
+  f.releaseClaim.resolve();
+  await f.holdListed.promise;
+  const [aggregate, own] = await Promise.all([f.flight, f.targeted]);
+  assert.deepEqual(f.calls, []);
+  assert.deepEqual(own, { state: "review_required", clientOrderId: f.b.clientOrderId, errorCode: "HTTP_401" });
+  assert.deepEqual(aggregate, own);
+  assert.equal((await f.base.get(f.b.clientOrderId)).state, own.state);
+  f.releaseHoldList.resolve();
+  await holding;
 });

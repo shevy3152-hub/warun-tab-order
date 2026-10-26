@@ -749,6 +749,7 @@ export function createOrderOutbox({
   let started = false;
   let stopped = false;
   let authorizationRevoked = false;
+  let authorizationErrorCode = "HTTP_401";
   let lastOnlineFlushAt = 0;
 
   const emit = (record, extra = {}) => {
@@ -820,10 +821,14 @@ export function createOrderOutbox({
     if (connectivityRestored) {
       clearRetryTimer();
     }
-    const records = await recordsForFlush(clientOrderId);
+    let records = await recordsForFlush(clientOrderId);
     if (!records.length) return recordFlushResult({ state: "not_found", clientOrderId });
     const reviewRequired = records.find((record) => record.state === OUTBOX_STATES.REVIEW_REQUIRED);
-    if (reviewRequired) return recordFlushResult({ state: OUTBOX_STATES.REVIEW_REQUIRED, clientOrderId: reviewRequired.clientOrderId, errorCode: reviewRequired.lastErrorCode });
+    if (reviewRequired) {
+      // A historical hold is local to its order; current auth/context gates still apply.
+      records = records.filter((record) => record.state === OUTBOX_STATES.PENDING);
+      if (!records.length) return recordFlushResult({ state: OUTBOX_STATES.REVIEW_REQUIRED, clientOrderId: reviewRequired.clientOrderId, errorCode: reviewRequired.lastErrorCode });
+    }
     if (!connectivityRestored && typeof transport.canAttempt === "function" && !transport.canAttempt()) {
       const result = { state: OUTBOX_STATES.PENDING, clientOrderId: records[0].clientOrderId, errorCode: transport.unavailableCode || "OFFLINE" };
       emit({ ...records[0], lastErrorCode: result.errorCode }, { result: "not_attempted" });
@@ -882,7 +887,21 @@ export function createOrderOutbox({
       const claimed = await store.claim(record.clientOrderId, now());
       if (!claimed) continue;
       const retrying = claimed.attemptCount > 1;
-      emit(claimed, { displayState: retrying ? "retrying" : "sending" });
+      if (!authorizationRevoked) emit(claimed, { displayState: retrying ? "retrying" : "sending" });
+      // Claim and synchronous observers can race authorization revocation.
+      if (authorizationRevoked) {
+        const review = await store.update(record.clientOrderId, {
+          state: OUTBOX_STATES.REVIEW_REQUIRED,
+          lastErrorCode: authorizationErrorCode,
+        }, { onlyStates: [OUTBOX_STATES.PENDING, OUTBOX_STATES.SENDING] });
+        const retained = review || await store.get(record.clientOrderId);
+        lastResult = recordFlushResult(retained
+          ? { state: retained.state, clientOrderId: record.clientOrderId, ...(retained.lastErrorCode ? { errorCode: retained.lastErrorCode } : {}) }
+          : { state: "not_found", clientOrderId: record.clientOrderId });
+        if (review) emit(review, { displayState: "review_required" });
+        continue;
+      }
+      // No await or observer runs between this authorization gate and send.
       let result;
       try {
         result = await transport.send(claimed.payload, { connectivityRestored });
@@ -1007,6 +1026,7 @@ export function createOrderOutbox({
       authorizationRevoked = true;
       clearRetryTimer();
       const safeCode = safeErrorCode(errorCode, "HTTP_401");
+      authorizationErrorCode = safeCode;
       let heldCount = 0;
       const heldStates = [OUTBOX_STATES.PENDING, OUTBOX_STATES.SENDING];
       for (const record of await store.list()) {
