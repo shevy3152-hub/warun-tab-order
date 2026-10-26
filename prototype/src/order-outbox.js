@@ -737,10 +737,14 @@ export function createOrderOutbox({
   if (!transport || typeof transport.send !== "function") throw new TypeError("An order transport is required.");
   const listeners = new Set();
   let flushPromise = null;
+  const pendingOrderFlushes = new Map();
+  let flushOrderIds = null;
+  let flushResults = null;
   let retryTimer = null;
   let retryConnectivityRestored = false;
   let deferredRetryAttempt = 0;
   let pendingRecoveryFlush = false;
+  let pendingRetryFlush = false;
   let started = false;
   let stopped = false;
   let authorizationRevoked = false;
@@ -779,6 +783,8 @@ export function createOrderOutbox({
       retryTimer = null;
       const retryOptions = { connectivityRestored: retryConnectivityRestored };
       retryConnectivityRestored = false;
+      // Keep a due retry if another order still owns the sending loop.
+      if (flushPromise && !retryOptions.connectivityRestored) pendingRetryFlush = true;
       void flush(retryOptions);
     }, delay);
     if (typeof retryTimer?.unref === "function") retryTimer.unref();
@@ -797,30 +803,38 @@ export function createOrderOutbox({
     return store.list();
   };
 
+  const recordFlushResult = (result) => {
+    if (result.clientOrderId) flushResults?.set(result.clientOrderId, result);
+    return result;
+  };
+
   const flushInternal = async ({ clientOrderId = null, force = false, connectivityRestored = false } = {}) => {
-    if (stopped) return { state: "stopped", clientOrderId };
+    if (stopped) return recordFlushResult({ state: "stopped", clientOrderId });
     if (authorizationRevoked) {
       const heldRecord = (await recordsForFlush(clientOrderId)).find((record) => [OUTBOX_STATES.PENDING, OUTBOX_STATES.SENDING, OUTBOX_STATES.REVIEW_REQUIRED].includes(record.state));
-      return heldRecord
+      return recordFlushResult(heldRecord
         ? { state: OUTBOX_STATES.REVIEW_REQUIRED, clientOrderId: heldRecord.clientOrderId, errorCode: heldRecord.lastErrorCode || "HTTP_401" }
-        : { state: "not_found", clientOrderId };
+        : { state: "not_found", clientOrderId });
     }
     if (connectivityRestored) {
       clearRetryTimer();
     }
     const records = await recordsForFlush(clientOrderId);
-    if (!records.length) return { state: "not_found", clientOrderId };
+    if (!records.length) return recordFlushResult({ state: "not_found", clientOrderId });
     const reviewRequired = records.find((record) => record.state === OUTBOX_STATES.REVIEW_REQUIRED);
-    if (reviewRequired) return { state: OUTBOX_STATES.REVIEW_REQUIRED, clientOrderId: reviewRequired.clientOrderId, errorCode: reviewRequired.lastErrorCode };
+    if (reviewRequired) return recordFlushResult({ state: OUTBOX_STATES.REVIEW_REQUIRED, clientOrderId: reviewRequired.clientOrderId, errorCode: reviewRequired.lastErrorCode });
     if (!connectivityRestored && typeof transport.canAttempt === "function" && !transport.canAttempt()) {
       const result = { state: OUTBOX_STATES.PENDING, clientOrderId: records[0].clientOrderId, errorCode: transport.unavailableCode || "OFFLINE" };
       emit({ ...records[0], lastErrorCode: result.errorCode }, { result: "not_attempted" });
       scheduleDeferredRetry(records[0]);
+      if (records[0].state === OUTBOX_STATES.PENDING) recordFlushResult(result);
       return result;
     }
 
     let lastResult = { state: OUTBOX_STATES.PENDING, clientOrderId: records[0].clientOrderId };
     for (const record of records) {
+      // An early return above must leave unvisited targeted requests queued.
+      flushOrderIds?.add(record.clientOrderId);
       if (record.state !== OUTBOX_STATES.PENDING) continue;
       if (!force && !retryIsDue(record, now(), retryBaseMs, retryMaxMs)) continue;
       if (record.payload?.visitContextId && typeof transport.checkVisitContext === "function") {
@@ -838,6 +852,7 @@ export function createOrderOutbox({
           });
           emit(review, { displayState: "review_required" });
           lastResult = { state: review.state, clientOrderId: record.clientOrderId, errorCode: review.lastErrorCode };
+          flushResults?.set(record.clientOrderId, lastResult);
           continue;
         }
         if (contextCheck?.status === "unauthorized" || ["HTTP_401", "HTTP_403", "AUTHENTICATION_FAILED", "AUTHORIZATION_FAILED"].includes(contextCheck?.errorCode)) {
@@ -848,6 +863,7 @@ export function createOrderOutbox({
           });
           emit(review, { displayState: "review_required" });
           lastResult = { state: review.state, clientOrderId: record.clientOrderId, errorCode: review.lastErrorCode };
+          flushResults?.set(record.clientOrderId, lastResult);
           continue;
         }
         if (contextCheck?.status === "unavailable" && !mayNeedAcceptedReplay) {
@@ -855,6 +871,7 @@ export function createOrderOutbox({
           emit(record, { displayState: "pending", result: "context_not_verified", errorCode });
           scheduleDeferredRetry(record, { connectivityRestored });
           lastResult = { state: OUTBOX_STATES.PENDING, clientOrderId: record.clientOrderId, errorCode };
+          flushResults?.set(record.clientOrderId, lastResult);
           continue;
         }
         // A previously attempted order may have been accepted even if its response was lost.
@@ -903,32 +920,78 @@ export function createOrderOutbox({
         scheduleRetry(pending, { connectivityRestored });
         lastResult = { state: OUTBOX_STATES.PENDING, clientOrderId: record.clientOrderId, errorCode: pending.lastErrorCode };
       }
+      flushResults?.set(record.clientOrderId, lastResult);
     }
     return lastResult;
   };
 
+  const queueOrderFlush = (options) => {
+    const id = options.clientOrderId;
+    if (!id || flushOrderIds?.has(id)) return;
+    const previous = pendingOrderFlushes.get(id);
+    pendingOrderFlushes.set(id, { ...previous, ...options, force: Boolean(previous?.force || options.force) });
+  };
+
+  const requestedFlushResult = (promise, options, results) => options.clientOrderId
+    ? promise.then(async () => {
+      const id = options.clientOrderId;
+      if (results.has(id)) return results.get(id);
+      if (stopped) return { state: "stopped", clientOrderId: id };
+      // A skipped/deferred target must never inherit a different order result.
+      const record = await store.get(id);
+      return record
+        ? { state: record.state, clientOrderId: id, ...(record.lastErrorCode ? { errorCode: record.lastErrorCode } : {}) }
+        : { state: "not_found", clientOrderId: id };
+    })
+    : promise;
+
   const flush = (options = {}) => {
     if (flushPromise) {
+      queueOrderFlush(options);
       if (options.connectivityRestored) pendingRecoveryFlush = true;
-      return flushPromise;
+      return requestedFlushResult(flushPromise, options, flushResults);
     }
+    flushOrderIds = new Set(options.clientOrderId ? [options.clientOrderId] : []);
+    // Per-order outcomes live only for this drain; later requests read the store.
+    const results = new Map();
+    flushResults = results;
     flushPromise = (async () => {
-      let nextOptions = options;
-      let result;
-      do {
-        result = await flushInternal(nextOptions);
-        nextOptions = null;
-        if (pendingRecoveryFlush && !stopped) {
-          pendingRecoveryFlush = false;
-          nextOptions = { force: true, connectivityRestored: true };
-        }
-      } while (nextOptions);
-      return result;
-    })().finally(() => {
-      flushPromise = null;
-      pendingRecoveryFlush = false;
-    });
-    return flushPromise;
+      try {
+        let nextOptions = options;
+        let result;
+        do {
+          // Each pass records concrete order outcomes, not its aggregate no-op default.
+          result = await flushInternal(nextOptions);
+          nextOptions = null;
+          if (pendingRecoveryFlush && !stopped) {
+            pendingRecoveryFlush = false;
+            pendingRetryFlush = false;
+            nextOptions = { force: true, connectivityRestored: true };
+          } else if (!stopped) {
+            for (const [id, queued] of pendingOrderFlushes) {
+              pendingOrderFlushes.delete(id);
+              if (flushOrderIds.has(id)) continue;
+              nextOptions = queued;
+              break;
+            }
+          }
+          if (!nextOptions && pendingRetryFlush && !stopped) {
+            pendingRetryFlush = false;
+            nextOptions = {};
+          }
+        } while (nextOptions);
+        return result;
+      } finally {
+        // Checking the last handoff and releasing the lock share one promise job.
+        flushPromise = null;
+        pendingRecoveryFlush = false;
+        pendingRetryFlush = false;
+        pendingOrderFlushes.clear();
+        flushOrderIds = null;
+        flushResults = null;
+      }
+    })();
+    return requestedFlushResult(flushPromise, options, results);
   };
 
   const onOnline = () => {
@@ -951,6 +1014,10 @@ export function createOrderOutbox({
           lastErrorCode: safeCode,
         });
         if (!review) continue;
+        // Publish the committed hold before observers or waiting callers see it.
+        recordFlushResult({
+          state: review.state, clientOrderId: review.clientOrderId, errorCode: review.lastErrorCode,
+        });
         emit(review, { displayState: "review_required" });
         heldCount += 1;
       }
@@ -964,8 +1031,13 @@ export function createOrderOutbox({
         record.state = OUTBOX_STATES.REVIEW_REQUIRED;
         record.lastErrorCode = "VISIT_CONTEXT_UNAVAILABLE";
       }
+      const joinActiveFlush = Boolean(flushPromise);
       const saved = await store.put(record);
       emit(saved, { displayState: saved.state === OUTBOX_STATES.REVIEW_REQUIRED ? "review_required" : "pending" });
+      // A put may finish after the active drain has released its lock.
+      if (saved.state === OUTBOX_STATES.PENDING && (joinActiveFlush || flushPromise)) {
+        void flush({ clientOrderId: saved.clientOrderId }).catch(() => {});
+      }
       return saved;
     },
     flush,
