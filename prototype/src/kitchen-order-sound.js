@@ -69,12 +69,13 @@ export function createKitchenSoundEngine({ env = globalThis, onStateChange = () 
       const reservationStart = Math.max(context.currentTime, nextStart);
       const isStaffCall = kind === "staffCall";
       const isCheckout = kind === "checkout";
+      const isThreeTone = kind === "order" || isCheckout;
       const start = reservationStart + (isStaffCall ? 0.5 : 0);
-      nextStart = start + (isStaffCall ? 2.2 : isCheckout ? 1.5 : 0.42);
+      nextStart = start + (isStaffCall ? 2.2 : isThreeTone ? 1.5 : 0.42);
       const callPair = [{ frequency: 523, duration: 0.18, holdAt: 0.12 }, { frequency: 659, duration: 0.18, holdAt: 0.12 }];
       const notes = isStaffCall
         ? Array.from({ length: 3 }, (_, repeat) => callPair.map((note, index) => ({ ...note, at: repeat * 0.85 + index * 0.27 }))).flat()
-        : Array.from({ length: isCheckout ? 3 : 1 }, (_, repeat) => ({ frequency: 880, at: repeat * 0.5, endFrequency: 1174, sweepAt: 0.14, duration: 0.34, holdAt: 0.20 }));
+        : Array.from({ length: isThreeTone ? 3 : 1 }, (_, repeat) => ({ frequency: 880, at: repeat * 0.5, endFrequency: 1174, sweepAt: 0.14, duration: 0.34, holdAt: 0.20 }));
       for (const note of notes) {
         const oscillator = context.createOscillator();
         const gain = context.createGain();
@@ -331,7 +332,8 @@ export function createKitchenOrderSound({ storage, storageKey, engine, loadBasel
         if (!freshSnapshot) continue;
         // An unseen restored/edited order is not a newly created order.
         if (!["new", "active"].includes(order.status) || (order.version !== 1 && !(allowUnversioned && order.version == null))) continue;
-        notifications.push("order");
+        // The API maps the persisted customer / kitchen_addition origin.
+        notifications.push(order.orderOrigin === "kitchen_addition" ? "kitchenOrder" : "order");
       }
       for (const call of addedCalls) {
         if (!freshSnapshot) continue;

@@ -221,10 +221,10 @@ test("sound engine stops every scheduled oscillator on OFF", async () => {
   const engine = createKitchenSoundEngine({ env: { AudioContext: Context } });
   await engine.activate();
   engine.play(); engine.play();
-  assert.equal(oscillators[1].startTime, 0.42);
+  assert.equal(oscillators.length, 6);
+  assert.equal(oscillators[3].startTime, 1.5);
   engine.stop();
-  assert.equal(oscillators[0].stopCalls, 2);
-  assert.equal(oscillators[1].stopCalls, 2);
+  assert.ok(oscillators.every(node => node.stopCalls === 2));
   engine.dispose();
   assert.equal(context.state, "closed");
   await assert.rejects(createKitchenSoundEngine({ env: {} }).activate());
@@ -243,8 +243,8 @@ test("staff-call three-pair tone is distinct and queued without overlapping the 
   engine.play("order");
   engine.play("staffCall");
   engine.play("order");
-  assert.deepEqual(oscillators.map((node) => Number(node.startTime.toFixed(2))), [0, 0.92, 1.19, 1.77, 2.04, 2.62, 2.89, 3.12]);
-  assert.deepEqual(oscillators.map((node) => node.frequencyValues[0][0]), [880, 523, 659, 523, 659, 523, 659, 880]);
+  assert.deepEqual(oscillators.map((node) => Number(node.startTime.toFixed(2))), [0, 0.5, 1, 2, 2.27, 2.85, 3.12, 3.7, 3.97, 4.2, 4.7, 5.2]);
+  assert.deepEqual(oscillators.map((node) => node.frequencyValues[0][0]), [880, 880, 880, 523, 659, 523, 659, 523, 659, 880, 880, 880]);
   for (let index = 1; index < oscillators.length; index++) assert.ok(oscillators[index].startTime >= oscillators[index - 1].stopTime);
   engine.dispose();
 });
@@ -261,7 +261,7 @@ test("staff-call lead-in and reservation are based on AudioContext time after re
   await engine.activate();
   engine.play("staffCall");
   engine.play("order");
-  assert.deepEqual(oscillators.map((node) => Number(node.startTime.toFixed(2))), [7.5, 7.77, 8.35, 8.62, 9.2, 9.47, 9.7]);
+  assert.deepEqual(oscillators.map((node) => Number(node.startTime.toFixed(2))), [7.5, 7.77, 8.35, 8.62, 9.2, 9.47, 9.7, 10.2, 10.7]);
   assert.deepEqual(oscillators.slice(0, 6).map((node) => node.frequencyValues[0][0]), [523, 659, 523, 659, 523, 659]);
   for (let index = 1; index < oscillators.length; index++) assert.ok(oscillators[index].startTime >= oscillators[index - 1].stopTime);
   engine.dispose();
@@ -418,11 +418,11 @@ test("kitchen test and notification use the same bounded louder envelope", async
   await controller.test();
   await controller.enable();
   controller.observe([order("new")], { requestStartedAt: performance.now() });
-  assert.equal(envelopes.length, 2);
+  assert.equal(envelopes.length, 6);
   for (const envelope of envelopes) {
     assert.equal(envelope[1][0], KITCHEN_NOTIFICATION_GAIN);
     assert.equal(envelope[2][0], KITCHEN_NOTIFICATION_GAIN);
-    assert.equal(envelope[2][1] - envelope[0][1], 0.20);
+    assert.ok(Math.abs(envelope[2][1] - envelope[0][1] - 0.20) < 1e-10);
     assert.ok(Math.max(...envelope.map(([value]) => value)) < 1);
   }
   controller.dispose();
@@ -528,7 +528,7 @@ test("maximum kitchen gain remains below one and zero volume schedules no audio"
   await engine.activate();engine.setVolume(100);engine.play();
   assert.equal(peaks[0],0.7);
   let mutedStops=0;const stop=engine.stop.bind(engine);engine.stop=()=>{mutedStops++;stop();};
-  engine.setVolume(0);engine.play();assert.equal(nodes,1);assert.equal(mutedStops,1);
+  engine.setVolume(0);engine.play();assert.equal(nodes,3);assert.equal(mutedStops,1);
   engine.dispose();
 });
 
@@ -588,21 +588,21 @@ test("rendered switch invokes activation, never test; ON survives order and volu
     assert.equal(reads,2);assert.equal(plays,0);
     assert.equal(toggle().props['aria-checked'],true);
     clock=20;props={...props,orders:[order('new')],requestStartedAt:20};render();
-    assert.equal(toggle().props['aria-checked'],true);assert.equal(plays,1);
+    assert.equal(toggle().props['aria-checked'],true);assert.equal(plays,3);
     find(n=>n.type==='input').props.onChange({target:{value:'80'}});render();
     assert.equal(toggle().props['aria-checked'],true);
     const trial=find(n=>n.type==='button'&&n.props.children.includes('音を試す'));
     await trial.props.onClick();await new Promise(resolve=>setImmediate(resolve));render();
-    assert.equal(toggle().props['aria-checked'],true);assert.equal(plays,2);
+    assert.equal(toggle().props['aria-checked'],true);assert.equal(plays,6);
     toggle().props.onClick();render();assert.equal(toggle().props['aria-checked'],false);
     await find(n=>n.type==='button'&&n.props.children.includes('音を試す')).props.onClick();await new Promise(resolve=>setImmediate(resolve));render();
-    assert.equal(toggle().props['aria-checked'],false);assert.equal(plays,3);
+    assert.equal(toggle().props['aria-checked'],false);assert.equal(plays,9);
     assert.equal(find(n=>n.type==='button'&&n.props.children.includes('呼出音を試す（隔離）')),undefined);
     props={...props,demoMode:true};render();
     const staffTrial=find(n=>n.type==='button'&&n.props.children.includes('呼出音を試す（隔離）'));
     assert.ok(staffTrial);
     await staffTrial.props.onClick();await new Promise(resolve=>setImmediate(resolve));render();
-    assert.equal(plays,9);assert.equal(reads,2);
+    assert.equal(plays,15);assert.equal(reads,2);
   } finally {
     for(const slot of slots)slot?.cleanup?.();globalThis.window=priorWindow;delete globalThis.__kitchenSoundHooks;
   }
@@ -699,4 +699,161 @@ test("new checkout created after activation is not lost to a pre-activation snap
   assert.deepEqual(f.playKinds, ["checkout"]);
   f.controller.observe([], { checkoutRequests: [arrivedAfterActivation], requestStartedAt: 30 });
   assert.deepEqual(f.playKinds, ["checkout"]);
+});
+
+
+// The counts below are oscillator notes in a complete set, not play() calls.
+function originToneFixture({ baseline = [], epoch = 1800000000000, values = new Map() } = {}) {
+  const notes = [], envelopes = [];
+  let clock = 10;
+  class Context {
+    constructor() { this.state = "running"; this.currentTime = 0; this.destination = {}; }
+    async resume() {} async close() { this.state = "closed"; }
+    createOscillator() {
+      const note = { frequencies: [], frequency: { setValueAtTime(value, at) { note.frequencies.push([value, at]); } },
+        connect() {}, disconnect() {}, start(at) { this.startTime = at; },
+        stop(at) { this.stopTime ??= at; this.stopCalls = (this.stopCalls ?? 0) + 1; } };
+      notes.push(note); return note;
+    }
+    createGain() {
+      const values = []; envelopes.push(values);
+      return { gain: { setValueAtTime: (v, t) => values.push([v, t]),
+        linearRampToValueAtTime: (v, t) => values.push([v, t]),
+        exponentialRampToValueAtTime: (v, t) => values.push([v, t]) }, connect() {}, disconnect() {} };
+    }
+  }
+  const storage = { getItem: key => values.get(key), setItem: (key, value) => values.set(key, value) };
+  const engine = createKitchenSoundEngine({ env: { AudioContext: Context } });
+  const controller = createKitchenOrderSound({ storage, storageKey: "origin-tones-fixture", engine,
+    now: () => clock, nowEpoch: () => epoch, loadBaseline: async () => baseline });
+  return { controller, engine, notes, envelopes, values, epoch, clock: value => { clock = value; } };
+}
+function assertToneNotes(notes, starts, frequency = 880, duration = 0.34) {
+  assert.equal(notes.length, starts.length);
+  for (const [i, note] of notes.entries()) {
+    assert.ok(Math.abs(note.startTime - starts[i]) < 1e-10);
+    assert.ok(Math.abs(note.stopTime - note.startTime - duration) < 1e-10);
+    const expected = frequency === 880 ? [[880, note.startTime], [1174, note.startTime + 0.14]] : [[frequency, note.startTime]];
+    assert.deepEqual(note.frequencies, expected);
+  }
+}
+
+test("origin tones: snapshot origins select A90 three notes and both kitchen additions one note", async () => {
+  const raw = [
+    { orderId: "fixture-a90", orderOrigin: "customer" },
+    { orderId: "fixture-kitchen-menu", orderOrigin: "kitchen_addition" },
+    { orderId: "fixture-kitchen-quantity", orderOrigin: "kitchen_addition" },
+  ].map(row => ({ ...row, tableId: 1, sessionId: "fixture-session", acceptedAtMs: 1800000000001,
+    status: "new", version: 1, totalAmountYen: 100, items: [] }));
+  const env = { location: { origin: "http://fixture.invalid" }, WARUN_KITCHEN_API_TOKEN: "fixture-only-dummy",
+    fetch: async () => ({ ok: true, json: async () => ({ activeOrders: raw }) }) };
+  const snapshot = await fetchKitchenSnapshot({ env });
+  assert.deepEqual(snapshot.orders.map(row => [row.id, row.orderOrigin]), raw.map(row => [row.orderId, row.orderOrigin]));
+  const f = originToneFixture();
+  try {
+    await f.controller.enable();
+    f.controller.observe(snapshot.orders, { requestStartedAt: 20 });
+    assertToneNotes(f.notes, [0, 0.5, 1, 1.5, 1.92]);
+    f.controller.observe(snapshot.orders, { requestStartedAt: 30 });
+    assert.equal(f.notes.length, 5, "The same three server IDs must not schedule again");
+  } finally { f.controller.dispose(); }
+});
+
+test("origin tones: preview and A90 notification each schedule the full same three-note envelope", async () => {
+  const f = originToneFixture();
+  try {
+    await f.controller.test();
+    assertToneNotes(f.notes, [0, 0.5, 1]);
+    assert.equal(f.controller.getState().status, "needs-activation", "Preview must not enable notifications");
+    await f.controller.enable();
+    f.controller.observe([{ ...order("fixture-customer"), orderOrigin: "customer" }], { requestStartedAt: 20 });
+    assertToneNotes(f.notes, [0, 0.5, 1, 1.5, 2, 2.5]);
+    for (const envelope of f.envelopes) {
+      assert.equal(envelope[1][0], KITCHEN_NOTIFICATION_GAIN);
+      assert.equal(envelope[2][0], KITCHEN_NOTIFICATION_GAIN);
+      assert.ok(Math.abs(envelope[2][1] - envelope[0][1] - 0.20) < 1e-10);
+    }
+  } finally { f.controller.dispose(); }
+});
+
+test("origin tones: simultaneous customer, staff and checkout keep existing dispatch order without overlapping sets", async () => {
+  const f = originToneFixture();
+  try {
+    await f.controller.enable();
+    f.controller.observe([{ ...order("fixture-customer"), orderOrigin: "customer" }], {
+      requestStartedAt: 20,
+      staffCalls: [{ id: "fixture-call", status: "open", createdAtMs: f.epoch + 1 }],
+      checkoutRequests: [{ checkoutRequestId: "fixture-checkout", status: "requested", requestedAtMs: f.epoch + 1 }],
+    });
+    assertToneNotes(f.notes.slice(0, 3), [0, 0.5, 1]);
+    const staffStarts = [2, 2.27, 2.85, 3.12, 3.7, 3.97];
+    for (let i = 0; i < 6; i++) assertToneNotes([f.notes[i + 3]], [staffStarts[i]], i % 2 ? 659 : 523, 0.18);
+    assertToneNotes(f.notes.slice(9), [4.2, 4.7, 5.2]);
+    for (let i = 1; i < f.notes.length; i++) assert.ok(f.notes[i].startTime >= f.notes[i - 1].stopTime);
+  } finally { f.controller.dispose(); }
+});
+
+for (const action of ["OFF", "mute", "dispose"]) {
+  test("origin tones: " + action + " stops every already scheduled note including second and third", async () => {
+    const f = originToneFixture();
+    try {
+      await f.controller.test();
+      assertToneNotes(f.notes, [0, 0.5, 1]);
+      if (action === "OFF") f.controller.disable();
+      else if (action === "mute") f.controller.setVolume(0);
+      else f.controller.dispose();
+      assert.ok(f.notes.every(note => note.stopCalls === 2));
+    } finally { f.controller.dispose(); }
+  });
+}
+
+test("origin tones: baseline, known IDs and OFF observations remain silent for both origins", async () => {
+  const old = [{ ...order("fixture-old-customer"), orderOrigin: "customer" },
+    { ...order("fixture-old-kitchen"), orderOrigin: "kitchen_addition" }];
+  const f = originToneFixture({ baseline: old });
+  try {
+    await f.controller.enable();
+    f.controller.observe(old, { requestStartedAt: 20 });
+    assert.equal(f.notes.length, 0);
+    const next = [{ ...order("fixture-new-customer"), orderOrigin: "customer" },
+      { ...order("fixture-new-kitchen"), orderOrigin: "kitchen_addition" }];
+    f.controller.observe(next, { requestStartedAt: 30 });
+    assertToneNotes(f.notes, [0, 0.5, 1, 1.5]);
+    f.controller.observe(next, { requestStartedAt: 40 });
+    assert.equal(f.notes.length, 4);
+    f.controller.disable();
+    const off = [{ ...order("fixture-off"), orderOrigin: "customer" }];
+    f.controller.observe(off, { requestStartedAt: 50 });
+    await f.controller.enable();
+    f.controller.observe(off, { requestStartedAt: 60 });
+    assert.equal(f.notes.length, 4);
+  } finally { f.controller.dispose(); }
+});
+
+test("origin tones: slow pre-ON result leaves new customer ID for one trailing three-note set", async () => {
+  const { createKitchenRefresher } = await import("../src/kitchen-refresh.js");
+  const f = originToneFixture(), requests = [], timers = new Set();
+  const reader = createKitchenRefresher({
+    load: () => new Promise(resolve => requests.push(resolve)),
+    onData: data => f.controller.observe(data.orders, { requestStartedAt: data.startedAt }),
+    onError: error => { throw error; },
+    setTimeoutImpl: callback => { const token = { callback }; timers.add(token); return token; },
+    clearTimeoutImpl: token => timers.delete(token),
+  });
+  const flush = async () => { for (let i = 0; i < 12; i++) await Promise.resolve(); };
+  try {
+    const first = reader.refresh(); await flush();
+    await f.controller.enable(); f.clock(20);
+    const trailing = reader.refresh();
+    const n = { ...order("fixture-after-on"), orderOrigin: "customer", createdAt: new Date(f.epoch + 1).toISOString() };
+    requests[0]({ orders: [n], startedAt: 5 }); await first; await flush();
+    assert.equal(f.notes.length, 0);
+    assert.ok(!JSON.parse(f.values.get("origin-tones-fixture")).seenIds.includes(n.id));
+    requests[1]({ orders: [n], startedAt: 20 }); await trailing;
+    assertToneNotes(f.notes, [0, 0.5, 1]);
+    const later = reader.refresh(); await flush();
+    requests[2]({ orders: [n], startedAt: 30 }); await later;
+    assert.equal(f.notes.length, 3);
+    assert.equal(requests.length, 3); assert.equal(timers.size, 0);
+  } finally { reader.stop(); f.controller.dispose(); }
 });
