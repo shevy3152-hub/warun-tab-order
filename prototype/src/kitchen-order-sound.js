@@ -292,17 +292,24 @@ export function createKitchenOrderSound({ storage, storageKey, engine, loadBasel
       if (disposed || !ready || !Array.isArray(orders) || !Array.isArray(staffCalls) || !Array.isArray(checkoutRequests)) return;
       const first = !initialized;
       initialized = true;
+      const startedBeforeActivation = status === "on" && Number.isFinite(requestStartedAt) && requestStartedAt < enabledAt;
+      // Keep post-activation IDs unknown until an activation-current read can notify.
+      // Baseline/OFF IDs stay in the seen sets; absent creation times stay conservative.
+      const awaitsFreshRead = (createdAt) => volume > 0 && startedBeforeActivation && Number.isFinite(createdAt) && createdAt >= activationEpochAt;
       const addedOrders = [];
       const addedCalls = [];
       const addedCheckouts = [];
       for (const order of orders) {
         if (typeof order?.id !== "string" || !order.id || seen.has(order.id)) continue;
+        if (awaitsFreshRead(Date.parse(order.createdAt))) continue;
         seen.add(order.id);
         addedOrders.push(order);
       }
       for (const call of staffCalls) {
         const id = call?.id ?? call?.staffCallId;
         if (typeof id !== "string" || !id || seenCallIds.has(id) || call.status === "resolved") continue;
+        const createdAt = Number(call.createdAtMs ?? (call.createdAt ? Date.parse(call.createdAt) : NaN));
+        if (!suppressStaffCalls && awaitsFreshRead(createdAt)) continue;
         seenCallIds.add(id);
         if (!suppressStaffCalls) addedCalls.push(call);
       }

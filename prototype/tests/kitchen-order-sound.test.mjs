@@ -272,7 +272,7 @@ test("sound controls belong only to kitchen and use snapshot request timing", as
   assert.match(kitchen, /<KitchenOrderSound orders=\{activeOrders\}/);
   assert.match(kitchen, /staffCalls=\{activeCalls\}/);
   assert.match(kitchen, /checkoutRequests=\{activeCheckouts\}/);
-  assert.match(app, /onReconnect: \(\) => \{ suppressStaffCallsUntilSnapshot = true; void load\(\); \}/);
+  assert.match(app, /onReconnect: \(\) => load\(\{ suppressStaffCalls: true \}\)/);
   assert.equal((app.match(/<KitchenOrderSound /g) || []).length, 1);
   assert.match(app, /notificationRequestStartedAt: snapshot.notificationRequestStartedAt/);
   assert.match(app, /playCheckoutBell\(checkoutAudioRef\)/);

@@ -67,9 +67,9 @@ export function kitchenApiConfigured(env = globalThis) {
   return Boolean(kitchenToken(env) && apiBase(env));
 }
 
-export async function fetchKitchenCheckoutRequests({ env = globalThis, fetchImpl = env.fetch } = {}) {
+export async function fetchKitchenCheckoutRequests({ env = globalThis, fetchImpl = env.fetch, signal } = {}) {
   const { base, requestHeaders } = checkoutBase(env, fetchImpl);
-  const response = await fetchImpl(`${base}/kitchen/checkout-requests`, { headers: requestHeaders });
+  const response = await fetchImpl(`${base}/kitchen/checkout-requests`, { headers: requestHeaders, ...(signal ? { signal } : {}) });
   if (!response.ok) throw await responseError(response, "会計依頼を取得できません。");
   const body = await response.json();
   if (!Array.isArray(body?.checkouts)) throw new KitchenApiError("会計依頼レスポンスが不正です。", { code: "INVALID_RESPONSE" });

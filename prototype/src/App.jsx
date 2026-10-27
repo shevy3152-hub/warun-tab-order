@@ -1,3 +1,4 @@
+import { createKitchenRefresher } from "./kitchen-refresh.js";
 import { KitchenOrderSound } from "./KitchenOrderSound.jsx";
 import { ProductImageLocation, ProductImageUriField } from "./ProductImageLocation.jsx";
 import { adminMenuAvailability } from "./admin-menu-status.js";
@@ -4634,6 +4635,7 @@ export function App() {
   const route = useRoute();
   const [orderClient, setOrderClient] = useState(null);
   const [customerDeviceConfig, setCustomerDeviceConfig] = useState(null);
+  const kitchenRefresher = useRef(null);
   const [kitchenApiState, setKitchenApiState] = useState(null);
   const [kitchenCheckoutState, setKitchenCheckoutState] = useState(null);
   const [pairingError, setPairingError] = useState("");
@@ -4655,103 +4657,98 @@ export function App() {
       setKitchenCheckoutState(explicitDemo ? { loading: false, error: false, checkouts: kitchenDemoCheckouts } : { loading: false, error: true, checkouts: [] });
       return undefined;
     }
-    let cancelled = false;
-    let suppressStaffCallsUntilSnapshot = false;
-    let kitchenSnapshotRequest = 0;
-    const load = async () => {
-      const requestNumber = ++kitchenSnapshotRequest;
-      const suppressStaffCalls = suppressStaffCallsUntilSnapshot;
-      try {
-        const [snapshot, checkouts] = await Promise.all([fetchKitchenSnapshot({ env: window }), fetchKitchenCheckoutRequests({ env: window })]);
-        if (cancelled || requestNumber !== kitchenSnapshotRequest) return;
-        if (suppressStaffCalls) suppressStaffCallsUntilSnapshot = false;
+    const reader = createKitchenRefresher({
+      load: async ({ signal }) => {
+        const [snapshot, checkouts] = await Promise.all([fetchKitchenSnapshot({ env: window, signal }), fetchKitchenCheckoutRequests({ env: window, signal })]);
+        return { snapshot, checkouts };
+      },
+      onData: ({ snapshot, checkouts }, { suppressStaffCalls }) => {
         setKitchenApiState({ loading: false, error: false, orders: snapshot.orders, staffCalls: snapshot.staffCalls, suppressStaffCalls, sessions: snapshot.sessions, notificationRequestStartedAt: snapshot.notificationRequestStartedAt });
         setKitchenCheckoutState({ loading: false, error: false, checkouts });
-      } catch {
-        if (requestNumber !== kitchenSnapshotRequest) return;
-        suppressStaffCallsUntilSnapshot = true;
-        if (!cancelled) setKitchenApiState({ loading: false, error: true, orders: [], staffCalls: [], sessions: [] });
-        if (!cancelled) setKitchenCheckoutState((current) => current ? { ...current, loading: false, error: true } : { loading: false, error: true, checkouts: [] });
-      }
-    };
+      },
+      onError: () => {
+        setKitchenApiState({ loading: false, error: true, orders: [], staffCalls: [], sessions: [] });
+        setKitchenCheckoutState((current) => current ? { ...current, loading: false, error: true } : { loading: false, error: true, checkouts: [] });
+      },
+      setTimeoutImpl: window.setTimeout.bind(window),
+      clearTimeoutImpl: window.clearTimeout.bind(window),
+    });
+    kitchenRefresher.current = reader;
+    const load = (options) => { void reader.refresh(options).catch(() => {}); };
     setKitchenApiState({ loading: true, error: false, orders: [], sessions: [] });
-    void load();
-    const unsubscribe = subscribeKitchenInvalidations({ env: window, onEvent: (event) => { if (event?.resource === "checkout" || event?.resource === "staffCalls" || String(event?.type || "").startsWith("checkout.") || String(event?.type || "").startsWith("staff_call.")) void load(); }, onReconnect: () => { suppressStaffCallsUntilSnapshot = true; void load(); } });
+    load();
+    const unsubscribe = subscribeKitchenInvalidations({ env: window, onEvent: (event) => { if (event?.resource === "checkout" || event?.resource === "staffCalls" || String(event?.type || "").startsWith("checkout.") || String(event?.type || "").startsWith("staff_call.")) load(); }, onReconnect: () => load({ suppressStaffCalls: true }) });
     const timer = window.setInterval(load, 2_000);
-    return () => { cancelled = true; window.clearInterval(timer); unsubscribe(); };
+    return () => {
+      if (kitchenRefresher.current === reader) kitchenRefresher.current = null;
+      reader.stop();
+      window.clearInterval(timer);
+      unsubscribe();
+    };
   }, [route]);
 
   const serveKitchenItem = async (orderId, orderItemId) => {
+    const reader = kitchenRefresher.current;
     await markKitchenItemServed({ env: window, orderId, orderItemId });
-    try {
-      const snapshot = await fetchKitchenSnapshot({ env: window });
-      setKitchenApiState({ loading: false, error: false, orders: snapshot.orders, staffCalls: snapshot.staffCalls, sessions: snapshot.sessions, notificationRequestStartedAt: snapshot.notificationRequestStartedAt });
-    } catch (error) {
+    try { await reader?.refresh(); }
+    catch (error) {
       throw new KitchenApiError("提供更新後の注文一覧を再取得できませんでした。", { code: "SERVE_REFRESH_FAILED", status: error?.status ?? 0 });
     }
   };
 
   const saveKitchenItemPrice = async (orderId, orderItemId, unitPriceYen) => {
+    const reader = kitchenRefresher.current;
     await adjustKitchenItemUnitPrice({ env: window, orderId, orderItemId, unitPriceYen });
-    const [snapshot, checkouts] = await Promise.all([fetchKitchenSnapshot({ env: window }), fetchKitchenCheckoutRequests({ env: window })]);
-    setKitchenApiState({ loading: false, error: false, orders: snapshot.orders, staffCalls: snapshot.staffCalls, sessions: snapshot.sessions, notificationRequestStartedAt: snapshot.notificationRequestStartedAt });
-    setKitchenCheckoutState({ loading: false, error: false, checkouts });
+    await reader?.refresh();
   };
 
   const adjustKitchenItemQuantity = async (operation) => {
+    const reader = kitchenRefresher.current;
     const result = await adjustKitchenItemQuantityRequest({ env: window, ...operation });
-    const refresh = async () => {
-      const [snapshot, checkouts] = await Promise.all([fetchKitchenSnapshot({ env: window }), fetchKitchenCheckoutRequests({ env: window })]);
-      setKitchenApiState({ loading: false, error: false, orders: snapshot.orders, staffCalls: snapshot.staffCalls, sessions: snapshot.sessions, notificationRequestStartedAt: snapshot.notificationRequestStartedAt });
-      setKitchenCheckoutState({ loading: false, error: false, checkouts });
-    };
-    // A later display refresh failure must not turn an acknowledged addition
-    // into a new, ambiguous mutation. The existing poll also refreshes the view.
-    if (operation.direction === "increase") void refresh().catch(() => {});
-    else await refresh();
+    // An acknowledged addition stays successful even if its display refresh fails.
+    if (operation.direction === "increase") void reader?.refresh().catch(() => {});
+    else await reader?.refresh();
     return result;
   };
 
   const changeKitchenOrderItemCancellation = async ({ orderId, orderItemId, reason, action }) => {
+    const reader = kitchenRefresher.current;
     const change = action === "restore" ? restoreKitchenOrderItem : cancelKitchenOrderItem;
     const result = await change({ env: window, orderId, orderItemId, reason });
-    if (kitchenApiConfigured(window)) {
-      const [snapshot, checkouts] = await Promise.all([fetchKitchenSnapshot({ env: window }), fetchKitchenCheckoutRequests({ env: window })]);
-      setKitchenApiState({ loading: false, error: false, orders: snapshot.orders, staffCalls: snapshot.staffCalls, sessions: snapshot.sessions, notificationRequestStartedAt: snapshot.notificationRequestStartedAt });
-      setKitchenCheckoutState({ loading: false, error: false, checkouts });
-    }
+    if (kitchenApiConfigured(window)) await reader?.refresh();
     return result;
   };
 
   const refreshKitchenCheckouts = async () => {
-    const checkouts = await fetchKitchenCheckoutRequests({ env: window });
-    setKitchenCheckoutState({ loading: false, error: false, checkouts });
-    return checkouts;
+    const data = await kitchenRefresher.current?.refresh();
+    return data?.checkouts ?? [];
   };
 
   const saveCheckout = async (checkout, adjustments) => {
+    const reader = kitchenRefresher.current;
     const result = await saveKitchenCheckoutAdjustments({ env: window, checkoutRequestId: checkout.checkoutRequestId, expectedVersion: checkout.version, adjustments });
-    await refreshKitchenCheckouts();
+    await reader?.refresh();
     return result;
   };
 
   const readyCheckout = async (checkout) => {
+    const reader = kitchenRefresher.current;
     const result = await readyKitchenCheckout({ env: window, checkoutRequestId: checkout.checkoutRequestId, expectedVersion: checkout.version });
-    await refreshKitchenCheckouts();
+    await reader?.refresh();
     return result;
   };
 
   const cancelCheckout = async (checkout) => {
+    const reader = kitchenRefresher.current;
     const result = await cancelKitchenCheckout({ env: window, checkoutRequestId: checkout.checkoutRequestId, expectedVersion: checkout.version });
-    await refreshKitchenCheckouts();
+    await reader?.refresh();
     return result;
   };
 
   const payCheckout = async (checkout, paymentMethod) => {
+    const reader = kitchenRefresher.current;
     const result = await payKitchenCheckout({ env: window, checkoutRequestId: checkout.checkoutRequestId, expectedVersion: checkout.version, paymentMethod });
-    await refreshKitchenCheckouts();
-    const snapshot = await fetchKitchenSnapshot({ env: window });
-    setKitchenApiState({ loading: false, error: false, orders: snapshot.orders, staffCalls: snapshot.staffCalls, sessions: snapshot.sessions, notificationRequestStartedAt: snapshot.notificationRequestStartedAt });
+    await reader?.refresh();
     return result;
   };
 
@@ -4761,9 +4758,9 @@ export function App() {
   };
 
   const closeKitchenSession = async ({ tableId, sessionId }) => {
+    const reader = kitchenRefresher.current;
     await closeKitchenTableSession({ env: window, tableId, sessionId });
-    const snapshot = await fetchKitchenSnapshot({ env: window });
-    setKitchenApiState({ loading: false, error: false, orders: snapshot.orders, staffCalls: snapshot.staffCalls, sessions: snapshot.sessions, notificationRequestStartedAt: snapshot.notificationRequestStartedAt });
+    await reader?.refresh();
   };
 
   useEffect(() => {
