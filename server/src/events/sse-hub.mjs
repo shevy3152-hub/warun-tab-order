@@ -16,6 +16,8 @@ const EVENT_TYPES_BY_AUDIENCE = Object.freeze({
     'order.created', 'order.updated', 'order.completed',
     'menu.updated', 'menu.sold_out_updated',
     'staff_call.created', 'staff_call.resolved',
+    'checkout.requested', 'checkout.adjustments_updated', 'checkout.ready', 'checkout.cancelled',
+    'checkout.paid', 'checkout.voided',
     'table.assignment_updated',
   ]),
   admin: new Set([
@@ -28,6 +30,7 @@ const EVENT_TYPES_BY_AUDIENCE = Object.freeze({
     'ride_guidance.contact_updated', 'ride_guidance.contact_deleted',
     'ride_guidance.contacts_reordered',
     'checkout.requested', 'checkout.adjustments_updated', 'checkout.ready', 'checkout.cancelled',
+    'checkout.paid', 'checkout.voided',
     'customer_theme.updated',
     'customer_order_start_notice.updated',
   ]),

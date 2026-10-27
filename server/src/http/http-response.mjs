@@ -14,6 +14,7 @@ const EVENT_TYPES_BY_ROLE = Object.freeze({
     'menu.sold_out_updated',
     'staff_call.created',
     'staff_call.resolved',
+    'checkout.requested', 'checkout.adjustments_updated', 'checkout.ready', 'checkout.cancelled',
     'device.revoked',
     'table.assignment_updated',
     'customer_theme.updated',

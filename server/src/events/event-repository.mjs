@@ -7,6 +7,9 @@ import {
 import { orderItemAmounts, sumCurrentOrderItemTotals } from '../orders/order-pricing.mjs';
 
 const DEVICE_ROLES = Object.freeze(['customer', 'kitchen', 'admin']);
+const CUSTOMER_CHECKOUT_EVENT_TYPES = new Set([
+  'checkout.requested', 'checkout.adjustments_updated', 'checkout.ready', 'checkout.cancelled',
+]);
 const DEFAULT_SCAN_LIMIT = 200;
 const MAX_SCAN_LIMIT = 1000;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -97,7 +100,10 @@ function canSeeEvent(row, device) {
     return row.call_customer_device_id === device.device_id;
   }
   if (resource === 'checkout') {
-    return row.checkout_customer_device_id === device.device_id;
+    // Payment history is staff-only; customer invalidations follow the current open visit.
+    return CUSTOMER_CHECKOUT_EVENT_TYPES.has(row.event_type)
+      && row.checkout_customer_device_id === device.device_id
+      && row.checkout_session_closed_at_ms === null;
   }
   if (resource === 'menu') return true;
   if (row.event_type === 'table.assignment_updated') {
@@ -271,7 +277,8 @@ export function createEventRepository({ database } = {}) {
       e.created_at_ms,
       o.customer_device_id AS order_customer_device_id,
       sc.customer_device_id AS call_customer_device_id,
-      checkout_table.assigned_customer_device_id AS checkout_customer_device_id
+      checkout_table.assigned_customer_device_id AS checkout_customer_device_id,
+      checkout_session.closed_at_ms AS checkout_session_closed_at_ms
     `;
     const eventProjectionJoins = `
       LEFT JOIN orders AS o
