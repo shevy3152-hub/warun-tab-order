@@ -1033,7 +1033,7 @@ test("admin devices screen includes safe communication diagnostics without expos
 
 test("API customer orders stay in memory instead of localStorage state", () => {
   const apiBranch = customerScreen.slice(customerScreen.indexOf('if (apiMode) {'), customerScreen.indexOf('      const order = {', customerScreen.indexOf('if (apiMode) {')));
-  assert.match(apiBranch, /setApiOrders/);
+  assert.match(apiBranch, /setApiHistorySnapshot/);
   assert.doesNotMatch(apiBranch, /updateState/);
   assert.match(customerScreen, /const customerHistory = \(apiMode \? apiOrders : state\.orders\)/);
   assert.match(customerScreen, /\.filter\(\(order\) => apiMode \|\| order\.tableId === device\.tableId\)/);

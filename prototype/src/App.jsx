@@ -926,8 +926,29 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
   const [kushikatsuSelectionError, setKushikatsuSelectionError] = useState("");
   const [notice, setNotice] = useState(null);
   const [isMenuHeaderHidden, setIsMenuHeaderHidden] = useState(false);
-  const [apiOrders, setApiOrders] = useState([]);
-  const [apiHistoryState, setApiHistoryState] = useState({ loading: false, error: false });
+  // Object identity distinguishes A -> B -> A from the first request for A.
+  const historyScope = useMemo(() => ({
+    deviceId: customerDeviceConfig?.deviceId ?? null,
+    screenDeviceId: deviceId,
+    tableId: customerDeviceConfig?.tableId ?? null,
+    visitContextId: customerDeviceConfig?.visitContextId ?? null,
+  }), [apiMode, orderClient, deviceId, customerDeviceConfig?.deviceId, customerDeviceConfig?.tableId, customerDeviceConfig?.visitContextId]);
+  const historyScopeRef = useRef(historyScope);
+  const historyRequestRef = useRef(null);
+  const historyScopeReady = typeof historyScope.deviceId === "string" && Boolean(historyScope.deviceId)
+    && Number.isSafeInteger(historyScope.tableId) && historyScope.tableId > 0
+    && /^v1_[0-9a-f]{64}$/.test(historyScope.visitContextId ?? "");
+  const [apiHistorySnapshot, setApiHistorySnapshot] = useState({ scope: historyScope, orders: [], loading: false, error: false });
+  const apiOrders = apiHistorySnapshot.scope === historyScope ? apiHistorySnapshot.orders : [];
+  const apiHistoryState = apiHistorySnapshot.scope === historyScope
+    ? apiHistorySnapshot
+    : { loading: apiMode && modal === "history" && historyScopeReady, error: false };
+  useLayoutEffect(() => {
+    if (historyScopeRef.current === historyScope) return;
+    historyScopeRef.current = historyScope;
+    historyRequestRef.current = null;
+    setApiHistorySnapshot({ scope: historyScope, orders: [], loading: false, error: false });
+  }, [historyScope]);
   const [historyRefreshKey, setHistoryRefreshKey] = useState(0);
   const [checkoutState, setCheckoutState] = useState({ loading: false, error: false, errorDetails: null, checkout: null, visitContextId: null, loaded: false });
   const [checkoutRequestFailure, setCheckoutRequestFailure] = useState(null);
@@ -1098,21 +1119,26 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
   }, [categoryId, currentSubcategories]);
 
   useEffect(() => {
-    if (!apiMode || modal !== "history") return undefined;
+    if (!apiMode || modal !== "history" || !historyScopeReady) return undefined;
     let cancelled = false;
-    setApiHistoryState({ loading: true, error: false });
+    const request = { scope: historyScope };
+    historyRequestRef.current = request;
+    const isCurrent = () => !cancelled && historyScopeRef.current === historyScope && historyRequestRef.current === request;
+    setApiHistorySnapshot((current) => ({ scope: historyScope, orders: current.scope === historyScope ? current.orders : [], loading: true, error: false }));
     void orderClient.getHistory()
       .then((orders) => {
-        if (cancelled) return;
-        setApiOrders(orders.map(mapCustomerHistoryOrder));
-        setApiHistoryState({ loading: false, error: false });
+        if (!isCurrent()) return;
+        setApiHistorySnapshot({ scope: historyScope, orders: orders.map(mapCustomerHistoryOrder), loading: false, error: false });
       })
       .catch(() => {
-        if (cancelled) return;
-        setApiHistoryState({ loading: false, error: true });
+        if (!isCurrent()) return;
+        setApiHistorySnapshot((current) => ({ scope: historyScope, orders: current.scope === historyScope ? current.orders : [], loading: false, error: true }));
       });
-    return () => { cancelled = true; };
-  }, [apiMode, modal, orderClient, historyRefreshKey]);
+    return () => {
+      cancelled = true;
+      if (historyRequestRef.current === request) historyRequestRef.current = null;
+    };
+  }, [apiMode, modal, orderClient, historyRefreshKey, historyScope, historyScopeReady]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1255,16 +1281,22 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
       if (!nextNotice) return;
       setNotice((current) => current?.kind === nextNotice.kind && current?.message === nextNotice.message ? current : nextNotice);
       if (apiMode) {
-        setApiOrders((current) => current.map((order) => {
-          if (order.clientOrderId !== event.clientOrderId) return order;
-  return {
-            ...order,
-            status: event.state === "synced" ? "new" : event.state === "rejected" ? "rejected" : event.state === "pending" || event.state === "review_required" ? "queued_offline" : order.status,
-            transportState: event.displayState || event.state,
-            transportErrorCode: event.lastErrorCode || null,
-            syncedAt: event.state === "synced" ? new Date().toISOString() : order.syncedAt,
+        setApiHistorySnapshot((current) => {
+          if (current.scope !== historyScopeRef.current) return current;
+          return {
+            ...current,
+            orders: current.orders.map((order) => {
+              if (order.clientOrderId !== event.clientOrderId) return order;
+              return {
+                ...order,
+                status: event.state === "synced" ? "new" : event.state === "rejected" ? "rejected" : event.state === "pending" || event.state === "review_required" ? "queued_offline" : order.status,
+                transportState: event.displayState || event.state,
+                transportErrorCode: event.lastErrorCode || null,
+                syncedAt: event.state === "synced" ? new Date().toISOString() : order.syncedAt,
+              };
+            }),
           };
-        }));
+        });
       }
     });
     return unsubscribe;

@@ -892,3 +892,16 @@
 - 今回追加はApp.jsx、実画面test、既存UI test構文対応1行、本記録の4件。旧5件・資料・manifest・ログを保全し、helperはSHA不変。資料: C:\Users\user\AppData\Local\Temp\warun-checkout-post-version-20261028-1dacd965278345bfb4cb02452977e685\p2-lifetime-20261028-182824-2cee9805\REVIEW-HANDOFF-LIFETIME.md。
 - 自己レビューまで、再独立レビュー未実施。未stage／未commit／未push／候補未作成／稼働未反映。稼働API／DB／認証／Node／Web／画像／登録は未変更。実HTTP会計通信／実機、通信断／再起動等は未確認。指摘8・9、3音化再検証には進まない。
 - 次の作業1つ: 失敗の識別・保存・GET解除・逆順保護と追加差分を再独立レビューする。
+
+
+## 指摘8：来店切替時の履歴スコープと旧取得応答の破棄（2026-10-28 21:19:22 JST、独立レビュー待ち）
+
+- 正式handoffの最新記録を確認し、指摘6・7の稼働反映／表示接続PASSと基点b5a45b010e103455f190cfaaac76dc9789a02615を照合。実HTTP会計通信／応答逆転／実機会計受入は未確認のまま。3音化・検証注文整理は再検証していない。
+- 本チャット所有の既存worktreeを使用。開始時clean・stage空から専用branch codex/customer-history-scopeを作成し、HEADは不変。所有権変更・強制attachなし。
+- 原因：API履歴配列が来店／割当に結び付かず、履歴effect依存にも来店がないため、既存A履歴とAの遅い成功／失敗がBへ残る。finallyはなく、then/catchでのloading解除が旧要求にも実行されていた。
+- App.jsxで端末／席／visitContextId／クライアントから履歴scope世代を作成。scope付きsnapshotのrender照合で切替直後から旧履歴を除外し、layoutで現在scopeを公開・snapshotを初期化。要求ownerとscopeの両方で成功／失敗／loading解除を制御し、A→B→Aも最初のAを拒否。現在scopeの失敗／通常再表示による再取得は維持。
+- deviceConfig→既存refresh→props確定の入口は変更しない。実サーバーは来店終了後も新しい非null v1_識別子を返し、開いた来店がなければ履歴[]となるため、その実契約も検証。null／未割当では旧表示を除外し取得しない。入口が新しい識別を取得できない期間の検知自体は今回対象外。
+- 影響する最近の飲み物もscope付き履歴から派生。履歴行の独立した詳細／選択stateは存在せず、商品詳細・カートは別用途のため変更なし。outboxは現在snapshot中の同ID行だけ更新するアダプタへ変更し、永続送信待ちレコード・通知・注文送信処理は保持。会計の指摘7ガードは無変更。
+- 実画面の修正前2件FAIL→修正後16件PASS、追加outbox1件／実契約の来店終了1件PASS（計18経路、分割実行）。テストfixtureの相対配置対応後に関連3件PASS。関連既存5＋22件、指摘7の実画面選択4件、build、Sites4/4、構文／diffチェックPASS。1280×800・100%の未加工PNGでB履歴のみ表示・はみ出しなしを確認。
+- 独立レビュー資料 C:\Users\user\AppData\Local\Temp\warun-customer-history-scope-20261028-a93873f331a841428d8c36353656f396\REVIEW-HANDOFF.md。before/、修正前後log、差分／SHA、PNG、隔離browserの記録を保持。稼働safe-copy／本番API／DB／認証／登録／Nodeにはアクセス・変更せず、架空データの隔離UIだけ使用。テスト用browser／serverは終了。
+- 未stage／未commit／未push／候補未作成／稼働未反映。実HTTP履歴通信／実機来店切替、ネットワーク断／再起動／DB復元は未検証。指摘9・履歴取消復活表示・追加機能へ拡大なし。次の作業1つ：scope切替・遅延成功失敗・ABA・未割当・既存会計保護の独立レビュー。
