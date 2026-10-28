@@ -38,7 +38,7 @@ import { buildKitchenTableGroups } from "./kitchen-order-board.js";
 import { bootstrapCustomerOrderClient } from "./customer-bootstrap.js";
 import { createCustomerVisitConfigRefresher } from "./customer-visit-config-refresh.js";
 import { CUSTOMER_STAFF_CALL_COOLDOWN_MS, customerStaffCallCooldownKey, customerStaffCallCooldownSeconds, isCustomerStaffCallSuccessNotice, isMatchingCustomerStaffCallResolution, parseCustomerStaffCallCooldown } from "./customer-staff-call.js";
-import { beginCheckoutRead, isCheckoutModalForCurrentVisit, isPassiveMissingCheckoutSession } from "./customer-checkout-state.js";
+import { beginCheckoutRead, checkoutPostResponseDisposition, isCheckoutModalForCurrentVisit, isPassiveMissingCheckoutSession } from "./customer-checkout-state.js";
 import { createCustomerMenuState, customerMenuStateReducer } from "./customer-menu-state.js";
 import { createCustomerCheckoutReconnectHandler, isMatchingCustomerCheckoutReconnectVisit } from "./customer-checkout-reconnect.js";
 import { addCustomerCartSelection, customerCartRows, removeCustomerCartSelection } from "./customer-cart.js";
@@ -756,6 +756,7 @@ function CustomerCheckoutModal({ checkoutState, checkoutRequestError, receiptReq
   const splitAmount = ready ? Math.ceil(checkout.grandTotalYen / splitCount) : null;
   const error = checkoutState.error;
   return <Modal title="お会計" onClose={onClose} className="modal--checkout">
+    {!checkoutState.loading && !error && cancelled && checkoutRequestError ? <p className="checkout-customer-state__error" role="alert">会計依頼を送信できませんでした。もう一度お試しください。</p> : null}
     {checkoutState.loading ? <div className="checkout-customer-state"><p className="checkout-customer-state__large">会計状態を確認中です</p></div> : error ? <div className="checkout-customer-state"><p className="checkout-customer-state__error" role="alert">会計状態を取得できませんでした。</p><p className="checkout-customer-state__diagnostic">失敗段階: {checkoutState.errorDetails?.stage ?? "unknown"} / HTTP status: {checkoutState.errorDetails?.status ?? "なし"} / error code: {checkoutState.errorDetails?.code ?? "UNKNOWN_ERROR"}</p><button type="button" className="button button--primary button--large" onClick={onRetry}>再試行</button></div> : ready ? <div className="checkout-customer-ready"><p className="checkout-customer-state__large">お会計金額</p><strong className="checkout-customer-total" aria-live="polite">税込 {yen(checkout.grandTotalYen)}</strong>{checkout.receiptRequested ? <p className="checkout-receipt-note">手書き領収書を希望済み</p> : null}<section className="checkout-split" aria-label="割り勘"><h3>割り勘</h3><div className="checkout-split__control"><button type="button" aria-label="人数を1人減らす" onClick={() => setSplitCount((current) => Math.max(2, current - 1))} disabled={splitCount <= 2}>−</button><strong>{splitCount}人</strong><button type="button" aria-label="人数を1人増やす" onClick={() => setSplitCount((current) => Math.min(20, current + 1))} disabled={splitCount >= 20}>＋</button></div><p className="checkout-split__amount">おひとり {checkout.grandTotalYen % splitCount === 0 ? "" : "約"}{yen(splitAmount)}</p></section></div> : waiting ? <div className="checkout-customer-state"><p className="checkout-customer-state__large">しばらくお待ちください</p><p>ただいま会計を確認しています</p>{checkout.receiptRequested ? <p className="checkout-receipt-note">手書き領収書を希望済み</p> : null}</div> : cancelled ? <div className="checkout-customer-state"><p className="checkout-customer-state__error" role="alert">会計依頼が取り消されました</p><p>必要であれば、あらためて会計を依頼できます。</p><button type="button" className="button button--primary button--large" onClick={onResetCancelled}>新しく会計を依頼する</button></div> : <div className="checkout-customer-request"><p className="modal-lead">会計の準備をスタッフへ依頼します</p><p className="checkout-customer-exit-notice">会計後は10分ほどで退店して頂きます。</p><button type="button" className={`checkout-receipt-toggle ${receiptRequested ? "is-selected" : ""}`} aria-pressed={receiptRequested} onClick={() => onReceiptChange(!receiptRequested)} disabled={submitting}><Receipt size={26} weight={receiptRequested ? "fill" : "regular"} /><span>手書き領収書を希望する</span><b>{receiptRequested ? "選択中" : ""}</b></button>{checkoutRequestError ? <p className="checkout-customer-state__error" role="alert">会計依頼を送信できませんでした。もう一度お試しください。</p> : null}<div className="modal-actions checkout-modal__actions"><button type="button" className="button button--quiet" onClick={onClose} disabled={submitting}>キャンセル</button><button type="button" className="button button--primary button--large" onClick={onRequest} disabled={submitting}>{submitting ? "送信中…" : "お会計を依頼する"}</button></div></div>}
   </Modal>;
 }
@@ -929,7 +930,7 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
   const [apiHistoryState, setApiHistoryState] = useState({ loading: false, error: false });
   const [historyRefreshKey, setHistoryRefreshKey] = useState(0);
   const [checkoutState, setCheckoutState] = useState({ loading: false, error: false, errorDetails: null, checkout: null, visitContextId: null, loaded: false });
-  const [checkoutRequestError, setCheckoutRequestError] = useState(false);
+  const [checkoutRequestFailure, setCheckoutRequestFailure] = useState(null);
   const [checkoutReceiptRequested, setCheckoutReceiptRequested] = useState(false);
   const [checkoutSubmitting, setCheckoutSubmitting] = useState(false);
   const [checkoutRefreshKey, setCheckoutRefreshKey] = useState(0);
@@ -1014,6 +1015,11 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
   }, [staffCallCooldown?.staffCallId, staffCallCooldownRemainingSeconds]);
   const checkoutRequestIdRef = useRef(null);
   const checkoutPreviousRef = useRef(null);
+  const checkoutPostAttemptRef = useRef(null);
+  const checkoutObservationRef = useRef({ revision: 0, checkout: null });
+  const checkoutRequestError = Boolean(checkoutRequestFailure
+    && checkoutRequestFailure.visitContextId === checkoutVisitContextId
+    && checkoutRequestFailure.checkoutRequestId === checkoutRequestIdRef.current);
   const checkoutModalVisitContextRef = useRef(checkoutVisitContextId);
   const checkoutExplicitReadRef = useRef(false);
   const checkoutReadGenerationRef = useRef(0);
@@ -1034,9 +1040,10 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
     checkoutReadGenerationRef.current += 1;
     checkoutRequestIdRef.current = null;
     checkoutPreviousRef.current = null;
+    checkoutObservationRef.current = { revision: checkoutObservationRef.current.revision + 1, checkout: null };
     setCheckoutReceiptRequested(false);
     setCheckoutState({ loading: false, error: false, errorDetails: null, checkout: null, visitContextId: checkoutVisitContextId, loaded: false });
-    setCheckoutRequestError(false);
+    setCheckoutRequestFailure(null);
     if (previousVisitContextId) setModal((current) => current === "checkout" ? null : current);
     else if (checkoutVisitContextId && modal === "checkout") setCheckoutRefreshKey((current) => current + 1);
   }, [checkoutVisitContextId, modal]);
@@ -1194,6 +1201,7 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
     }
     void orderClient.getCheckout().then((nextCheckout) => {
       if (cancelled || requestGeneration !== checkoutReadGenerationRef.current) return;
+      checkoutObservationRef.current = { revision: checkoutObservationRef.current.revision + 1, checkout: nextCheckout ?? checkoutObservationRef.current.checkout };
       const previous = checkoutPreviousRef.current;
       checkoutPreviousRef.current = nextCheckout;
       if (previous?.status === "requested" && nextCheckout?.status === "ready") {
@@ -1206,17 +1214,28 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
           playCheckoutBell(checkoutAudioRef);
         }
       }
-      if (nextCheckout) setCheckoutReceiptRequested(nextCheckout.receiptRequested === true);
+      if (nextCheckout) {
+        setCheckoutReceiptRequested(nextCheckout.receiptRequested === true);
+        setCheckoutRequestFailure((failure) => {
+          if (!failure || failure.visitContextId !== checkoutVisitContextId) return failure;
+          const confirmedId = nextCheckout.checkoutRequestId;
+          if (typeof confirmedId !== "string" || !confirmedId) return failure;
+          // The previous cancelled request does not confirm the newer request that failed.
+          return confirmedId === failure.checkoutRequestId || confirmedId !== failure.previousCheckoutId ? null : failure;
+        });
+      }
       setCheckoutState({ loading: false, error: false, errorDetails: null, checkout: nextCheckout, visitContextId: checkoutVisitContextId, loaded: true });
     }).catch((error) => {
       if (!cancelled && requestGeneration === checkoutReadGenerationRef.current) {
+        checkoutObservationRef.current = { ...checkoutObservationRef.current, revision: checkoutObservationRef.current.revision + 1 };
         if (isPassiveMissingCheckoutSession(error, { explicitlyOpened })) {
           checkoutReadGenerationRef.current += 1;
           checkoutRequestIdRef.current = null;
           checkoutPreviousRef.current = null;
+          checkoutObservationRef.current = { ...checkoutObservationRef.current, checkout: null };
           checkoutModalVisitContextRef.current = null;
           setCheckoutReceiptRequested(false);
-          setCheckoutRequestError(false);
+          setCheckoutRequestFailure(null);
           setCheckoutState({ loading: false, error: false, errorDetails: null, checkout: null, visitContextId: checkoutVisitContextId, loaded: true });
           setModal((current) => current === "checkout" ? null : current);
           return;
@@ -1652,7 +1671,6 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
     setModal("ride-guidance");
   };
   const openCheckout = () => {
-    setCheckoutRequestError(false);
     checkoutModalVisitContextRef.current = checkoutVisitContextId;
     checkoutExplicitReadRef.current = true;
     if (!apiMode) {
@@ -1665,38 +1683,64 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
   };
   const requestCheckout = async () => {
     if (checkoutSubmitting || checkoutState.checkout?.status === "requested" || checkoutState.checkout?.status === "ready") return;
+    if (checkoutPostAttemptRef.current) return;
     const requestVisitContextId = checkoutVisitContextId;
     prepareCheckoutBell(checkoutAudioRef);
-    setCheckoutSubmitting(true);
-    setCheckoutRequestError(false);
-    setCheckoutState((current) => ({ ...current, loading: true, error: false, errorDetails: null, visitContextId: requestVisitContextId }));
     const checkoutRequestId = checkoutRequestIdRef.current || createClientOrderId();
     checkoutRequestIdRef.current = checkoutRequestId;
+    const attempt = { visitContextId: requestVisitContextId, checkoutRequestId, revision: checkoutObservationRef.current.revision, previousCheckoutId: checkoutObservationRef.current.checkout?.checkoutRequestId };
+    checkoutPostAttemptRef.current = attempt;
+    setCheckoutSubmitting(true);
+    setCheckoutRequestFailure(null);
+    setCheckoutState((current) => ({ ...current, loading: true, error: false, errorDetails: null, visitContextId: requestVisitContextId }));
     try {
       const checkout = await orderClient.requestCheckout({ checkoutRequestId, receiptRequested: checkoutReceiptRequested });
-      if (checkoutVisitContextRef.current !== requestVisitContextId) return;
+      if (checkoutVisitContextRef.current !== requestVisitContextId || checkoutRequestIdRef.current !== checkoutRequestId || checkoutPostAttemptRef.current !== attempt) return;
+      const disposition = checkoutPostResponseDisposition({ checkout, checkoutRequestId, previousCheckoutId: attempt.previousCheckoutId, observedCheckout: checkoutObservationRef.current.checkout, observationAdvanced: checkoutObservationRef.current.revision !== attempt.revision });
+      if (disposition === "invalid") throw new Error("会計依頼の応答が不正です。");
+      if (disposition === "superseded") return;
+      checkoutObservationRef.current = { revision: checkoutObservationRef.current.revision + 1, checkout };
       checkoutPreviousRef.current = checkout;
-      setCheckoutRequestError(false);
+      setCheckoutRequestFailure(null);
       setCheckoutState({ loading: false, error: false, errorDetails: null, checkout, visitContextId: requestVisitContextId, loaded: true });
     } catch (error) {
-      if (checkoutVisitContextRef.current === requestVisitContextId) {
-        setCheckoutRequestError(true);
-        setCheckoutState((current) => ({ ...current, loading: false, error: false, errorDetails: null, visitContextId: requestVisitContextId, loaded: true }));
-
+      if (checkoutVisitContextRef.current === requestVisitContextId && checkoutRequestIdRef.current === checkoutRequestId && checkoutPostAttemptRef.current === attempt) {
+        const observation = checkoutObservationRef.current;
+        const observationAdvanced = observation.revision !== attempt.revision;
+        const observedRequestId = observation.checkout?.checkoutRequestId;
+        const superseded = observationAdvanced && observedRequestId
+          && (observedRequestId === checkoutRequestId || observedRequestId !== attempt.previousCheckoutId);
+        if (!superseded) {
+          // A null read does not confirm this POST. Keep its failure independently of newer GET diagnostics.
+          setCheckoutRequestFailure({ visitContextId: requestVisitContextId, checkoutRequestId, previousCheckoutId: attempt.previousCheckoutId });
+          if (!observationAdvanced) {
+            checkoutObservationRef.current = { ...observation, revision: observation.revision + 1 };
+            setCheckoutState((current) => ({ ...current, loading: false, error: false, errorDetails: null, visitContextId: requestVisitContextId, loaded: true }));
+          }
+        }
       }
-    } finally { setCheckoutSubmitting(false); }
+    } finally {
+      if (checkoutPostAttemptRef.current === attempt) {
+        checkoutPostAttemptRef.current = null;
+        setCheckoutSubmitting(false);
+      }
+    }
   };
   const retryCheckout = () => {
-    setCheckoutRequestError(false);
+    // Keep a send failure while retrying only the status read.
     checkoutExplicitReadRef.current = true;
     setCheckoutRefreshKey((current) => current + 1);
   };
   const resetCancelledCheckout = () => {
+    checkoutReadGenerationRef.current += 1;
+    checkoutPostAttemptRef.current = null;
+    checkoutObservationRef.current = { ...checkoutObservationRef.current, revision: checkoutObservationRef.current.revision + 1 };
+    setCheckoutSubmitting(false);
     checkoutRequestIdRef.current = null;
     checkoutPreviousRef.current = null;
     setCheckoutReceiptRequested(false);
     setCheckoutState({ loading: false, error: false, errorDetails: null, checkout: null, visitContextId: checkoutVisitContextId, loaded: true });
-        setCheckoutRequestError(false);
+    setCheckoutRequestFailure(null);
   };
   const closeRideGuidance = () => {
     setRideGuidanceType(null);

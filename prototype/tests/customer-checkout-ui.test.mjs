@@ -74,7 +74,7 @@ test("checkout modal state is scoped to the current visit and ignores late prior
   assert.match(source, /checkoutVisitContextRef\.current = checkoutVisitContextId/);
   assert.match(source, /setCheckoutState\(\{ loading: false, error: false, errorDetails: null, checkout: nextCheckout, visitContextId: checkoutVisitContextId, loaded: true \}\)/);
   assert.match(source, /\[apiMode, modal, orderClient, checkoutRefreshKey, checkoutVisitContextId\]/);
-  assert.match(source, /checkoutVisitContextRef\.current !== requestVisitContextId\) return/);
+  assert.match(source, /checkoutVisitContextRef\.current !== requestVisitContextId \|\| checkoutRequestIdRef\.current !== checkoutRequestId \|\| checkoutPostAttemptRef\.current !== attempt\) return/);
   assert.match(source, /isCheckoutModalForCurrentVisit\(\{ modal, openedForVisitContextId: checkoutModalVisitContextRef\.current, currentVisitContextId: checkoutVisitContextId \}\)/);
   assert.match(source, /\(!apiMode \|\| checkoutState\.visitContextId === checkoutVisitContextId\)/);
   assert.match(source, /setModal\(\(current\) => current === "checkout" \? null : current\)/);
@@ -85,7 +85,7 @@ test("checkout modal state is scoped to the current visit and ignores late prior
 });
 
 test("checkout refresh preserves receipt choice and modal for the same visit", () => {
-  assert.match(source, /if \(nextCheckout\) setCheckoutReceiptRequested\(nextCheckout\.receiptRequested === true\)/);
+  assert.match(source, /if \(nextCheckout\)(?:\s*\{)?\s*setCheckoutReceiptRequested\(nextCheckout\.receiptRequested === true\)/);
   const visitEffect = source.slice(source.indexOf("const checkoutVisitContextRef = useRef"), source.indexOf("const customerMajorCategories"));
   assert.match(visitEffect, /if \(previousVisitContextId\) setModal\(\(current\) => current === "checkout" \? null : current\)/);
   assert.match(visitEffect, /else if \(checkoutVisitContextId && modal === "checkout"\) setCheckoutRefreshKey/);

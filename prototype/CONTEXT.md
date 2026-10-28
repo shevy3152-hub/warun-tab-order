@@ -864,3 +864,31 @@
 - 運用safe-copy、既存DB、API runtime、注文／提供／会計／呼出データ、設定、commit／pushは変更なし。既存の `server/test/order-repository.test.mjs` 未commit差分、旧Halloween PNG、QA資材を保持。build成果物はworktree内の `prototype/dist`。
 
 次: 隔離preview上で必要な利用者確認を続け、別途明示依頼があるまでsafe-copy反映・commit／pushは行わない。
+
+## 営業前レビュー指摘7・古い会計POST応答の競合修正 2026-10-28
+
+- 基点325c4f4c6e316ed8000b5e787ee804f19e120cbf、所有済みworktreeの隔離branch codex/checkout-post-versionで実装。POST開始後、SSE起点GETが同じ会計依頼のready/version2を適用しても、後着POSTのrequested/version1が無条件に上書きしていた。旧catchも新しい取得エラーを消し、旧finallyは取消後の別操作のbusyを解除し得た。過去の原因未確定事象との関連は断定しない。
+- 同一来店・会計依頼ID・versionと、GETを含む表示観測revisionで成功／失敗の適用を判定。操作所有refでfinallyを限定。取消後の明示再依頼では旧GET／旧操作を無効化し、依頼IDごとのversionを尊重して新IDのversion1を許可する。状態の固定順位付け、schema／API変更なし。
+- 実React CustomerScreenと遅延制御した架空clientの隔離回帰11件PASS。修正前は最初の8件中5件FAIL、修正後は関連3ファイル25/25 PASS。1280×800・100%の無加工画面でready金額の維持・見切れなしを確認。固定lockfileのoffline依存復元、pnpm run build、Sites4/4、構文／diffチェックPASS。test browserとloopback serverは終了し、成果物・profile・ログを保全。
+- 稼働safe-copy／本番API・DB・認証・Node・Web・画像・登録は変更なし。会計実HTTP／実機受入、通信断／端末再起動などは未確認。指摘6の実通信受入未確認を維持。指摘8・9や3音化には広げていない。
+- 詳細・原文・根拠行・差分・検証ログ: C:\Users\user\AppData\Local\Temp\warun-checkout-post-version-20261028-1dacd965278345bfb4cb02452977e685\REVIEW-HANDOFF.md。未stage／未commit／未push／候補未作成／稼働未反映。
+- 次の作業1つ: 独立レビューでID／versionと観測revision、取消再依頼とfinally所有、実画面回帰の妥当性を確認する。
+
+## 指摘7 P2再修正：GET=null後の有効な送信失敗を保持（2026-10-28、再レビュー待ち）
+
+- 独立レビューP2: 現在POST中に同じ来店の再接続GET=nullが適用されると、revision一致ガードが有効なPOST失敗を破棄する。修正前の実React回帰1件で失敗を再現した。
+- App.jsxのcatchは来店・依頼ID・操作ownerの境界を保持し、会計依頼の成立／置換を確認できていない現在の失敗を通知へ記録する。GET=nullもrevisionを進め、成功応答のID/version判定は変更しない。新しいGET状態は上書きせず、GET取得エラーを優先表示する。状態GETの再試行では送信失敗を消さない。取消後の旧取消状態と新依頼失敗は併記し、会計状態を巻き戻さない。
+- 実画面17件PASS（既存11件中GETエラー1件の通知保持期待を更新＋追加6件）。必須null→失敗→同じ依頼IDでの再試行、ready後の後着成功／失敗、GET診断優先、別来店・別owner・旧finally、旧取消状態を検証。関連既存UI11/11・reconnect3/3、build・Sites4/4、構文／diffチェックPASS。1280×800・100%の無加工画面を確認。初回の既存UI1件はコメント内のPOSTという語の誤検知で失敗し、コメントだけ変更後、同検査1件と最終UI11件がPASS。
+- 初回5ファイル差分・旧レビュー資料・ログ等を保全し、今回追加はApp.jsx／新規画面test／本記録だけ。元helperと既存UIテストは初回レビュー時からSHA不変。今回の自己レビューは完了、再独立レビューは未実施。
+- 詳細: C:\Users\user\AppData\Local\Temp\warun-checkout-post-version-20261028-1dacd965278345bfb4cb02452977e685\p2-revision-20261028-180751-1ff0b5b0\REVIEW-HANDOFF-P2.md。本番通信／DB／会計操作・認証・Node・稼働Web・3音化・画像・登録は未変更。実HTTP会計通信／実機・通信断／再起動等は未確認、指摘8・9未着手。未stage／未commit／未push／候補未作成／稼働未反映。
+- 次の作業1つ: P2差分と失敗通知／GET診断優先を再度独立レビューする。
+
+## 指摘7 追加P2：成立確認に応じた送信失敗の寿命修正（2026-10-28、再レビュー待ち）
+
+- 追加P2はPOST失敗→同IDのrequested/readyをGET→取消GETで古い失敗が再表示される問題。前回GET=null後の有効POST失敗を隠すP2の解消は維持。正順2件で修正前FAILを再現。
+- App.jsxで失敗状態を来店ID・依頼ID・開始時の旧依頼IDへ変更。現在来店／要求IDに限定表示し、受理済みGETが同じIDの成立、または旧ID以外の新依頼への切替を確認した場合に解除。旧取消AのGETでは新Bの失敗を消さない。GET=null／通常GET失敗とモーダル再表示では保持。
+- POST保存のscope／owner／観測ガードは維持し、GET先行では旧失敗を保存しない。POST開始・有効な成功、明示再依頼、来店切替・既存passive missing-sessionの範囲無効化では解除。GET診断優先・ready/version・同ID再試行・finally所有制御を維持。schema／API／依存変更なし。
+- 実画面26件＋関連既存14件を確認。初回39/40で既存UI1件がreceipt if文のブロック化にソースregex未対応でFAILし、同assertだけ追従して対象1件再実行PASS。成立確認の正順／逆順4件はNETWORK_ERRORでも追加確認4/4 PASS。build／Sites4/4／構文／diffチェックPASS。1280×800・100%の未加工画面で古い失敗なしを確認。
+- 今回追加はApp.jsx、実画面test、既存UI test構文対応1行、本記録の4件。旧5件・資料・manifest・ログを保全し、helperはSHA不変。資料: C:\Users\user\AppData\Local\Temp\warun-checkout-post-version-20261028-1dacd965278345bfb4cb02452977e685\p2-lifetime-20261028-182824-2cee9805\REVIEW-HANDOFF-LIFETIME.md。
+- 自己レビューまで、再独立レビュー未実施。未stage／未commit／未push／候補未作成／稼働未反映。稼働API／DB／認証／Node／Web／画像／登録は未変更。実HTTP会計通信／実機、通信断／再起動等は未確認。指摘8・9、3音化再検証には進まない。
+- 次の作業1つ: 失敗の識別・保存・GET解除・逆順保護と追加差分を再独立レビューする。
