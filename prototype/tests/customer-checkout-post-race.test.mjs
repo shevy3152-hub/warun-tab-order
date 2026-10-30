@@ -229,7 +229,7 @@ test('after cancellation a null GET cannot hide the new POST failure, or let the
   assert.equal(await cdp.evaluate("[...document.querySelectorAll('[role=alert]')].some(e=>e.textContent.includes('会計依頼を送信できませんでした'))"), true);
 });
 
-test('a GET of the previous cancelled request keeps its state without hiding the new request failure', async () => {
+test('a GET of the previous cancelled request preserves redraft input and the new request failure', async () => {
   await begin(); await readState('cancelled', 3);
   const previousId = await cdp.evaluate('window.posts[0].request.checkoutRequestId');
   await cdp.evaluate("window.clickText('新しく会計を依頼する')"); await settle();
@@ -237,11 +237,11 @@ test('a GET of the previous cancelled request keeps its state without hiding the
   await cdp.wait('window.posts.length === 2 && window.__checkoutProbe.submitting');
   const getCalls = await cdp.evaluate('window.getCalls');
   await cdp.evaluate('window.reconnectCheckout()');
-  await cdp.wait(`window.getCalls > ${getCalls} && window.__checkoutProbe.checkoutState.checkout?.status === 'cancelled'`);
+  await cdp.wait(`window.getCalls > ${getCalls} && window.__checkoutProbe.checkoutState.checkout === null`);
   await cdp.evaluate('window.rejectPost(1)'); await settle();
   const s = await cdp.evaluate('window.snapshot()');
-  assert.equal(s.checkoutState.checkout.checkoutRequestId, previousId);
-  assert.equal(s.checkoutState.checkout.status, 'cancelled');
+  assert.equal(s.checkoutState.checkout, null);
+  assert.equal(await cdp.evaluate('window.serverCheckout.checkoutRequestId'), previousId);
   assert.equal(s.checkoutRequestError, true);
   assert.equal(s.submitting, false);
   assert.equal(await cdp.evaluate("[...document.querySelectorAll('[role=alert]')].some(e=>e.textContent.includes('会計依頼を送信できませんでした'))"), true);
@@ -291,9 +291,10 @@ test('a later GET of cancelled A does not clear the failure already recorded for
   assert.equal((await cdp.evaluate('window.snapshot()')).checkoutRequestError, true);
   const getCalls = await cdp.evaluate('window.getCalls');
   await cdp.evaluate('window.reconnectCheckout()');
-  await cdp.wait(`window.getCalls > ${getCalls} && window.__checkoutProbe.checkoutState.checkout?.status === 'cancelled'`);
+  await cdp.wait(`window.getCalls > ${getCalls} && window.__checkoutProbe.checkoutState.checkout === null`);
   const s = await cdp.evaluate('window.snapshot()');
-  assert.equal(s.checkoutState.checkout.checkoutRequestId, previousId);
+  assert.equal(s.checkoutState.checkout, null);
+  assert.equal(await cdp.evaluate('window.serverCheckout.checkoutRequestId'), previousId);
   assert.equal(s.checkoutRequestError, true);
   assert.equal(s.submitting, false);
   assert.equal(await cdp.evaluate("document.body.textContent.includes('会計依頼を送信できませんでした')"), true);

@@ -1047,6 +1047,10 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
   const checkoutRefreshHandledRef = useRef(0);
   const checkoutReconnectRefreshAppliedSequenceRef = useRef(0);
   const checkoutConnectionSyncRef = useRef(null);
+  const checkoutRedraftRef = useRef(null);
+  useLayoutEffect(() => {
+    if (checkoutRedraftRef.current?.scope !== historyScope || modal !== "checkout") checkoutRedraftRef.current = null;
+  }, [historyScope, modal]);
   const checkoutVisitContextRef = useRef(checkoutVisitContextId);
   const checkoutAudioRef = useRef(null);
   const checkoutSoundKeysRef = useRef(new Set());
@@ -1256,6 +1260,11 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
       if (observedCheckout && observedCheckout !== checkoutAtReadStart
         && (!nextCheckout || nextCheckout.checkoutRequestId !== observedCheckout.checkoutRequestId
           || !Number.isSafeInteger(nextCheckout.version) || nextCheckout.version < observedCheckout.version)) return;
+      const redraft = checkoutRedraftRef.current;
+      const preserveRedraft = redraft?.scope === requestScope
+        && nextCheckout?.checkoutRequestId === redraft.checkoutRequestId
+        && nextCheckout.status === "cancelled";
+      if (redraft && (redraft.scope !== requestScope || (nextCheckout && !preserveRedraft))) checkoutRedraftRef.current = null;
       checkoutObservationRef.current = { revision: checkoutObservationRef.current.revision + 1, checkout: nextCheckout ?? checkoutObservationRef.current.checkout };
       const previous = checkoutPreviousRef.current;
       checkoutPreviousRef.current = nextCheckout;
@@ -1269,7 +1278,7 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
           playCheckoutBell(checkoutAudioRef);
         }
       }
-      if (nextCheckout) {
+      if (nextCheckout && !preserveRedraft) {
         setCheckoutReceiptRequested(nextCheckout.receiptRequested === true);
         setCheckoutRequestFailure((failure) => {
           if (!failure || failure.visitContextId !== checkoutVisitContextId) return failure;
@@ -1279,7 +1288,7 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
           return confirmedId === failure.checkoutRequestId || confirmedId !== failure.previousCheckoutId ? null : failure;
         });
       }
-      setCheckoutState({ loading: false, error: false, errorDetails: null, checkout: nextCheckout, visitContextId: checkoutVisitContextId, loaded: true });
+      setCheckoutState({ loading: false, error: false, errorDetails: null, checkout: preserveRedraft ? null : nextCheckout, visitContextId: checkoutVisitContextId, loaded: true });
     }).catch((error) => {
       if (!cancelled && requestGeneration === checkoutReadGenerationRef.current
         && historyScopeRef.current === requestScope
@@ -1763,6 +1772,7 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
       const disposition = checkoutPostResponseDisposition({ checkout, checkoutRequestId, previousCheckoutId: attempt.previousCheckoutId, observedCheckout: checkoutObservationRef.current.checkout, observationAdvanced: checkoutObservationRef.current.revision !== attempt.revision });
       if (disposition === "invalid") throw new Error("会計依頼の応答が不正です。");
       if (disposition === "superseded") return;
+      checkoutRedraftRef.current = null;
       checkoutObservationRef.current = { revision: checkoutObservationRef.current.revision + 1, checkout };
       checkoutPreviousRef.current = checkout;
       setCheckoutRequestFailure(null);
@@ -1796,6 +1806,9 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
     setCheckoutRefreshKey((current) => current + 1);
   };
   const resetCancelledCheckout = () => {
+    checkoutRedraftRef.current = checkoutState.checkout?.status === "cancelled"
+      ? { scope: historyScope, checkoutRequestId: checkoutState.checkout.checkoutRequestId }
+      : null;
     checkoutReadGenerationRef.current += 1;
     checkoutPostAttemptRef.current = null;
     checkoutObservationRef.current = { ...checkoutObservationRef.current, revision: checkoutObservationRef.current.revision + 1 };

@@ -935,3 +935,13 @@
 - 最新レビュー対象は計9件（旧6件を保持＋helper JS／helper test／customer-ui test）。今回追加差分はこのうち6件で、order-outbox.js／order-outbox.test.mjs／customer-checkout-ui.test.mjsは旧reviewからraw SHA不変。再レビュー資料 C:\Users\user\AppData\Local\Temp\warun-checkout-initial-sse-20261029-df5477180b5445228cd02d110f12e082\p2-fresh-config-20261029T142140-e1dccf8b\REVIEW-HANDOFF-P2.md、files-final.json／review-current.diff／p2-additional.diff／preserved-runtime-blocks.json／build-runtime-correspondence.jsonを参照。
 - 自己レビューまで、再独立レビュー未実施。未stage／未commit／未push／候補未作成／稼働未反映。A90は本日手元になく、実HTTP SSE／会計通信・実機受入・実通信断／再起動／DB復元は未確認。指摘6～8の未確認、3音化・検証注文整理の完了を維持。稼働safe-copy／本番DB・認証・登録・Node／Web操作、Computer Useなし。
 - 次の作業1つ：実GET開始番号の境界・直列後続の集約・再接続／失敗時の所有・P2-2の意味的検証と全9件を再独立レビューする。
+
+
+## 2026-10-30 再依頼入力保持の最小修正（未commit・未反映／独立レビュー資料準備）
+
+- 正式handoff最新末尾を優先。旧本worktreeは別task所有のため通常attachを断念し、所有権を変えず専用worktree checkout-redraft-intent／branch codex/checkout-redraft-intentを基点78d4060a7f7d1495eecfeeaa8ac9e1b16d08b61cから作成。元worktreeには変更なし。
+- Appだけに現在historyScope世代＋入力元cancelled依頼IDの画面内refを追加。同じ旧取消GETでも観測台帳を更新しつつ入力・領収書選択を保持。GET・version・所有・初回同期guardは維持。別ID/非取消、POST成功、scope変更、closeで解除。送信中/失敗では維持して同ID再試行と指摘7の失敗寿命を保つ。永続保存・API/DB変更なし。
+- 必須実画面は修正前1 FAIL→修正後17/17 PASS。関連POST競合26/26、会計UI11/11、再接続3/3、初回SSE19/19、履歴scope影響5/5、build/Sites4/4、構文/diffチェックPASS。既存2件は取消表示から入力維持へ期待更新、失敗通知のassertは保持。静的UI期待3か所も追従。検証側のnull fixture/HTTP観測条件/SQL誤りの中間失敗は保存し、製品FAILと区別。
+- 専用DB/loopback動的ポートの実HTTP＋実buildでも旧取消GET後の入力/領収書保持・POST0→明示送信で別ID1件を確認。1280x800/100%画像確認。実HTTPのSQL確認誤りは追加業務操作なしの読取補完R4で確定。隔離プロセス残存0・待受0。
+- 詳細/差分/ライフサイクル/全対象SHA/未確認は C:/Users/user/AppData/Local/Temp/warun-checkout-redraft-fix-20261030-b94f606b4ad146668cb6f3656e548309/REVIEW-HANDOFF.md。独立レビュー自体は未実施。未stage/未commit/未push/候補未作成/稼働未反映。本番接続/操作/再起動なし。A90当時の原因断定なし、既存通常会計1往復PASSを維持。案内文要望は後日未実装のまま。
+- 次の作業1つ：上記資料と未commit差分の独立レビュー。自然な来店交代観測・Drive再取得SHA・修正版A90受入は今回未実施。
