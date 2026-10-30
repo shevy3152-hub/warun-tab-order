@@ -602,6 +602,7 @@ export function subscribeCustomerInvalidations({
   env = globalThis,
   fetchImpl = env.fetch,
   onEvent,
+  onInitialConnect,
   onReconnect,
   onAuthorizationFailure,
 } = {}) {
@@ -680,6 +681,7 @@ export function subscribeCustomerInvalidations({
         headers,
         ...(controller ? { signal: controller.signal } : {}),
       });
+      if (stopped) return;
       if (response.status === 410) {
         eventEpoch = null;
         lastEventId = 0;
@@ -691,6 +693,7 @@ export function subscribeCustomerInvalidations({
         const responseEpoch = response.headers?.get?.("X-Event-Epoch");
         if (responseEpoch) eventEpoch = responseEpoch;
         if (hasConnected) onReconnect?.("reconnect");
+        else onInitialConnect?.();
         hasConnected = true;
         await readStream(response);
       }
@@ -1266,9 +1269,9 @@ export function createCustomerOrderClient({
     requestCheckout({ checkoutRequestId, receiptRequested }) {
       return requestCustomerCheckout({ config, checkoutRequestId, receiptRequested, fetchImpl: options.fetchImpl || global.fetch });
     },
-    subscribeInvalidations(listener, { onReconnect, onAuthorizationFailure } = {}) {
+    subscribeInvalidations(listener, { onInitialConnect, onReconnect, onAuthorizationFailure } = {}) {
       if (typeof listener !== "function") return () => {};
-      const subscription = { listener, onReconnect, onAuthorizationFailure };
+      const subscription = { listener, onInitialConnect, onReconnect, onAuthorizationFailure };
       invalidationListeners.add(subscription);
       if (!stopInvalidationStream) {
         stopInvalidationStream = subscribeCustomerInvalidations({
@@ -1278,6 +1281,11 @@ export function createCustomerOrderClient({
           onEvent(event) {
             for (const current of [...invalidationListeners]) {
               try { current.listener(event); } catch { /* One observer must not block other invalidation handlers. */ }
+            }
+          },
+          onInitialConnect() {
+            for (const current of [...invalidationListeners]) {
+              try { current.onInitialConnect?.(); } catch { /* One observer must not block other connection handlers. */ }
             }
           },
           onReconnect(reason) {

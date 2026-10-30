@@ -15,6 +15,9 @@ export function createCustomerVisitConfigRefresher({
   let stopped = false;
   let authorizationFailed = false;
   let inFlight = null;
+  let lastStartedRequest = 0;
+  let minimumRequest = 0;
+  let queuedRefresh = null;
   let retryTimer = null;
   let timeoutTimer = null;
   let controller = null;
@@ -29,10 +32,20 @@ export function createCustomerVisitConfigRefresher({
     if (retryTimer !== null) clearTimeoutImpl(retryTimer);
     retryTimer = null;
   };
-  const refresh = () => {
+  const refresh = ({ afterCurrent = false } = {}) => {
     if (stopped || authorizationFailed) return Promise.resolve(null);
-    if (inFlight) return inFlight;
+    if (afterCurrent) minimumRequest = lastStartedRequest + 1;
+    if (inFlight) {
+      if (!afterCurrent) return inFlight;
+      if (!queuedRefresh) {
+        const queued = {};
+        queued.promise = new Promise((resolve, reject) => { queued.resolve = resolve; queued.reject = reject; });
+        queuedRefresh = queued;
+      }
+      return queuedRefresh.promise;
+    }
     clearRetry();
+    const requestNumber = ++lastStartedRequest;
     const requestController = typeof AbortControllerImpl === "function" ? new AbortControllerImpl() : null;
     controller = requestController;
     let request;
@@ -51,6 +64,8 @@ export function createCustomerVisitConfigRefresher({
         onAuthorizationFailure(config?.errorCode);
         return null;
       }
+      // A connection sync needs a GET started after its request, not a shared older GET.
+      if (requestNumber < minimumRequest) return null;
       if (config?.role === "customer" && Number.isSafeInteger(config.tableId) && config.tableId > 0
           && /^v1_[0-9a-f]{64}$/.test(config.visitContextId || "")) {
         onConfig(config);
@@ -66,6 +81,9 @@ export function createCustomerVisitConfigRefresher({
       timeoutTimer = null;
       if (controller === requestController) controller = null;
       inFlight = null;
+      const queued = queuedRefresh;
+      queuedRefresh = null;
+      if (queued) void refresh().then(queued.resolve, queued.reject);
     });
     return inFlight;
   };
@@ -77,6 +95,8 @@ export function createCustomerVisitConfigRefresher({
       clearRetry();
       if (timeoutTimer !== null) clearTimeoutImpl(timeoutTimer);
       timeoutTimer = null;
+      queuedRefresh?.resolve(null);
+      queuedRefresh = null;
       controller?.abort();
     },
   };

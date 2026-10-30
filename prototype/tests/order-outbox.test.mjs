@@ -723,6 +723,7 @@ test("customer invalidation subscription refreshes on safe SSE events and preser
   const requests = [];
   const received = [];
   const reconnectReasons = [];
+  let initialConnections = 0;
   const encoded = new TextEncoder().encode(`id: 7\ndata: ${JSON.stringify(event)}\n\n`);
   const env = {
     WARUN_ORDER_MODE: "api",
@@ -752,6 +753,7 @@ test("customer invalidation subscription refreshes on safe SSE events and preser
     },
     onEvent: (value) => received.push(value),
     onReconnect: (reason) => reconnectReasons.push(reason),
+    onInitialConnect: () => { initialConnections += 1; },
   });
 
   await new Promise((resolve) => setImmediate(resolve));
@@ -762,13 +764,34 @@ test("customer invalidation subscription refreshes on safe SSE events and preser
   assert.equal(requests[0].options.headers["Last-Event-ID"], undefined);
   assert.equal(timers.length, 1);
   assert.equal(timers[0].delay, 3000);
+  assert.equal(initialConnections, 1);
 
   timers[0].callback();
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(requests[1].options.headers["X-Event-Epoch"], eventEpoch);
   assert.equal(requests[1].options.headers["Last-Event-ID"], "7");
   assert.deepEqual(reconnectReasons, ["reconnect"]);
+  assert.equal(initialConnections, 1);
   unsubscribe();
+});
+
+test("a stopped pending SSE connection never announces its late initial success", async () => {
+  let resolveConnection;
+  const connected = [];
+  const scheduled = [];
+  const unsubscribe = subscribeCustomerInvalidations({
+    config: { enabled: true, baseUrl: "http://fictional.invalid/v1", token: "fictional-isolated-token" },
+    env: { setTimeout(callback) { scheduled.push(callback); }, clearTimeout() {} },
+    fetchImpl: () => new Promise((resolve) => { resolveConnection = resolve; }),
+    onEvent() { assert.fail("A stopped stream must not deliver events"); },
+    onInitialConnect() { connected.push("initial"); },
+    onReconnect() { connected.push("reconnect"); },
+  });
+  unsubscribe();
+  resolveConnection({ ok: true, status: 200, headers: { get: () => null }, body: null });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(connected, []);
+  assert.deepEqual(scheduled, []);
 });
 
 test("customer invalidation subscription requests a refresh after an epoch reset", async () => {
@@ -958,11 +981,13 @@ test("customer invalidation subscribers share one SSE connection and close it af
   });
   const eventsA = [];
   const eventsB = [];
-  const unsubscribeA = client.subscribeInvalidations((event) => eventsA.push(event));
-  const unsubscribeB = client.subscribeInvalidations((event) => eventsB.push(event));
+  const initialConnections = [];
+  const unsubscribeA = client.subscribeInvalidations((event) => eventsA.push(event), { onInitialConnect() { initialConnections.push("A"); throw new Error("Fictional observer failure"); } });
+  const unsubscribeB = client.subscribeInvalidations((event) => eventsB.push(event), { onInitialConnect() { initialConnections.push("B"); } });
   await new Promise((resolve) => setImmediate(resolve));
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(eventRequests, 1);
+  assert.deepEqual(initialConnections, ["A", "B"]);
   assert.equal(eventsA.length, 1);
   assert.equal(eventsB.length, 1);
 

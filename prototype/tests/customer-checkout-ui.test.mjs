@@ -73,7 +73,7 @@ test("checkout GET retry renders safe diagnostics and never sends a checkout req
 test("checkout modal state is scoped to the current visit and ignores late prior-visit responses", () => {
   assert.match(source, /checkoutVisitContextRef\.current = checkoutVisitContextId/);
   assert.match(source, /setCheckoutState\(\{ loading: false, error: false, errorDetails: null, checkout: nextCheckout, visitContextId: checkoutVisitContextId, loaded: true \}\)/);
-  assert.match(source, /\[apiMode, modal, orderClient, checkoutRefreshKey, checkoutVisitContextId\]/);
+  assert.match(source, /\[apiMode, modal, orderClient, checkoutRefreshKey, checkoutVisitContextId, historyScope\]/);
   assert.match(source, /checkoutVisitContextRef\.current !== requestVisitContextId \|\| checkoutRequestIdRef\.current !== checkoutRequestId \|\| checkoutPostAttemptRef\.current !== attempt\) return/);
   assert.match(source, /isCheckoutModalForCurrentVisit\(\{ modal, openedForVisitContextId: checkoutModalVisitContextRef\.current, currentVisitContextId: checkoutVisitContextId \}\)/);
   assert.match(source, /\(!apiMode \|\| checkoutState\.visitContextId === checkoutVisitContextId\)/);

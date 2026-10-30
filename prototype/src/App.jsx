@@ -1046,6 +1046,7 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
   const checkoutReadGenerationRef = useRef(0);
   const checkoutRefreshHandledRef = useRef(0);
   const checkoutReconnectRefreshAppliedSequenceRef = useRef(0);
+  const checkoutConnectionSyncRef = useRef(null);
   const checkoutVisitContextRef = useRef(checkoutVisitContextId);
   const checkoutAudioRef = useRef(null);
   const checkoutSoundKeysRef = useRef(new Set());
@@ -1155,9 +1156,22 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
   useEffect(() => {
     if (!apiMode || typeof orderClient.getDeviceConfig !== "function") return undefined;
     let cancelled = false;
+    const connectionSync = { pending: false };
+    checkoutConnectionSyncRef.current = connectionSync;
+    const blockConnectionAuthorization = (errorCode) => {
+      connectionSync.pending = false;
+      blockCartAfterAuthenticationFailure(errorCode);
+    };
+    const queueCheckoutRefresh = (visitContextId) => {
+      if (cancelled || !connectionSync.pending) return;
+      connectionSync.pending = false;
+      setCheckoutReconnectRefresh((current) => ({ sequence: current.sequence + 1, visitContextId }));
+    };
     const applyVisitConfig = (currentConfig) => {
       if (cancelled) return;
       onCustomerDeviceConfigChange?.({ ...currentConfig, deviceId: customerDeviceConfig?.deviceId });
+      // The existing config retry may succeed after the connection callback has returned.
+      queueCheckoutRefresh(currentConfig.visitContextId);
       const pinnedVisitContextId = cartVisitContextIdRef.current;
       if (
         Object.keys(cartRef.current).length > 0
@@ -1173,17 +1187,19 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
     const visitConfigRefresher = createCustomerVisitConfigRefresher({
       getConfig: (options) => orderClient.getDeviceConfig(options),
       onConfig: applyVisitConfig,
-      onAuthorizationFailure: blockCartAfterAuthenticationFailure,
+      onAuthorizationFailure: blockConnectionAuthorization,
     });
-    const refreshVisitState = () => {
+    const refreshVisitState = (options) => {
       setMenuRefreshKey((current) => current + 1);
-      return visitConfigRefresher.refresh();
+      return visitConfigRefresher.refresh(options);
     };
     const refreshCheckoutAfterReconnect = createCustomerCheckoutReconnectHandler({
-      refreshVisitState,
-      onRefreshReady: (visitContextId) => {
-        if (!cancelled) setCheckoutReconnectRefresh((current) => ({ sequence: current.sequence + 1, visitContextId }));
+      refreshVisitState: () => {
+        connectionSync.pending = true;
+        checkoutReadGenerationRef.current += 1;
+        return refreshVisitState({ afterCurrent: true });
       },
+      onRefreshReady: queueCheckoutRefresh,
     });
     const unsubscribe = typeof orderClient.subscribeInvalidations === "function" ? orderClient.subscribeInvalidations((event) => {
       const resource = event?.payload?.resource ?? event?.resource;
@@ -1197,11 +1213,15 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
         });
       }
       if (resource === "orders") setHistoryRefreshKey((current) => current + 1);
-      if (resource === "checkout" || String(event?.payload?.type || event?.type || "").startsWith("checkout.")) setCheckoutRefreshKey((current) => current + 1);
-    }, { onReconnect: refreshCheckoutAfterReconnect, onAuthorizationFailure: blockCartAfterAuthenticationFailure }) : () => {};
+      if (resource === "checkout" || String(event?.payload?.type || event?.type || "").startsWith("checkout.")) {
+        checkoutReadGenerationRef.current += 1;
+        if (!connectionSync.pending) setCheckoutRefreshKey((current) => current + 1);
+      }
+    }, { onInitialConnect: refreshCheckoutAfterReconnect, onReconnect: refreshCheckoutAfterReconnect, onAuthorizationFailure: blockConnectionAuthorization }) : () => {};
     return () => {
       cancelled = true;
       visitConfigRefresher.stop();
+      if (checkoutConnectionSyncRef.current === connectionSync) checkoutConnectionSyncRef.current = null;
       unsubscribe();
     };
   }, [apiMode, orderClient, onCustomerDeviceConfigChange, customerDeviceConfig?.deviceId, checkoutVisitContextId]);
@@ -1220,6 +1240,8 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
     if (refreshRequested) checkoutRefreshHandledRef.current = checkoutRefreshKey;
     let cancelled = false;
     const requestGeneration = checkoutReadGenerationRef.current;
+    const requestScope = historyScope;
+    const checkoutAtReadStart = checkoutObservationRef.current.checkout;
     const explicitlyOpened = modal === "checkout" && checkoutExplicitReadRef.current;
     if (modal === "checkout") {
       checkoutExplicitReadRef.current = false;
@@ -1227,6 +1249,13 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
     }
     void orderClient.getCheckout().then((nextCheckout) => {
       if (cancelled || requestGeneration !== checkoutReadGenerationRef.current) return;
+      if (historyScopeRef.current !== requestScope) return;
+      if (checkoutConnectionSyncRef.current?.pending) return;
+      const observedCheckout = checkoutObservationRef.current.checkout;
+      // A read begun before a confirmed POST must not erase it; versions belong to one request ID.
+      if (observedCheckout && observedCheckout !== checkoutAtReadStart
+        && (!nextCheckout || nextCheckout.checkoutRequestId !== observedCheckout.checkoutRequestId
+          || !Number.isSafeInteger(nextCheckout.version) || nextCheckout.version < observedCheckout.version)) return;
       checkoutObservationRef.current = { revision: checkoutObservationRef.current.revision + 1, checkout: nextCheckout ?? checkoutObservationRef.current.checkout };
       const previous = checkoutPreviousRef.current;
       checkoutPreviousRef.current = nextCheckout;
@@ -1252,7 +1281,10 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
       }
       setCheckoutState({ loading: false, error: false, errorDetails: null, checkout: nextCheckout, visitContextId: checkoutVisitContextId, loaded: true });
     }).catch((error) => {
-      if (!cancelled && requestGeneration === checkoutReadGenerationRef.current) {
+      if (!cancelled && requestGeneration === checkoutReadGenerationRef.current
+        && historyScopeRef.current === requestScope
+        && !checkoutConnectionSyncRef.current?.pending
+        && checkoutObservationRef.current.checkout === checkoutAtReadStart) {
         checkoutObservationRef.current = { ...checkoutObservationRef.current, revision: checkoutObservationRef.current.revision + 1 };
         if (isPassiveMissingCheckoutSession(error, { explicitlyOpened })) {
           checkoutReadGenerationRef.current += 1;
@@ -1273,7 +1305,7 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
       }
     });
     return () => { cancelled = true; };
-  }, [apiMode, modal, orderClient, checkoutRefreshKey, checkoutVisitContextId]);
+  }, [apiMode, modal, orderClient, checkoutRefreshKey, checkoutVisitContextId, historyScope]);
 
   useEffect(() => {
     const unsubscribe = orderClient.subscribe((event) => {

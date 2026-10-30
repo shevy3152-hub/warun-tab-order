@@ -146,3 +146,93 @@ test("device config GET forwards the abort signal and preserves validation", asy
   assert.equal(receivedSignal, controller.signal);
   await client.stop();
 });
+
+function pendingConfigRequests() {
+  const requests = [];
+  return {
+    requests,
+    getConfig({ signal }) {
+      let resolve;
+      const promise = new Promise(done => { resolve = done; });
+      requests.push({ resolve, signal });
+      return promise;
+    },
+  };
+}
+const configB = { ...config, tableId: 2, visitContextId: "v1_" + "b".repeat(64) };
+const configC = { ...config, tableId: 3, visitContextId: "v1_" + "c".repeat(64) };
+
+test("post-connection refresh coalesces one serial follow-up and rejects the older shared result", async () => {
+  const timers = clock(), transport = pendingConfigRequests(), applied = [];
+  const reader = createCustomerVisitConfigRefresher({ ...timers, ...transport, onConfig: c => applied.push(c) });
+  const ordinary = reader.refresh(), fresh = reader.refresh({ afterCurrent: true });
+  assert.equal(reader.refresh(), ordinary);
+  assert.equal(reader.refresh({ afterCurrent: true }), fresh);
+  assert.equal(transport.requests.length, 1);
+  transport.requests[0].resolve(config); assert.equal(await ordinary, null);
+  assert.equal(transport.requests.length, 2); assert.deepEqual(applied, []);
+  transport.requests[1].resolve(configB); assert.deepEqual(await fresh, configB);
+  assert.deepEqual(applied, [configB]); assert.equal(timers.pending(), 0);
+  reader.stop();
+});
+
+test("a newer connection during the follow-up requires one later GET and cannot accept the earlier response", async () => {
+  const timers = clock(), transport = pendingConfigRequests(), applied = [];
+  const reader = createCustomerVisitConfigRefresher({ ...timers, ...transport, onConfig: c => applied.push(c) });
+  const first = reader.refresh({ afterCurrent: true });
+  transport.requests[0].resolve(config); await flush();
+  assert.equal(transport.requests.length, 2);
+  const latest = reader.refresh({ afterCurrent: true });
+  assert.equal(reader.refresh({ afterCurrent: true }), latest);
+  assert.equal(transport.requests.length, 2);
+  transport.requests[1].resolve(configB); assert.equal(await first, null);
+  assert.equal(transport.requests.length, 3); assert.deepEqual(applied, []);
+  transport.requests[2].resolve(configC); assert.deepEqual(await latest, configC);
+  assert.deepEqual(applied, [configC]); assert.equal(timers.pending(), 0); reader.stop();
+});
+
+test("fresh refresh while idle starts one new request without an extra follow-up", async () => {
+  const timers = clock(), transport = pendingConfigRequests(), applied = [];
+  const reader = createCustomerVisitConfigRefresher({ ...timers, ...transport, onConfig: c => applied.push(c) });
+  const initial = reader.refresh(); transport.requests[0].resolve(config); await initial;
+  const fresh = reader.refresh({ afterCurrent: true }); assert.equal(transport.requests.length, 2);
+  transport.requests[1].resolve(configB); await fresh; await flush();
+  assert.equal(transport.requests.length, 2); assert.deepEqual(applied, [config, configB]); reader.stop();
+});
+
+test("a failed follow-up is not a sync success and its existing retry meets the freshness boundary", async () => {
+  const timers = clock(), transport = pendingConfigRequests(), applied = [];
+  const reader = createCustomerVisitConfigRefresher({ ...timers, ...transport, onConfig: c => applied.push(c) });
+  const fresh = reader.refresh({ afterCurrent: true }); transport.requests[0].resolve(config); await flush();
+  transport.requests[1].resolve(null); assert.equal(await fresh, null); assert.deepEqual(applied, []);
+  await timers.advance(2999); assert.equal(transport.requests.length, 2);
+  await timers.advance(1); assert.equal(transport.requests.length, 3);
+  transport.requests[2].resolve(configB); await flush(); assert.deepEqual(applied, [configB]);
+  assert.equal(timers.pending(), 0); reader.stop();
+});
+
+test("a stale request timeout releases only one queued follow-up and its late success cannot overwrite it", async () => {
+  const timers = clock(), transport = pendingConfigRequests(), applied = [];
+  const reader = createCustomerVisitConfigRefresher({ ...timers, ...transport, onConfig: c => applied.push(c) });
+  const fresh = reader.refresh({ afterCurrent: true }); await timers.advance(10000);
+  assert.equal(transport.requests[0].signal.aborted, true); assert.equal(transport.requests.length, 2);
+  transport.requests[1].resolve(configB); await fresh; transport.requests[0].resolve(config); await flush();
+  assert.deepEqual(applied, [configB]); assert.equal(timers.pending(), 0); reader.stop();
+});
+
+test("stop resolves a queued freshness wait without starting another request", async () => {
+  const timers = clock(), transport = pendingConfigRequests(), applied = [];
+  const reader = createCustomerVisitConfigRefresher({ ...timers, ...transport, onConfig: c => applied.push(c) });
+  const fresh = reader.refresh({ afterCurrent: true }); reader.stop(); assert.equal(await fresh, null);
+  transport.requests[0].resolve(config); await flush(); assert.equal(transport.requests.length, 1);
+  assert.deepEqual(applied, []); assert.equal(timers.pending(), 0);
+});
+
+test("authorization failure still blocks a queued fresh request", async () => {
+  const timers = clock(), transport = pendingConfigRequests(), applied = [], failures = [];
+  const reader = createCustomerVisitConfigRefresher({ ...timers, ...transport, onConfig: c => applied.push(c), onAuthorizationFailure: code => failures.push(code) });
+  const fresh = reader.refresh({ afterCurrent: true });
+  transport.requests[0].resolve({ status: "unauthorized", errorCode: "HTTP_401" }); assert.equal(await fresh, null);
+  assert.equal(transport.requests.length, 1); assert.deepEqual(applied, []); assert.deepEqual(failures, ["HTTP_401"]);
+  assert.equal(timers.pending(), 0); reader.stop();
+});

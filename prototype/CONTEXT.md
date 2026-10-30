@@ -905,3 +905,33 @@
 - 実画面の修正前2件FAIL→修正後16件PASS、追加outbox1件／実契約の来店終了1件PASS（計18経路、分割実行）。テストfixtureの相対配置対応後に関連3件PASS。関連既存5＋22件、指摘7の実画面選択4件、build、Sites4/4、構文／diffチェックPASS。1280×800・100%の未加工PNGでB履歴のみ表示・はみ出しなしを確認。
 - 独立レビュー資料 C:\Users\user\AppData\Local\Temp\warun-customer-history-scope-20261028-a93873f331a841428d8c36353656f396\REVIEW-HANDOFF.md。before/、修正前後log、差分／SHA、PNG、隔離browserの記録を保持。稼働safe-copy／本番API／DB／認証／登録／Nodeにはアクセス・変更せず、架空データの隔離UIだけ使用。テスト用browser／serverは終了。
 - 未stage／未commit／未push／候補未作成／稼働未反映。実HTTP履歴通信／実機来店切替、ネットワーク断／再起動／DB復元は未検証。指摘9・履歴取消復活表示・追加機能へ拡大なし。次の作業1つ：scope切替・遅延成功失敗・ABA・未割当・既存会計保護の独立レビュー。
+
+
+## 指摘9：初回SSE成立後の会計再同期（2026-10-29 14:07:14 JST、独立レビュー待ち・未反映）
+
+- 最新handoff末尾と指摘9原文を照合。基点HEAD ba32d33eea4e17c2c91144a62c7378532cabe9d8、開始時codex/customer-history-scopeはclean／stage空／cached origin比0/0。本チャット所有の既存worktreeで専用branch codex/checkout-initial-sse-syncを作成。所有権変更・強制attachなし。
+- 初回GETでrequested取得→接続前にreadyへ進行→初回SSEはサーバーの現在cursorから開始し過去eventを配信しない。一方クライアントはhasConnected後だけonReconnectを呼ぶため再GETされない。原文と現コードが一致。過去の原因未確定事象とは関連付けない。
+- order-outbox.jsに初回成功専用onInitialConnectを追加し、Appの既存来店照合付き会計再同期へ接続。onReconnect／epoch reset／3秒接続retry／cursorと再送は維持。初回通知ではoutbox force flushやtheme/noticeの不要な再取得を増やさない。停止済みfetchの遅い成功は通知しない。
+- Appで設定GET失敗後も同期要求を保持し、既存3秒config retryの成功時に1回だけ会計GETへ戻す。checkoutイベント受信時は旧GET世代を即時無効化。GET成功／失敗に既存端末・席・来店scopeを照合し、途中のPOST成立を古いnull／別ID／低version／旧GET診断で消さない。同IDの新versionは反映。指摘7のPOST処理／失敗寿命／finally、指摘8の履歴scope／取得ガードは本文不変。
+- 実CustomerScreen＋実createCustomerOrderClient／SSE parserを架空fetchとReadableStream・偽timerで接続した隔離画面。必須取り逃しは修正前1件FAIL→PASS、設定GET retryで同期要求消失も追加FAIL→PASS。最終13/13 PASS、SSE関連7/7、関連config/会計22/22、指摘7実画面26/26（最終callback変更後の影響6/6再確認）、指摘8影響6/6。最初のconfig/会計21/22は依存配列のsource regex未追従1件で、assert1行をhistoryScope込みへ更新後1/1・最終22/22 PASS。
+- 初回通知だけの中間修正は実画面7/9。旧GET nullがPOST成功を消す経路1件を製品側guardで修正し、来店切替で旧モーダル終了／再表示に複数GETがある既存経路はtestの固定件数仮定を最新取得indexへ修正した。全log／修正前testを保持。
+- buildとSites4/4 PASS。設定retry連携を追加したため最終ソースでも再実施しPASS。各buildは新規Temp複写だけで実行し、既存prototype/distを上書きせず、最終340入力のSHA前後不変。package／lockfile・依存変更なし。構文／diffチェックPASS。1280×800・100%の未加工PNGで初回open後ready金額表示を確認。
+- 変更6件: prototype/src/App.jsx、prototype/src/order-outbox.js、prototype/tests/order-outbox.test.mjs、prototype/tests/customer-checkout-ui.test.mjs（依存assert1行）、新規prototype/tests/customer-checkout-initial-sse.test.mjs、本記録。独立レビュー資料 C:\Users\user\AppData\Local\Temp\warun-checkout-initial-sse-20261029-df5477180b5445228cd02d110f12e082\REVIEW-HANDOFF.md。before/・原文・全log・差分/SHA・PNG/profile・検証用source/buildを保持。専用browser／serverは終了、例外なし・残存0を確認。
+- 未stage／未commit／未push／候補未作成／稼働未反映。実HTTP SSE／会計通信・実機・実通信断／再起動／DB復元は未検証。稼働safe-copy／本番DB・認証・登録・Node／Webの操作なし。本番注文・会計・来店切替、Computer Useなし。指摘6～8の実通信／実機未確認を保持し、3音化・検証注文整理は再検証しない。schema／API／server／新規再送基盤は変更なし。
+- 次の作業1つ：初回接続通知・config retry後の1回同期・GET/POST競合guardとテストを独立レビューする。
+
+
+## 指摘9 P2-1／P2-2修正（2026-10-29 14:33:11 JST、再独立レビュー待ち・未反映）
+
+- 前回独立レビューは「修正必要」。P2-1は接続前の設定GET Aを初回open後も共有しAで同期を完了する問題、P2-2はcustomer-ui.test.mjsの旧shorthand assert未追従。今回許可は2件の最小修正・関連検証・自己レビュー・再レビュー資料準備まで。
+- branch codex/checkout-initial-sse-sync／HEAD ba32d33eea4e17c2c91144a62c7378532cabe9d8維持。開始時stage空・旧6件のSHAが旧review manifestと一致。所有worktreeを再確認し、before/へ旧6件＋今回必要な3件をraw複写。旧REVIEW-HANDOFF.md／manifest／差分／状態と旧logは変更せず保持。
+- P2-1: customer-visit-config-refresh.js:18–48で実際のGET開始番号と接続後に必要な最低番号を管理し、refresh({afterCurrent:true})だけ現要求の終了後に1本の後続GETを予約する。通常refresh()はin-flight共有を維持。重なるfresh呼出は同じ予約Promiseへ集約し、B取得中の再接続ならその終了後のCを1本だけ必要にする。最低番号未満のA/BはonConfigも成功結果も適用しない。
+- 同helper:66–86で通常の失敗3秒retry／10秒timeoutを維持し、queued要求をfinallyで直列開始。stopはqueued waitをnull解決し、認証失敗は旧要求でもブロックし後続を起動しない。新しいpoll／並列取得／schema変更はない。
+- App.jsx:1049/1159–1225で接続同期を所有refとして保持し、初回／再接続はafterCurrent:trueで設定を再検証。同期要求時に旧会計GETを無効化し、設定確定前のevent／手動GET結果が新席の会計を旧席へ表示するのを防ぐ。対応設定のonConfig成功で1回だけ会計同期へ進み、cleanup・認証失敗では待機状態を解除。既存のPOST成功失敗／finallyと履歴scope／取得guard本文は不変。
+- P2-2: customer-ui.test.mjs:378–386でwrapperのpending設定・afterCurrent:true要求・helperへのoptions転送と初回callback接続を確認。従来のdeviceConfig刷新／再接続／cart stale等の意味的assertは維持し、削除・skip・常時true化なし。関連testのcallback利用を全検索して影響3件も選定。
+- P2-1は実helperのin-flight共有を使う画面で修正前1/1 FAIL（A完了後のconfig GETが1のまま、Bなし）→修正後PASS。P2-2も対象1件FAIL→PASS。最終実画面19/19 PASS（旧13＋P2追加6）。build後にtest-only画面観測を強化し、手動再表示前のB設定／B会計の自動適用もP2の6/6で確認。
+- helper関連29/29（既存22＋新7）、customer-ui影響3/3、指摘7実画面26/26、指摘8影響3/3 PASS。新helper7件は通常共有・直列後続の集約・B中再接続・idle・失敗retry・timeout旧応答・stop・認証保全を含む。build／Sites4/4・構文／diffチェックPASS。旧無関係PASSは反復しない。
+- buildは新規Temp複写だけで1回実施し、既存dist／releaseを上書きせず340入力の前後SHA一致。build後の変更はtest-only観測／assert／PNG取得と本記録だけで、runtimeを含む他338入力は同SHA。1280×800・100%の未加工B席／会計表示を目視確認。専用browser/server終了・例外なし・残存0を確認。
+- 最新レビュー対象は計9件（旧6件を保持＋helper JS／helper test／customer-ui test）。今回追加差分はこのうち6件で、order-outbox.js／order-outbox.test.mjs／customer-checkout-ui.test.mjsは旧reviewからraw SHA不変。再レビュー資料 C:\Users\user\AppData\Local\Temp\warun-checkout-initial-sse-20261029-df5477180b5445228cd02d110f12e082\p2-fresh-config-20261029T142140-e1dccf8b\REVIEW-HANDOFF-P2.md、files-final.json／review-current.diff／p2-additional.diff／preserved-runtime-blocks.json／build-runtime-correspondence.jsonを参照。
+- 自己レビューまで、再独立レビュー未実施。未stage／未commit／未push／候補未作成／稼働未反映。A90は本日手元になく、実HTTP SSE／会計通信・実機受入・実通信断／再起動／DB復元は未確認。指摘6～8の未確認、3音化・検証注文整理の完了を維持。稼働safe-copy／本番DB・認証・登録・Node／Web操作、Computer Useなし。
+- 次の作業1つ：実GET開始番号の境界・直列後続の集約・再接続／失敗時の所有・P2-2の意味的検証と全9件を再独立レビューする。

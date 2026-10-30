@@ -375,7 +375,14 @@ test("customer refreshes menu and device context after session invalidations and
     /if\s*\(\s*resource\s*===\s*["']deviceConfig["']\s*\)/,
   );
   assert.match(deviceConfigBody, /\brefreshVisitState\s*\(\s*\)/);
-  assert.match(customerScreen, /const refreshCheckoutAfterReconnect = createCustomerCheckoutReconnectHandler\(\{\s*refreshVisitState,/);
+  const connectionCallback = extractIfStatementBody(
+    customerScreen.slice(customerScreen.indexOf("const refreshCheckoutAfterReconnect = createCustomerCheckoutReconnectHandler")),
+    /refreshVisitState:\s*\(\)\s*=>/,
+  );
+  assert.match(connectionCallback, /connectionSync\.pending\s*=\s*true/);
+  assert.match(connectionCallback, /return refreshVisitState\(\{\s*afterCurrent:\s*true\s*\}\)/);
+  assert.match(customerScreen, /return visitConfigRefresher\.refresh\(options\)/);
+  assert.match(customerScreen, /onInitialConnect:\s*refreshCheckoutAfterReconnect\b/);
   assert.match(customerScreen, /onReconnect:\s*refreshCheckoutAfterReconnect\b/);
   const reconnectHandlerBody = extractIfStatementBody(
     checkoutReconnectSource,
