@@ -8,7 +8,7 @@ import test from 'node:test';
 
 import { createDeviceAuthenticator } from '../src/auth/device-auth.mjs';
 import { createCatalogRepository } from '../src/catalog/catalog-repository.mjs';
-import { initializeDatabase } from '../src/db/database.mjs';
+import { initializeDatabase, SCHEMA_VERSION } from '../src/db/database.mjs';
 import { createDiagnosticRecorder } from '../src/diagnostics/diagnostic-recorder.mjs';
 import { createEventRepository } from '../src/events/event-repository.mjs';
 import { createSnapshotService } from '../src/events/snapshot-service.mjs';
@@ -206,7 +206,7 @@ test('admin diagnostics reports safe runtime state and bounded request outcomes 
     assert.equal(diagnostics.statusCode, 200);
     assert.equal(diagnostics.json.runtime.databaseTarget, 'safe-copy');
     assert.equal(diagnostics.json.runtime.isProduction, false);
-    assert.equal(diagnostics.json.schemaVersion, 23);
+    assert.equal(diagnostics.json.schemaVersion, SCHEMA_VERSION);
     assert.equal(diagnostics.json.storage.orders, database.prepare('SELECT COUNT(*) AS count FROM orders').get().count);
     assert.equal(diagnostics.json.latestOrderRetrieval.endpoint, 'GET /v1/admin/order-history');
     assert.equal(diagnostics.json.latestOrderRetrieval.status, 200);

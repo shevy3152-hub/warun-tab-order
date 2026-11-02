@@ -1,4 +1,5 @@
 import { HTTP_ERROR_CODES, createHttpError } from './http-errors.mjs';
+import { SCHEMA_VERSION } from '../db/database.mjs';
 import { CUSTOMER_THEME_DEFINITIONS } from '../../../shared/customer-theme-definitions.mjs';
 
 const DEVICE_ROLES = new Set(['customer', 'kitchen', 'admin']);
@@ -51,7 +52,7 @@ const EVENT_TYPES_BY_ROLE = Object.freeze({
     'customer_order_start_notice.updated',
   ]),
 });
-const SUPPORTED_SCHEMA_VERSION = 24;
+const SUPPORTED_SCHEMA_VERSION = SCHEMA_VERSION;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const OPAQUE_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
 
@@ -174,15 +175,17 @@ function mapMenuVariant(variant, admin = false) {
   return response;
 }
 
-function mapQuantitySelection(item) {
+function mapQuantitySelection(item, { includePriceAssertion = true } = {}) {
   const settings = {
     quantitySelectionEnabled: item.quantitySelectionEnabled === undefined ? false : requireBoolean(item.quantitySelectionEnabled),
     minimumQuantity: item.minimumQuantity === undefined ? 1 : requireInteger(item.minimumQuantity, 1),
     initialQuantity: item.initialQuantity === undefined ? 1 : requireInteger(item.initialQuantity, 1),
     quantityStep: item.quantityStep === undefined ? 1 : requireInteger(item.quantityStep, 1),
     quantityUnitLabel: item.quantityUnitLabel === undefined ? '点' : requireString(item.quantityUnitLabel),
-    priceAssertionRequired: item.priceAssertionRequired === undefined ? false : requireBoolean(item.priceAssertionRequired),
   };
+  if (includePriceAssertion) {
+    settings.priceAssertionRequired = item.priceAssertionRequired === undefined ? false : requireBoolean(item.priceAssertionRequired);
+  }
   if ([settings.minimumQuantity, settings.initialQuantity, settings.quantityStep].some((value) => value > 99)
     || settings.initialQuantity < settings.minimumQuantity
     || (settings.initialQuantity - settings.minimumQuantity) % settings.quantityStep !== 0
@@ -266,6 +269,7 @@ function mapKitchenMenuItem(item) {
     isSoldOut: requireBoolean(item.isSoldOut),
     sortOrder: requireInteger(item.sortOrder),
     version: requireInteger(item.version, 1),
+    ...mapQuantitySelection(item, { includePriceAssertion: false }),
   };
 }
 

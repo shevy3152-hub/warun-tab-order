@@ -10,7 +10,7 @@ import test from 'node:test';
 import { createDeviceAuthenticator } from '../src/auth/device-auth.mjs';
 import { createCatalogRepository } from '../src/catalog/catalog-repository.mjs';
 import { createMenuRequestDiagnosticRecorder } from '../src/diagnostics/menu-request-recorder.mjs';
-import { initializeDatabase } from '../src/db/database.mjs';
+import { initializeDatabase, SCHEMA_VERSION } from '../src/db/database.mjs';
 import {
   createReadOnlyHttpServer,
   parseBearerAuthorization,
@@ -265,7 +265,7 @@ test('01 health is public and returns 200', async () => {
     assert.equal(response.statusCode, 200);
     assert.equal(response.json.status, 'ready');
     assert.equal(response.json.db, 'ready');
-  assert.equal(response.json.schemaVersion, 23);
+    assert.equal(response.json.schemaVersion, SCHEMA_VERSION);
   }, { now: () => 1_786_300_000_000 });
 });
 
@@ -751,22 +751,25 @@ test('49 over-limit URLs and headers fail safely without crashing the process', 
   });
 });
 
-test('50 response DTOs exactly match the role-scoped OpenAPI schemas', async () => {
+test('50 response DTOs exactly match the role-scoped key contracts', async () => {
   await withFixture(async ({ port }) => {
     const configRequired = ['deviceId', 'role', 'deviceLabel', 'status', 'configVersion', 'eventEpoch', 'lastEventId'];
     const menuRequired = ['audience', 'eventEpoch', 'lastEventId', 'categories', 'items'];
     const publicCategory = ['categoryId', 'name', 'sortOrder', 'sectionKey'];
     const adminCategory = [...publicCategory, 'isVisible', 'version', 'updatedAtMs'];
+    const quantitySelectionFields = ['quantitySelectionEnabled', 'minimumQuantity', 'initialQuantity', 'quantityStep', 'quantityUnitLabel'];
     const customerItem = [
       'menuItemId', 'categoryId', 'formalName', 'description', 'priceYen', 'isSoldOut', 'orderingMode',
-      'sortOrder', 'version', 'variants', 'servingOptions',
+      'sortOrder', 'version', 'variants', 'servingOptions', ...quantitySelectionFields, 'priceAssertionRequired',
     ];
-    const kitchenItem = ['menuItemId', 'categoryId', 'formalName', 'kitchenAlias', 'isSoldOut', 'sortOrder', 'version'];
+    const kitchenItem = [
+      'menuItemId', 'categoryId', 'formalName', 'kitchenAlias', 'isSoldOut', 'sortOrder', 'version', ...quantitySelectionFields,
+    ];
     const adminItem = [
       'menuItemId', 'categoryId', 'formalName', 'kitchenAlias', 'description', 'priceYen',
       'isSoldOut', 'orderingMode', 'isActive', 'sortOrder', 'version', 'updatedAtMs', 'detail',
       'customerVisibilityMode', 'tableVisibilityMode', 'tableVisibilityTableIds',
-      'variants', 'servingOptions',
+      'variants', 'servingOptions', ...quantitySelectionFields, 'priceAssertionRequired',
     ];
     for (const [token, role] of [[CUSTOMER_TOKEN, 'customer'], [KITCHEN_TOKEN, 'kitchen'], [ADMIN_TOKEN, 'admin']]) {
       const config = (await request({ port, path: '/v1/device/config', headers: authHeaders(token) })).json;
