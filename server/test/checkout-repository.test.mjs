@@ -49,9 +49,9 @@ function seed(database, { includeOrder = true } = {}) {
   }
 }
 
-function insertCompletedOrder(database, { orderId, clientOrderId, sessionId, tableId, orderItemId, amountYen, timestamp, customerDeviceId = CUSTOMER }) {
+function insertCompletedOrder(database, { orderId, clientOrderId, sessionId, tableId, orderItemId, amountYen, timestamp, customerDeviceId = CUSTOMER, quantityUnitLabelSnapshot = null }) {
   database.prepare(`INSERT INTO orders (order_id, client_order_id, request_fingerprint, canonical_request_json, customer_device_id, table_id, session_id, table_number_snapshot, status, total_amount_yen, accepted_at_ms, completed_at_ms) VALUES (?, ?, ?, '{}', ?, ?, ?, ?, 'completed', ?, ?, ?)`).run(orderId, clientOrderId, `${orderId.replaceAll('-', '')}${'0'.repeat(32)}`, customerDeviceId, tableId, sessionId, tableId, amountYen, timestamp, timestamp + 1);
-  database.prepare(`INSERT INTO order_items (order_item_id, order_id, line_index, menu_item_id, formal_name_snapshot, kitchen_alias_snapshot, unit_price_yen_snapshot, quantity, line_total_yen, created_at_ms, updated_at_ms) VALUES (?, ?, 0, 'fixture-item', '架空商品', '架空', ?, 1, ?, ?, ?)`).run(orderItemId, orderId, amountYen, amountYen, timestamp, timestamp);
+  database.prepare(`INSERT INTO order_items (order_item_id, order_id, line_index, menu_item_id, formal_name_snapshot, kitchen_alias_snapshot, unit_price_yen_snapshot, quantity, line_total_yen, quantity_unit_label_snapshot, created_at_ms, updated_at_ms) VALUES (?, ?, 0, 'fixture-item', '架空商品', '架空', ?, 1, ?, ?, ?, ?)`).run(orderItemId, orderId, amountYen, amountYen, quantityUnitLabelSnapshot, timestamp, timestamp);
 }
 
 async function withFixture(run, seedOptions = undefined) {
@@ -172,6 +172,26 @@ test('payment records are idempotent, snapshot details, close the session atomic
     assert.equal(voided.payment.voidReason, '支払方法の選択誤り');
     assert.equal(database.prepare('SELECT COUNT(*) AS count FROM payment_records').get().count, 1);
   });
+});
+
+test('payment history retains a custom order unit snapshot', async () => {
+  await withFixture(({ database, repository, customer, kitchen }) => {
+    insertCompletedOrder(database, {
+      orderId: SAME_SESSION_ORDER,
+      clientOrderId: SAME_SESSION_CLIENT_ORDER,
+      sessionId: SESSION,
+      tableId: 1,
+      orderItemId: 2,
+      amountYen: 450,
+      timestamp: 20,
+      quantityUnitLabelSnapshot: '本',
+    });
+    repository.createCheckout({ principal: customer, checkoutRequestId: CHECKOUT, receiptRequested: false });
+    const ready = repository.ready({ principal: kitchen, checkoutRequestId: CHECKOUT, expectedVersion: 1 });
+    const paid = repository.pay({ principal: kitchen, checkoutRequestId: CHECKOUT, expectedVersion: ready.request.version, paymentMethod: 'cash' });
+    assert.equal(paid.payment.orderItems[0].quantityUnitLabelSnapshot, '本');
+    assert.equal(database.prepare('SELECT quantity_unit_label_snapshot FROM payment_order_items WHERE payment_record_id = ?').get(paid.payment.paymentRecordId).quantity_unit_label_snapshot, '本');
+  }, { includeOrder: false });
 });
 
 test('payment stops when a ready checkout order changes and leaves no partial record or reset', async () => {

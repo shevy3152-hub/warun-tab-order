@@ -10,6 +10,7 @@ const NOTICE_MESSAGES = Object.freeze({
   failed: "送信に失敗しました。通信が戻るまで送信待ちです。",
   pending: "送信待ちです。通信が戻ると自動で再送します。",
   review: "来店または端末の割当が変わりました。注文内容を保持しています。スタッフへ確認してください。",
+  menuReview: "商品価格または販売単位が変更されています。注文内容を保持しています。メニューを更新してスタッフへ確認してください。",
   authReview: "端末の接続を確認できません。注文内容を保持しています。スタッフへ確認してください。",
 });
 
@@ -50,6 +51,7 @@ export function customerOrderNoticeFromOutboxEvent(event) {
   const displayState = event.displayState || event.state;
   if (displayState === "review_required" || event.state === "review_required") {
     if (AUTH_ERROR_CODES.has(normalizedErrorCode(event.lastErrorCode))) return { kind: "error", message: NOTICE_MESSAGES.authReview };
+    if (normalizedErrorCode(event.lastErrorCode) === "MENU_ITEM_CONFIGURATION_CHANGED") return { kind: "error", message: NOTICE_MESSAGES.menuReview };
     return { kind: "error", message: NOTICE_MESSAGES.review };
   }
   if (displayState === "synced" || event.state === "synced") {

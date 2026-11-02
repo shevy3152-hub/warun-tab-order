@@ -99,6 +99,7 @@ function mapPaymentOrderItem(row) {
     variantVolumeSnapshot: row.variant_volume_snapshot ?? null,
     temperatureSnapshot: row.temperature_snapshot ?? null,
     servingOptionNameSnapshot: row.serving_option_name_snapshot ?? null,
+    quantityUnitLabelSnapshot: row.quantity_unit_label_snapshot ?? null,
     unitPriceYenSnapshot: Number(row.unit_price_yen_snapshot),
     adjustedUnitPriceYen: row.adjusted_unit_price_yen == null ? null : Number(row.adjusted_unit_price_yen),
     currentUnitPriceYen: Number(row.current_unit_price_yen ?? row.unit_price_yen_snapshot),
@@ -203,7 +204,7 @@ export function createCheckoutRepository({ database, now = Date.now, idFactory =
   function orderFingerprint(sessionId) {
     return JSON.stringify(orderRows(sessionId).map((row) => [
       row.order_id, Number(row.order_item_id), row.formal_name_snapshot, row.variant_name_snapshot,
-      row.variant_volume_snapshot, row.temperature_snapshot, row.serving_option_name_snapshot,
+      row.variant_volume_snapshot, row.temperature_snapshot, row.serving_option_name_snapshot, row.quantity_unit_label_snapshot,
       Number(row.unit_price_yen_snapshot), row.adjusted_unit_price_yen == null ? null : Number(row.adjusted_unit_price_yen), Number(row.quantity), Number(row.billable_quantity), Number(row.line_total_yen),
     ]));
   }
@@ -363,8 +364,8 @@ export function createCheckoutRepository({ database, now = Date.now, idFactory =
       const paymentRecordId = idFactory();
       const eventEpoch = eventState();
       database.prepare(`INSERT INTO payment_records (payment_record_id, checkout_request_id, table_session_id, table_id, payment_method, confirmed_total_yen, paid_at_ms, status, version, created_at_ms, updated_at_ms) VALUES (?, ?, ?, ?, ?, ?, ?, 'paid', 1, ?, ?)`).run(paymentRecordId, id, current.table_session_id, session.table_id, method, confirmedTotalYen, paidAtMs, paidAtMs, paidAtMs);
-      const insertItem = database.prepare(`INSERT INTO payment_order_items (payment_record_id, order_id, order_item_id, formal_name_snapshot, variant_name_snapshot, variant_volume_snapshot, temperature_snapshot, serving_option_name_snapshot, unit_price_yen_snapshot, adjusted_unit_price_yen, current_unit_price_yen, quantity, line_total_yen, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
-      for (const [index, row] of orderRows(current.table_session_id).entries()) insertItem.run(paymentRecordId, row.order_id, row.order_item_id, row.formal_name_snapshot, row.variant_name_snapshot, row.variant_volume_snapshot, row.temperature_snapshot, row.serving_option_name_snapshot, row.unit_price_yen_snapshot, row.adjusted_unit_price_yen, row.current_unit_price_yen, row.billable_quantity, row.line_total_yen, index);
+      const insertItem = database.prepare(`INSERT INTO payment_order_items (payment_record_id, order_id, order_item_id, formal_name_snapshot, variant_name_snapshot, variant_volume_snapshot, temperature_snapshot, serving_option_name_snapshot, quantity_unit_label_snapshot, unit_price_yen_snapshot, adjusted_unit_price_yen, current_unit_price_yen, quantity, line_total_yen, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+      for (const [index, row] of orderRows(current.table_session_id).entries()) insertItem.run(paymentRecordId, row.order_id, row.order_item_id, row.formal_name_snapshot, row.variant_name_snapshot, row.variant_volume_snapshot, row.temperature_snapshot, row.serving_option_name_snapshot, row.quantity_unit_label_snapshot, row.unit_price_yen_snapshot, row.adjusted_unit_price_yen, row.current_unit_price_yen, row.billable_quantity, row.line_total_yen, index);
       const insertAdjustment = database.prepare('INSERT INTO payment_adjustments (payment_record_id, kind, label, amount_yen, sort_order) VALUES (?, ?, ?, ?, ?)');
       for (const [index, row] of findAdjustments.all(id).entries()) insertAdjustment.run(paymentRecordId, row.kind, row.label, row.amount_yen, index);
       const closedAtMs = paidAtMs;

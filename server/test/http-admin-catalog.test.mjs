@@ -337,6 +337,48 @@ test('admin catalog write requires admin authentication and persists one atomic 
   });
 });
 
+test('quantity settings survive admin API reload and an older update that omits the fields', async () => {
+  await withFixture(async ({ port }) => {
+    const quantityWrite = {
+      ...writeBody(),
+      quantitySelectionEnabled: true,
+      minimumQuantity: 2,
+      initialQuantity: 2,
+      quantityStep: 1,
+      quantityUnitLabel: '本',
+    };
+    const saved = await request({ port, token: ADMIN_TOKEN, body: quantityWrite });
+    assert.equal(saved.statusCode, 200);
+
+    const adminReload = await request({ port, token: ADMIN_TOKEN, method: 'GET', path: '/v1/menu' });
+    assert.equal(adminReload.statusCode, 200);
+    const adminItem = adminReload.json.items.find(({ menuItemId }) => menuItemId === 'sake');
+    assert.deepEqual({
+      enabled: adminItem.quantitySelectionEnabled,
+      minimum: adminItem.minimumQuantity,
+      initial: adminItem.initialQuantity,
+      step: adminItem.quantityStep,
+      unit: adminItem.quantityUnitLabel,
+    }, { enabled: true, minimum: 2, initial: 2, step: 1, unit: '本' });
+
+    const oldClientWrite = { ...writeBody(2) };
+    for (const key of ['quantitySelectionEnabled', 'minimumQuantity', 'initialQuantity', 'quantityStep', 'quantityUnitLabel']) delete oldClientWrite[key];
+    const oldClientSaved = await request({ port, token: ADMIN_TOKEN, body: oldClientWrite });
+    assert.equal(oldClientSaved.statusCode, 200);
+
+    const customerReload = await request({ port, token: CUSTOMER_TOKEN, method: 'GET', path: '/v1/menu' });
+    assert.equal(customerReload.statusCode, 200);
+    const customerItem = customerReload.json.items.find(({ menuItemId }) => menuItemId === 'sake');
+    assert.deepEqual({
+      enabled: customerItem.quantitySelectionEnabled,
+      minimum: customerItem.minimumQuantity,
+      initial: customerItem.initialQuantity,
+      step: customerItem.quantityStep,
+      unit: customerItem.quantityUnitLabel,
+    }, { enabled: true, minimum: 2, initial: 2, step: 1, unit: '本' });
+  });
+});
+
 test('retrying an accepted new item with its stable id updates that row instead of duplicating it', async () => {
   await withFixture(async ({ port, database }) => {
     const menuItemId = 'retry-product';

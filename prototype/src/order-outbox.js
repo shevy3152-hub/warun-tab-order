@@ -74,8 +74,16 @@ function normalizeItems(items) {
     const variantId = typeof item?.variantId === "string" && item.variantId ? item.variantId : null;
     const servingOptionId = typeof item?.servingOptionId === "string" && item.servingOptionId ? item.servingOptionId : null;
     const temperature = typeof item?.temperature === "string" && item.temperature ? item.temperature : null;
+    const hasExpectedUnitPrice = Object.hasOwn(item ?? {}, "expectedUnitPriceYen");
+    const hasExpectedUnitLabel = Object.hasOwn(item ?? {}, "expectedQuantityUnitLabel");
+    const expectedUnitPriceYen = item?.expectedUnitPriceYen;
+    const expectedQuantityUnitLabel = item?.expectedQuantityUnitLabel;
     const selectionKey = `${menuItemId}\u0000${variantId ?? ""}\u0000${servingOptionId ?? ""}\u0000${temperature ?? ""}`;
-    if (!menuItemId || !Number.isSafeInteger(quantity) || quantity < 1 || seen.has(selectionKey) || (variantId && servingOptionId)) {
+    if (!menuItemId || !Number.isSafeInteger(quantity) || quantity < 1 || seen.has(selectionKey) || (variantId && servingOptionId)
+      || hasExpectedUnitPrice !== hasExpectedUnitLabel
+      || (hasExpectedUnitPrice && (!Number.isSafeInteger(expectedUnitPriceYen) || expectedUnitPriceYen < 0
+        || typeof expectedQuantityUnitLabel !== "string" || !expectedQuantityUnitLabel.trim()
+        || [...expectedQuantityUnitLabel].length > 8))) {
       throw new TypeError("Order items are invalid.");
     }
     seen.add(selectionKey);
@@ -85,6 +93,7 @@ function normalizeItems(items) {
       ...(variantId ? { variantId } : {}),
       ...(temperature ? { temperature } : {}),
       ...(servingOptionId ? { servingOptionId } : {}),
+      ...(hasExpectedUnitPrice ? { expectedUnitPriceYen, expectedQuantityUnitLabel } : {}),
     };
   });
 }
@@ -98,7 +107,7 @@ export function createOrderPayload({ clientOrderId, items, visitContextId }) {
     throw new TypeError("visitContextId must be an opaque visit context id.");
   }
   return {
-    schemaVersion: items.some((item) => item?.temperature) ? 3 : 2,
+    schemaVersion: items.some((item) => item?.expectedUnitPriceYen !== undefined) ? 4 : items.some((item) => item?.temperature) ? 3 : 2,
     clientOrderId,
     ...(visitContextId ? { visitContextId } : {}),
     items: normalizeItems(items),
@@ -920,7 +929,7 @@ export function createOrderOutbox({
         lastResult = { state: OUTBOX_STATES.SYNCED, clientOrderId: record.clientOrderId, idempotencyResult: result.idempotencyResult };
       } else if (result?.kind === "rejected") {
         const errorCode = safeErrorCode(result.errorCode, "BUSINESS_ERROR");
-        const requiresReview = ["VISIT_CONTEXT_STALE", "DEVICE_NOT_ASSIGNED", "TABLE_INACTIVE", "HTTP_401", "HTTP_403", "AUTHENTICATION_FAILED", "AUTHORIZATION_FAILED"].includes(errorCode);
+        const requiresReview = ["VISIT_CONTEXT_STALE", "DEVICE_NOT_ASSIGNED", "TABLE_INACTIVE", "MENU_ITEM_CONFIGURATION_CHANGED", "HTTP_401", "HTTP_403", "AUTHENTICATION_FAILED", "AUTHORIZATION_FAILED"].includes(errorCode);
         const rejected = await store.update(record.clientOrderId, {
           state: requiresReview ? OUTBOX_STATES.REVIEW_REQUIRED : OUTBOX_STATES.REJECTED,
           lastErrorCode: errorCode,

@@ -33,7 +33,13 @@ export class KitchenApiError extends Error {
 
 export function kitchenAdditionRequestItem(item = {}) {
   if (typeof item.menuItemId === "string" && item.menuItemId.trim()) {
-    return { menuItemId: item.menuItemId.trim(), quantity: Number(item.quantity) };
+    return {
+      menuItemId: item.menuItemId.trim(),
+      quantity: Number(item.quantity),
+      ...(item.expectedUnitPriceYen !== undefined && item.expectedQuantityUnitLabel !== undefined
+        ? { expectedUnitPriceYen: Number(item.expectedUnitPriceYen), expectedQuantityUnitLabel: item.expectedQuantityUnitLabel }
+        : {}),
+    };
   }
   return { name: item.name, priceYen: Number(item.priceYen), quantity: Number(item.quantity) };
 }
@@ -291,7 +297,13 @@ export async function createKitchenOrder({ env = globalThis, tableId, sessionId,
     headers: { ...requestHeaders, "Content-Type": "application/json" },
     body: JSON.stringify({ tableId: Number(tableId), sessionId, clientOrderId, items }),
   });
-  if (!response.ok) throw await responseError(response, "追加注文を保存できませんでした。");
+  if (!response.ok) {
+    const error = await responseError(response, "追加注文を保存できませんでした。");
+    if (error.code === "MENU_ITEM_CONFIGURATION_CHANGED") {
+      throw new KitchenApiError("商品価格または販売単位が更新されています。数量と価格を確認してから、追加注文を入力し直してください。", { status: error.status, code: error.code });
+    }
+    throw error;
+  }
   const body = await response.json();
   if (!Array.isArray(body?.orders) || body.orders.length !== 1) throw new KitchenApiError("追加注文レスポンスが不正です。", { code: "INVALID_RESPONSE" });
   return body.orders[0];

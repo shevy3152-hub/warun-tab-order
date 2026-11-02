@@ -142,6 +142,28 @@ export function normalizeCatalogWriteRequest(request) {
   const sectionKey = request.sectionKey === undefined || request.sectionKey === null || request.sectionKey === ''
     ? null
     : normalizeText(request.sectionKey, 'sectionKey', 40, { empty: false });
+  const hasQuantitySettings = [
+    'quantitySelectionEnabled', 'minimumQuantity', 'initialQuantity', 'quantityStep', 'quantityUnitLabel',
+  ].some((key) => Object.hasOwn(request, key));
+  let quantitySettings = null;
+  if (hasQuantitySettings) {
+    const enabled = request.quantitySelectionEnabled ?? false;
+    if (typeof enabled !== 'boolean') throw invalidWrite('quantitySelectionEnabled must be boolean.');
+    const minimumQuantity = normalizeNonNegativeInteger(request.minimumQuantity ?? 1, 'minimumQuantity');
+    const initialQuantity = normalizeNonNegativeInteger(request.initialQuantity ?? minimumQuantity, 'initialQuantity');
+    const quantityStep = normalizeNonNegativeInteger(request.quantityStep ?? 1, 'quantityStep');
+    const quantityUnitLabel = normalizeText(request.quantityUnitLabel ?? '点', 'quantityUnitLabel', 8, { empty: false });
+    if ([minimumQuantity, initialQuantity, quantityStep].some((value) => value < 1 || value > 99)) {
+      throw invalidWrite('Quantity settings must be between 1 and 99.');
+    }
+    if (initialQuantity < minimumQuantity || (initialQuantity - minimumQuantity) % quantityStep !== 0) {
+      throw invalidWrite('initialQuantity must be at or above minimumQuantity and follow quantityStep.');
+    }
+    if (!enabled && (minimumQuantity !== 1 || initialQuantity !== 1 || quantityStep !== 1)) {
+      throw invalidWrite('Quantity settings must be 1 when quantity selection is disabled.');
+    }
+    quantitySettings = { enabled, minimumQuantity, initialQuantity, quantityStep, quantityUnitLabel };
+  }
 
   const rawDetail = request.detail ?? { enabled: false };
   if (rawDetail === null || typeof rawDetail !== 'object' || Array.isArray(rawDetail)) {
@@ -221,6 +243,7 @@ export function normalizeCatalogWriteRequest(request) {
     detail,
     variants,
     servingOptions,
+    quantitySettings,
   };
 }
 
@@ -356,6 +379,12 @@ function mapCustomerMenuItem(row) {
     orderingMode: row.ordering_mode ?? 'normal',
     sortOrder: row.sort_order,
     version: row.version,
+    quantitySelectionEnabled: row.quantity_selection_enabled === 1,
+    minimumQuantity: row.minimum_quantity,
+    initialQuantity: row.initial_quantity,
+    quantityStep: row.quantity_step,
+    quantityUnitLabel: row.quantity_unit_label,
+    priceAssertionRequired: row.price_assertion_required === 1,
   }, row.image_uri);
   optionalText(item, 'sectionKey', row.section_key);
   const detail = mapDetail(row, false, true);
@@ -399,6 +428,12 @@ function mapAdminMenuItem(row) {
     sortOrder: row.sort_order,
     version: row.version,
     updatedAtMs: row.updated_at_ms,
+    quantitySelectionEnabled: row.quantity_selection_enabled === 1,
+    minimumQuantity: row.minimum_quantity,
+    initialQuantity: row.initial_quantity,
+    quantityStep: row.quantity_step,
+    quantityUnitLabel: row.quantity_unit_label,
+    priceAssertionRequired: row.price_assertion_required === 1,
   }, row.image_uri);
   optionalText(item, 'sectionKey', row.section_key);
   item.detail = mapDetail(row, true, true) ?? { enabled: false };
@@ -484,7 +519,8 @@ export function createCatalogRepository({ database, now = Date.now } = {}) {
       updateCategoryVersion: database.prepare('UPDATE categories SET version = version + 1, updated_at_ms = ? WHERE category_id = ? AND version = ?'),
       deleteItemGrants: database.prepare('DELETE FROM session_menu_item_grants WHERE menu_item_id = ?'),
       findWriteMenuItem: database.prepare(`
-        SELECT menu_item_id, version, table_visibility_mode, archived_at_ms
+        SELECT menu_item_id, version, table_visibility_mode, archived_at_ms,
+               quantity_selection_enabled, minimum_quantity, initial_quantity, quantity_step, quantity_unit_label
         FROM menu_items
         WHERE menu_item_id = ?
       `),
@@ -528,14 +564,16 @@ export function createCatalogRepository({ database, now = Date.now } = {}) {
         INSERT INTO menu_items (
           menu_item_id, category_id, formal_name, kitchen_alias, description,
           price_yen, is_sold_out, is_active, sort_order, image_uri, ordering_mode, customer_visibility_mode, table_visibility_mode, version,
-          created_at_ms, updated_at_ms, section_key
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)
+          created_at_ms, updated_at_ms, section_key,
+          quantity_selection_enabled, minimum_quantity, initial_quantity, quantity_step, quantity_unit_label
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?)
       `),
       updateMenuItem: database.prepare(`
         UPDATE menu_items
         SET category_id = ?, formal_name = ?, kitchen_alias = ?, description = ?,
             price_yen = ?, is_sold_out = ?, is_active = ?, sort_order = ?,
-            image_uri = ?, ordering_mode = ?, customer_visibility_mode = ?, table_visibility_mode = ?, version = version + 1, updated_at_ms = ?, section_key = ?
+            image_uri = ?, ordering_mode = ?, customer_visibility_mode = ?, table_visibility_mode = ?, version = version + 1, updated_at_ms = ?, section_key = ?,
+            quantity_selection_enabled = ?, minimum_quantity = ?, initial_quantity = ?, quantity_step = ?, quantity_unit_label = ?
         WHERE menu_item_id = ? AND version = ?
       `),
       insertDetail: database.prepare(`
@@ -649,6 +687,12 @@ export function createCatalogRepository({ database, now = Date.now } = {}) {
           m.is_sold_out,
           m.ordering_mode,
           m.sort_order,
+          m.quantity_selection_enabled,
+          m.minimum_quantity,
+          m.initial_quantity,
+          m.quantity_step,
+          m.quantity_unit_label,
+          m.price_assertion_required,
           m.image_uri,
           m.version,
           m.section_key,
@@ -720,6 +764,12 @@ export function createCatalogRepository({ database, now = Date.now } = {}) {
           m.table_visibility_mode,
           m.is_active,
           m.sort_order,
+          m.quantity_selection_enabled,
+          m.minimum_quantity,
+          m.initial_quantity,
+          m.quantity_step,
+          m.quantity_unit_label,
+          m.price_assertion_required,
           m.image_uri,
           m.version,
           m.updated_at_ms
@@ -978,6 +1028,18 @@ export function createCatalogRepository({ database, now = Date.now } = {}) {
       if (!creating && current.archived_at_ms !== null) {
         throw repositoryError(CATALOG_ERROR_CODES.MENU_ITEM_NOT_FOUND, 'Archived catalog items cannot be edited through the regular menu update API.');
       }
+      const quantitySettings = normalized.quantitySettings ?? (creating
+        ? { enabled: false, minimumQuantity: 1, initialQuantity: 1, quantityStep: 1, quantityUnitLabel: '点' }
+        : {
+          enabled: current.quantity_selection_enabled === 1,
+          minimumQuantity: current.minimum_quantity,
+          initialQuantity: current.initial_quantity,
+          quantityStep: current.quantity_step,
+          quantityUnitLabel: current.quantity_unit_label,
+        });
+      if (quantitySettings.enabled && normalized.servingOptions.some((option) => option.isActive)) {
+        throw repositoryError(CATALOG_ERROR_CODES.INVALID_WRITE_REQUEST, '飲み方選択商品では数量選択を有効にできません。数量選択UIと重ならない設定にしてください。');
+      }
 
       const timestamp = now();
       if (!Number.isSafeInteger(timestamp) || timestamp < 0) {
@@ -1006,6 +1068,11 @@ export function createCatalogRepository({ database, now = Date.now } = {}) {
           timestamp,
           timestamp,
           normalized.sectionKey,
+          quantitySettings.enabled ? 1 : 0,
+          quantitySettings.minimumQuantity,
+          quantitySettings.initialQuantity,
+          quantitySettings.quantityStep,
+          quantitySettings.quantityUnitLabel,
         );
       } else {
         const update = statements.updateMenuItem.run(
@@ -1023,6 +1090,11 @@ export function createCatalogRepository({ database, now = Date.now } = {}) {
           normalized.tableVisibilityMode,
           timestamp,
           normalized.sectionKey,
+          quantitySettings.enabled ? 1 : 0,
+          quantitySettings.minimumQuantity,
+          quantitySettings.initialQuantity,
+          quantitySettings.quantityStep,
+          quantitySettings.quantityUnitLabel,
           normalized.menuItemId,
           normalized.expectedVersion,
         );

@@ -41,7 +41,7 @@ import { CUSTOMER_STAFF_CALL_COOLDOWN_MS, customerStaffCallCooldownKey, customer
 import { beginCheckoutRead, checkoutPostResponseDisposition, isCheckoutModalForCurrentVisit, isPassiveMissingCheckoutSession } from "./customer-checkout-state.js";
 import { createCustomerMenuState, customerMenuStateReducer } from "./customer-menu-state.js";
 import { createCustomerCheckoutReconnectHandler, isMatchingCustomerCheckoutReconnectVisit } from "./customer-checkout-reconnect.js";
-import { addCustomerCartSelection, customerCartRows, removeCustomerCartSelection } from "./customer-cart.js";
+import { addCustomerCartSelection, customerCartDecrementAction, customerCartRows, customerCartSelectionKey, decrementCustomerCartSelection, removeCustomerCartSelection } from "./customer-cart.js";
 import { taxExcludedYen } from "./pricing.js";
 import { pairingCodeQrSvg } from "./qr-code.js";
 import { compareMenuItems } from "./menu-ordering.js";
@@ -282,6 +282,7 @@ function mapAdminCatalogState(catalog) {
       id: item.menuItemId, categoryId: item.categoryId, name: item.formalName, kitchenAlias: item.kitchenAlias,
       description: item.description, price: item.priceYen, imageUri: item.imageUri, sectionKey: item.sectionKey,
       isSoldOut: item.isSoldOut, orderingMode: item.orderingMode ?? "normal", customerVisibilityMode: item.customerVisibilityMode ?? "all_tables", tableVisibilityMode: item.tableVisibilityMode ?? "all_tables", tableVisibilityTableIds: item.tableVisibilityTableIds ?? [], isActive: item.isActive, sortOrder: item.sortOrder, version: item.version,
+      quantitySelectionEnabled: item.quantitySelectionEnabled === true, minimumQuantity: item.minimumQuantity ?? 1, initialQuantity: item.initialQuantity ?? 1, quantityStep: item.quantityStep ?? 1, quantityUnitLabel: item.quantityUnitLabel ?? "点", priceAssertionRequired: item.priceAssertionRequired === true,
       detail: item.detail, variants: item.variants ?? [], servingOptions: item.servingOptions ?? [], imageLayouts: item.imageLayouts,
     })),
   };
@@ -894,11 +895,17 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
       orderingMode: item.orderingMode ?? "normal",
       sortOrder: item.sortOrder,
       sectionKey: item.sectionKey,
+      quantitySelectionEnabled: item.quantitySelectionEnabled === true,
+      minimumQuantity: item.minimumQuantity ?? 1,
+      initialQuantity: item.initialQuantity ?? 1,
+      quantityStep: item.quantityStep ?? 1,
+      quantityUnitLabel: item.quantityUnitLabel ?? "点",
+      priceAssertionRequired: item.priceAssertionRequired === true,
       detail: item.detail,
       variants: item.variants ?? [],
       servingOptions: item.servingOptions ?? [],
     }))
-    : state.menuItems.map((item) => ({ ...item, variants: item.variants ?? [], servingOptions: item.servingOptions ?? [] }));
+    : state.menuItems.map((item) => ({ ...item, quantitySelectionEnabled: item.quantitySelectionEnabled === true, minimumQuantity: item.minimumQuantity ?? 1, initialQuantity: item.initialQuantity ?? 1, quantityStep: item.quantityStep ?? 1, quantityUnitLabel: item.quantityUnitLabel ?? "点", priceAssertionRequired: item.priceAssertionRequired === true, variants: item.variants ?? [], servingOptions: item.servingOptions ?? [] }));
   const [majorCategoryId, setMajorCategoryId] = useState("drink");
   const [majorNavOpen, setMajorNavOpen] = useState(true);
   const [categoryId, setCategoryId] = useState("recommended");
@@ -922,8 +929,8 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
   const [sakeSelection, setSakeSelection] = useState(null);
   const [sakeSelectionError, setSakeSelectionError] = useState("");
   const [shochuSelection, setShochuSelection] = useState(null);
-  const [kushikatsuSelection, setKushikatsuSelection] = useState(null);
-  const [kushikatsuSelectionError, setKushikatsuSelectionError] = useState("");
+  const [quantitySelection, setQuantitySelection] = useState(null);
+  const [quantitySelectionError, setQuantitySelectionError] = useState("");
   const [notice, setNotice] = useState(null);
   const [isMenuHeaderHidden, setIsMenuHeaderHidden] = useState(false);
   // Object identity distinguishes A -> B -> A from the first request for A.
@@ -1084,7 +1091,7 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
   const isSake = currentCategory?.id === "sake";
   const cartRows = customerCartRows(cart, menuItems);
   const cartCount = cartRows.reduce((sum, row) => sum + row.quantity, 0);
-  const hasUnavailableCartRows = cartRows.some((row) => row.unavailable);
+  const hasUnavailableCartRows = cartRows.some((row) => row.unavailable || row.quantityConfigurationStale);
   const customerHistory = (apiMode ? apiOrders : state.orders)
     .filter((order) => apiMode || order.tableId === device.tableId)
     .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
@@ -1405,14 +1412,20 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
     replaceCart(addCustomerCartSelection(cartRef.current, item, selection, normalizedQuantity));
   };
   const addSelection = (item, selection = {}, quantity = 1) => {
-    if (!item || item.isSoldOut || submitLock.current) return;
+    if (!item || item.isSoldOut || submitLock.current) return false;
     const normalizedQuantity = Number.isInteger(quantity) && quantity > 0 ? quantity : 0;
-    if (!normalizedQuantity) return;
+    if (!normalizedQuantity) return false;
+    const key = customerCartSelectionKey(item, selection);
+    if ((cartRef.current[key]?.quantity ?? 0) + normalizedQuantity > 99) {
+      setNotice({ kind: "error", message: `1商品の数量は99${item.quantityUnitLabel ?? "点"}までです。カートの数量をご確認ください。` });
+      return false;
+    }
     if (!apiMode || Object.keys(cartRef.current).length > 0) {
       addSelectionNow(item, selection, normalizedQuantity);
-      return;
+      return true;
     }
     void captureCartVisitContext().then(() => addSelectionNow(item, selection, normalizedQuantity));
+    return true;
   };
   const discardStaleCart = () => {
     clearCart();
@@ -1420,11 +1433,9 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
   };
   const decrementCartRow = (key) => {
     const current = cartRef.current;
-    const row = current[key];
-    if (!row) return;
-    const next = { ...current };
-    if (row.quantity <= 1) delete next[key];
-    else next[key] = { ...row, quantity: row.quantity - 1 };
+    const row = cartRows.find((entry) => entry.key === key);
+    if (!current[key] || !row) return;
+    const next = decrementCustomerCartSelection(current, key, row.item);
     replaceCart(next);
     if (Object.keys(next).length === 0) clearCart();
   };
@@ -1449,7 +1460,8 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
       temperatureSnapshot: row.temperature,
       servingOptionId: row.servingOption?.servingOptionId,
       servingOptionNameSnapshot: row.servingOption?.name,
-      unitPriceSnapshot: row.variant?.priceYen ?? row.item.price,
+      unitPriceSnapshot: row.unitPriceYenSnapshot ?? row.variant?.priceYen ?? row.item.price,
+      quantityUnitLabelSnapshot: row.quantityUnitLabelSnapshot === "点" ? null : row.quantityUnitLabelSnapshot,
       quantity: row.quantity,
       isServed: false,
       servedAt: null,
@@ -1479,6 +1491,10 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
           ...(row.variant ? { variantId: row.variant.variantId } : {}),
           ...(row.temperature ? { temperature: row.temperature } : {}),
           ...(row.servingOption ? { servingOptionId: row.servingOption.servingOptionId } : {}),
+          ...(row.quantitySelectionEnabledSnapshot || row.item.priceAssertionRequired ? {
+            expectedUnitPriceYen: row.unitPriceYenSnapshot,
+            expectedQuantityUnitLabel: row.quantityUnitLabelSnapshot,
+          } : {}),
         })) });
         const order = {
           id: outboxRecord.clientOrderId,
@@ -1487,7 +1503,7 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
           createdAt: now,
           status: "queued_offline",
           transportState: outboxRecord.state,
-          totalAmount: cartRows.reduce((sum, row) => sum + (row.variant?.priceYen ?? row.item.price) * row.quantity, 0),
+          totalAmount: cartRows.reduce((sum, row) => sum + (row.unitPriceYenSnapshot ?? row.variant?.priceYen ?? row.item.price) * row.quantity, 0),
           syncedAt: null,
           completedAt: null,
           items,
@@ -1622,6 +1638,7 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
     setShochuSelection(null);
     setSakeSelection(null);
     setSakeSelectionError("");
+    setQuantitySelection(null);
   };
   const selectSubcategory = (nextCategoryId) => {
     setCategoryId(nextCategoryId);
@@ -1630,12 +1647,14 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
     setShochuSelection(null);
     setSakeSelection(null);
     setSakeSelectionError("");
+    setQuantitySelection(null);
   };
   const restoreDrinkCategoryNavigation = () => {
     setDrinkCategoryNavOpen(true);
     setShochuSelection(null);
     setSakeSelection(null);
     setSakeSelectionError("");
+    setQuantitySelection(null);
   };
   const collapseMajorNavOnMenuTap = () => {
     if (majorNavOpen) setMajorNavOpen(false);
@@ -1654,11 +1673,20 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
   };
   const selectedSakeItem = sakeSelection ? menuItems.find((item) => item.id === sakeSelection.itemId) : null;
   const selectedSakeVariant = selectedSakeItem?.variants.find((variant) => variant.variantId === sakeSelection?.variantId) ?? null;
+  const quantitySelectionItem = quantitySelection ? menuItems.find((item) => item.id === quantitySelection.itemId) : null;
+  const quantitySelectionVariant = quantitySelectionItem?.variants.find((variant) => variant.variantId === quantitySelection?.variantId) ?? null;
+  const quantitySelectionUnitLabel = quantitySelectionItem?.quantityUnitLabel ?? "点";
+  const quantitySelectionMinimumAdded = quantitySelection
+    ? (quantitySelection.baseQuantity > 0 ? (quantitySelectionItem?.quantityStep ?? 1) : (quantitySelectionItem?.minimumQuantity ?? 1))
+    : 1;
+  const quantitySelectionStep = quantitySelectionItem?.quantityStep ?? 1;
+  const quantitySelectionCanConfirm = Boolean(quantitySelection && quantitySelectionItem
+    && quantitySelection.baseQuantity + quantitySelection.quantity <= 99
+    && quantitySelection.baseQuantity + quantitySelection.quantity >= (quantitySelectionItem.minimumQuantity ?? 1)
+    && (quantitySelection.baseQuantity + quantitySelection.quantity - (quantitySelectionItem.minimumQuantity ?? 1)) % quantitySelectionStep === 0);
   const shochuSelectionItem = shochuSelection ? menuItems.find((item) => item.id === shochuSelection.itemId) : null;
   const shochuSelectionOptions = orderedShochuServingOptions(shochuSelectionItem);
   const shochuSelectionTotal = Object.values(shochuSelection?.quantities ?? {}).reduce((sum, quantity) => sum + quantity, 0);
-  const kushikatsuSelectionItem = kushikatsuSelection ? menuItems.find((item) => item.id === kushikatsuSelection.itemId) : null;
-  const kushikatsuSelectionVariant = kushikatsuSelectionItem?.variants.find((variant) => variant.variantId === kushikatsuSelection?.variantId) ?? null;
   const openSakeSelection = (item) => {
     setSakeSelection({ itemId: item.id, variantId: null, temperature: null });
     setSakeSelectionError("");
@@ -1683,27 +1711,61 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
       quantities: Object.fromEntries(options.map((option) => [option.servingOptionId, 0])),
     });
   };
-  const openKushikatsuSelection = (item) => {
-    const baseItem = item.isKushikatsuVirtual ? menuItems.find((candidate) => candidate.id === item.menuItemId) : item;
-    const variant = baseItem?.variants.find((candidate) => candidate.variantId === item.virtualVariantId && candidate.isActive !== false)
-      ?? baseItem?.variants.find((candidate) => candidate.isActive !== false)
-      ?? baseItem?.variants[0];
-    if (!variant) return;
-    setKushikatsuSelection({ itemId: baseItem.id, variantId: variant.variantId, quantity: 2 });
-    setKushikatsuSelectionError("");
-  };
-  const adjustKushikatsuQuantity = (delta) => {
-    setKushikatsuSelection((current) => current ? ({ ...current, quantity: Math.max(2, current.quantity + delta) }) : current);
-  };
-  const commitKushikatsuSelection = () => {
-    if (!kushikatsuSelection || !kushikatsuSelectionItem || !kushikatsuSelectionVariant) return;
-    if (kushikatsuSelection.quantity < 2) {
-      setKushikatsuSelectionError("串カツは各種類2本からご注文いただけます");
+  const openQuantitySelection = (sourceItem, selection = {}) => {
+    const item = sourceItem?.isKushikatsuVirtual
+      ? menuItems.find((candidate) => candidate.id === sourceItem.menuItemId)
+      : sourceItem;
+    if (!item) return;
+    const variantId = selection.variant?.variantId ?? sourceItem.virtualVariantId ?? null;
+    const variant = variantId ? item.variants?.find((candidate) => candidate.variantId === variantId && candidate.isActive !== false) : null;
+    const resolvedSelection = { ...(variant ? { variant } : {}), ...(selection.temperature ? { temperature: selection.temperature } : {}) };
+    if (!item.quantitySelectionEnabled) {
+      addSelection(item, resolvedSelection);
       return;
     }
-    addSelection(kushikatsuSelectionItem, { variant: kushikatsuSelectionVariant }, kushikatsuSelection.quantity);
-    setKushikatsuSelection(null);
-    setKushikatsuSelectionError("");
+    const key = customerCartSelectionKey(item, resolvedSelection);
+    const baseQuantity = cartRef.current[key]?.quantity ?? 0;
+    const minimum = item.minimumQuantity ?? 1;
+    const step = item.quantityStep ?? 1;
+    let draftQuantity = baseQuantity > 0 ? step : (item.initialQuantity ?? minimum);
+    while ((baseQuantity + draftQuantity - minimum) % step !== 0) draftQuantity += 1;
+    if (baseQuantity + draftQuantity > 99) {
+      setNotice({ kind: "error", message: `この商品の数量は1行99${item.quantityUnitLabel ?? "点"}までです。カートをご確認ください。` });
+      return;
+    }
+    setQuantitySelection({ itemId: item.id, variantId: variant?.variantId ?? null, temperature: selection.temperature ?? null, quantity: draftQuantity, baseQuantity });
+    setQuantitySelectionError("");
+  };
+  const adjustQuantitySelection = (delta) => {
+    setQuantitySelection((current) => {
+      if (!current) return current;
+      const item = menuItems.find((candidate) => candidate.id === current.itemId);
+      if (!item) return current;
+      const step = item.quantityStep ?? 1;
+      const minimumAdded = current.baseQuantity > 0 ? step : (item.minimumQuantity ?? 1);
+      const nextQuantity = current.quantity + delta * step;
+      if (nextQuantity < minimumAdded || current.baseQuantity + nextQuantity > 99) return current;
+      return { ...current, quantity: nextQuantity };
+    });
+  };
+  const commitQuantitySelection = () => {
+    if (!quantitySelection || !quantitySelectionItem) return;
+    const totalQuantity = quantitySelection.baseQuantity + quantitySelection.quantity;
+    const minimum = quantitySelectionItem.minimumQuantity ?? 1;
+    const step = quantitySelectionItem.quantityStep ?? 1;
+    if (totalQuantity < minimum || totalQuantity > 99 || (totalQuantity - minimum) % step !== 0) {
+      setQuantitySelectionError("数量を確認してください。1行99まで選択できます。");
+      return;
+    }
+    const variant = quantitySelectionVariant;
+    const added = addSelection(quantitySelectionItem, {
+      ...(variant ? { variant } : {}),
+      ...(quantitySelection.temperature ? { temperature: quantitySelection.temperature } : {}),
+    }, quantitySelection.quantity);
+    if (added) {
+      setQuantitySelection(null);
+      setQuantitySelectionError("");
+    }
   };
   const chooseShochuFromDetail = (item) => {
     setDetailItem(null);
@@ -1734,7 +1796,11 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
       setSakeSelectionError("提供形態と温度を選択してください");
       return;
     }
-    addSelection(selectedSakeItem, { variant: selectedSakeVariant, temperature: sakeSelection.temperature });
+    if (selectedSakeItem.quantitySelectionEnabled) {
+      openQuantitySelection(selectedSakeItem, { variant: selectedSakeVariant, temperature: sakeSelection.temperature });
+    } else {
+      addSelection(selectedSakeItem, { variant: selectedSakeVariant, temperature: sakeSelection.temperature });
+    }
     setSakeSelection(null);
     setSakeSelectionError("");
   };
@@ -1888,7 +1954,6 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
                 const isFirstShochuImo = isShochu && item.sectionKey === "芋" && currentItems.findIndex((entry) => entry.sectionKey === "芋") === index;
                 const isFirstShochuOther = isShochu && shochuGroup(item) === "麦・その他" && currentItems.findIndex((entry) => shochuGroup(entry) === "麦・その他") === index;
                 const showListImage = listImageVisible(item) && Boolean(item.imageUri);
-                const isKushikatsu = item.isKushikatsuVirtual === true;
                 const canOpenDetail = Boolean(item.detail?.imageUri || item.imageUri);
                 const listComment = isDrink ? item.description?.trim() : "";
                 const foodDescription = (isFood || currentMajorCategory.id === "winter") ? item.description?.trim() : "";
@@ -1903,9 +1968,9 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
                   <article className={`menu-row ${isFood ? "food-menu-row" : ""} ${isShochu ? "shochu-menu-row" : ""} ${showListImage ? "" : "menu-row--no-image"} ${item.isSoldOut ? "is-sold-out" : ""}`} key={item.id} ref={isFirstShochuImo ? imoRef : null}>
                     <div className="menu-row__index">{String(index + 1).padStart(2, "0")}</div>
                     {showListImage ? <button className="product-image-button" onClick={() => canOpenDetail ? setDetailItem(item) : undefined} aria-label={`${item.name}の詳細を見る`} disabled={!canOpenDetail}>{item.imageUri ? <img src={isShochu ? shochuThumbUri(item.imageUri) : item.imageUri} alt="" style={imageLayoutStyle(item, "thumbnail")} /> : <span>画像なし</span>}</button> : null}
-                    <button className="menu-row__copy menu-row__copy--button" onClick={() => canOpenDetail ? setDetailItem(item) : undefined} aria-label={`${item.name}の詳細を見る`} disabled={!canOpenDetail}>{item.detail?.reading ? <small className="menu-row__reading">{item.detail.reading}</small> : null}<h2>{item.name}</h2>{foodDescription ? <small className="menu-row__food-description">{foodDescription}</small> : null}{canOpenDetail || listComment ? <small className="menu-row__detail-hint">{canOpenDetail ? <span className="menu-row__detail-hint__action">タップで明細</span> : null}{canOpenDetail && listComment ? <span className="menu-row__detail-hint__separator" aria-hidden="true">｜</span> : null}{listComment ? <span className="menu-row__comment">{listComment}</span> : null}</small> : null}</button>
-                    {isKushikatsu ? <span className="menu-price kushikatsu-price"><b><span className="kushikatsu-serving-label">1本 </span>{yen(taxExcludedYen(item.price))}</b><small>税込 {yen(item.price)}</small><small className="kushikatsu-condition">各種2本から</small></span> : <PriceDisplay priceYen={item.price} />}
-                    {item.orderingMode === "reservation_only" ? <div className="reservation-only-label"><b>予約限定</b></div> : item.isSoldOut ? <div className="sold-out-label"><b>{CUSTOMER_WINTER_CATEGORY_IDS.has(item.categoryId) ? "冬季限定・現在注文できません" : "売り切れ"}</b><small>{CUSTOMER_WINTER_CATEGORY_IDS.has(item.categoryId) ? "SEASONAL PAUSED" : "SOLD OUT"}</small></div> : isKushikatsu ? <button className="add-button" onClick={() => openKushikatsuSelection(item)} aria-label={`${item.name}の本数を選ぶ`}><Plus size={36} weight="bold" /></button> : item.servingOptions.length ? <button className="shochu-serving-button" onClick={() => openShochuSelection(item)} aria-label={`${item.name}の飲み方選択`}>飲み方選択</button> : <button className="add-button" onClick={() => addSelection(item)} aria-label={`${item.name}を追加`}><Plus size={36} weight="bold" /></button>}
+                    <button className="menu-row__copy menu-row__copy--button" onClick={() => canOpenDetail ? setDetailItem(item) : undefined} aria-label={`${item.name}の詳細を見る`} disabled={!canOpenDetail}>{item.detail?.reading ? <small className="menu-row__reading">{item.detail.reading}</small> : null}<h2>{item.name}</h2>{item.quantitySelectionEnabled && item.minimumQuantity > 1 ? <small className="menu-row__food-description">{item.minimumQuantity}{item.quantityUnitLabel}からご注文</small> : null}{foodDescription ? <small className="menu-row__food-description">{foodDescription}</small> : null}{canOpenDetail || listComment ? <small className="menu-row__detail-hint">{canOpenDetail ? <span className="menu-row__detail-hint__action">タップで明細</span> : null}{canOpenDetail && listComment ? <span className="menu-row__detail-hint__separator" aria-hidden="true">｜</span> : null}{listComment ? <span className="menu-row__comment">{listComment}</span> : null}</small> : null}</button>
+                    {item.quantitySelectionEnabled ? <span className="menu-price"><b><span>{item.quantityUnitLabel}単価 </span>{yen(taxExcludedYen(item.price))}</b><small>税込 {yen(item.price)}</small></span> : <PriceDisplay priceYen={item.price} />}
+                    {item.orderingMode === "reservation_only" ? <div className="reservation-only-label"><b>予約限定</b></div> : item.isSoldOut ? <div className="sold-out-label"><b>{CUSTOMER_WINTER_CATEGORY_IDS.has(item.categoryId) ? "冬季限定・現在注文できません" : "売り切れ"}</b><small>{CUSTOMER_WINTER_CATEGORY_IDS.has(item.categoryId) ? "SEASONAL PAUSED" : "SOLD OUT"}</small></div> : item.servingOptions.length ? <button className="shochu-serving-button" onClick={() => openShochuSelection(item)} aria-label={`${item.name}の飲み方選択`}>飲み方選択</button> : item.quantitySelectionEnabled ? <button className="add-button" onClick={() => openQuantitySelection(item)} aria-label={`${item.name}の数量を選ぶ`}><Plus size={36} weight="bold" /></button> : <button className="add-button" onClick={() => addSelection(item)} aria-label={`${item.name}を追加`}><Plus size={36} weight="bold" /></button>}
                   </article>
                 );
                 return (
@@ -1919,9 +1984,9 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
           <aside className="cart-panel">
             <header><Receipt size={36} weight="bold" /><div><h2>ご注文内容</h2><span>ORDER SUMMARY</span></div></header>
             <div className="cart-list">
-              {cartRows.length ? cartRows.map((row, index) => <div className={`cart-row${row.unavailable ? " cart-row--unavailable" : ""}`} key={row.key}><span className="cart-row__index">{index + 1}</span><b>{selectionDisplayName(row.item, row)}</b><span>{row.quantity}点</span><button onClick={() => row.unavailable ? removeCartRow(row.key) : decrementCartRow(row.key)} aria-label={`${selectionDisplayName(row.item, row)}${row.unavailable ? "をカートから削除" : "を1点取り消す"}`}><X size={18} /></button></div>) : <div className="cart-empty"><Receipt size={54} weight="thin" /><p>商品を追加すると<br />ここに表示されます。</p></div>}
+              {cartRows.length ? cartRows.map((row, index) => { const decrementAction = customerCartDecrementAction(row); const removeRow = row.unavailable || row.quantityConfigurationStale || decrementAction.kind === "remove"; return <div className={`cart-row${row.unavailable || row.quantityConfigurationStale ? " cart-row--unavailable" : ""}`} key={row.key}><span className="cart-row__index">{index + 1}</span><b>{selectionDisplayName(row.item, row)}</b><span>{row.quantity}{row.quantityUnitLabelSnapshot ?? "点"}</span><button onClick={() => removeRow ? removeCartRow(row.key) : decrementCartRow(row.key)} aria-label={`${selectionDisplayName(row.item, row)}${removeRow ? "をカートから削除" : `を${decrementAction.quantityStep}${decrementAction.unitLabel}取り消す`}`}><X size={18} /></button></div>; }) : <div className="cart-empty"><Receipt size={54} weight="thin" /><p>商品を追加すると<br />ここに表示されます。</p></div>}
             </div>
-            {hasUnavailableCartRows ? <p className="cart-context-warning" role="alert">現在注文できない商品があります。内容をご確認ください</p> : null}
+            {cartRows.some((row) => row.quantityConfigurationStale) ? <p className="cart-context-warning" role="alert">商品価格または販売単位が変わっています。該当商品をカートから削除し、メニューから追加し直してください。</p> : hasUnavailableCartRows ? <p className="cart-context-warning" role="alert">現在注文できない商品があります。内容をご確認ください</p> : null}
             {apiMode && cartRows.length && cartContextLoading ? <p className="cart-context-status" role="status">来店情報を確認しています…</p> : null}
             {apiMode && Object.keys(cart).length > 0 && cartContextStale ? <div className="cart-context-warning" role="alert"><p>{cartAuthorizationRequired ? "端末の接続を確認できません。カート内容は保持しています。注文は送信されません。スタッフへ確認してください。" : "来店または端末の割当が変わりました。注文は送信されません。カート内容を確認して破棄してください。"}</p><button type="button" onClick={discardStaleCart} disabled={submitting}>このカートを破棄</button></div> : null}
             <button className="confirm-button" disabled={!cartCount || hasUnavailableCartRows || cartContextLoading || cartContextStale} onClick={() => setModal("confirm")}>注文を確定する <ArrowRight size={28} weight="bold" /></button>
@@ -1930,7 +1995,7 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
         <footer className="customer-footer"><b>INFORMATION</b>{CUSTOMER_FOOTER_INFORMATION ? <span>{CUSTOMER_FOOTER_INFORMATION}</span> : null}<strong>全席喫煙可能</strong></footer>
       </section>
 
-      {modal === "confirm" ? <Modal title="注文内容の確認" onClose={() => { if (!submitting) setModal(null); }}><div className="confirm-list">{cartRows.map((row) => <div key={row.key}><b>{selectionDisplayName(row.item, row)}</b><span>{row.quantity}点</span></div>)}</div>{hasUnavailableCartRows ? <p className="cart-context-warning" role="alert">現在注文できない商品があります。内容をご確認ください</p> : <p className="price-hidden-note">内容をご確認のうえ、注文を送信してください。</p>}<div className="modal-actions"><button className="button button--quiet" onClick={() => setModal(null)} disabled={submitting}>戻る</button><button className="button button--primary button--large" onClick={submitOrder} disabled={submitting || hasUnavailableCartRows || cartContextStale}>{submitting ? "送信中" : online ? "注文を送信" : "送信待ちに保存"}</button></div></Modal> : null}
+      {modal === "confirm" ? <Modal title="注文内容の確認" onClose={() => { if (!submitting) setModal(null); }}><div className="confirm-list">{cartRows.map((row) => <div key={row.key}><b>{selectionDisplayName(row.item, row)}</b><span>{row.quantity}{row.quantityUnitLabelSnapshot ?? "点"}</span></div>)}</div>{hasUnavailableCartRows ? <p className="cart-context-warning" role="alert">現在注文できない商品があります。内容をご確認ください</p> : <p className="price-hidden-note">内容をご確認のうえ、注文を送信してください。</p>}<div className="modal-actions"><button className="button button--quiet" onClick={() => setModal(null)} disabled={submitting}>戻る</button><button className="button button--primary button--large" onClick={submitOrder} disabled={submitting || hasUnavailableCartRows || cartContextStale}>{submitting ? "送信中" : online ? "注文を送信" : "送信待ちに保存"}</button></div></Modal> : null}
       {shochuSelection && shochuSelectionItem ? <Modal title={shochuSelectionItem.name} onClose={() => setShochuSelection(null)} className="modal--shochu" footer={<div className="shochu-selection-footer"><div className="modal-actions"><button type="button" className="button button--quiet" onClick={() => setShochuSelection(null)}>キャンセル</button><button type="button" className="button button--primary button--large" disabled={!shochuSelectionTotal} onClick={commitShochuSelection}>{shochuSelectionTotal}点をカートに追加</button></div></div>}>
         <div className="shochu-selection-modal">
           <p className="modal-lead">飲み方と数量を選択してください。</p>
@@ -1949,12 +2014,14 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
           </div>
         </div>
       </Modal> : null}
-      {kushikatsuSelection && kushikatsuSelectionItem ? <Modal title="串カツ" titleExtra={<span className="kushikatsu-modal-instruction">数量を選択してください</span>} onClose={() => setKushikatsuSelection(null)} className="modal--shochu modal--kushikatsu">
-        <div className="shochu-selection-modal kushikatsu-selection-modal">
-          <div className="kushikatsu-selected-flavor"><strong>{kushikatsuSelectionVariant?.name}</strong><div className="kushikatsu-unit-price"><span>1本 税込 {yen(kushikatsuSelectionVariant?.priceYen)}</span><span>各種2本から</span></div></div>
-          <div className="shochu-selection-row kushikatsu-quantity-row"><b>本数</b><div className="shochu-quantity-control" aria-label="串カツの本数"><button type="button" onClick={() => adjustKushikatsuQuantity(-1)} disabled={kushikatsuSelection.quantity <= 2} aria-label="串カツを1本減らす"><Minus size={22} weight="bold" /></button><b aria-live="polite">{kushikatsuSelection.quantity}</b><button type="button" onClick={() => adjustKushikatsuQuantity(1)} aria-label="串カツを1本増やす"><Plus size={22} weight="bold" /></button></div></div>
-          {kushikatsuSelectionError ? <p className="sake-selection-error" role="alert">{kushikatsuSelectionError}</p> : null}
-          <div className="shochu-selection-footer"><div className="modal-actions"><button type="button" className="button button--quiet" onClick={() => setKushikatsuSelection(null)}>キャンセル</button><button type="button" className="button button--primary button--large" onClick={commitKushikatsuSelection}>{kushikatsuSelection.quantity}本をカートに追加</button></div></div>
+      {quantitySelection && quantitySelectionItem ? <Modal title={quantitySelectionItem.name} titleExtra={<span className="kushikatsu-modal-instruction">数量を選択してください</span>} onClose={() => { setQuantitySelection(null); setQuantitySelectionError(""); }} className="modal--shochu modal--quantity-selection">
+        <div className="shochu-selection-modal">
+          {quantitySelectionVariant ? <div className="kushikatsu-selected-flavor"><strong>{quantitySelectionVariant.name}</strong><div className="kushikatsu-unit-price"><span>1{quantitySelectionUnitLabel}あたり</span><PriceDisplay priceYen={quantitySelectionVariant.priceYen} /></div></div> : <div className="kushikatsu-selected-flavor"><strong>1{quantitySelectionUnitLabel}あたり</strong><PriceDisplay priceYen={quantitySelectionItem.price} /></div>}
+          {quantitySelectionItem.minimumQuantity > 1 ? <p className="modal-lead">{quantitySelectionItem.minimumQuantity}{quantitySelectionUnitLabel}からご注文いただけます。</p> : null}
+          <div className="shochu-selection-row kushikatsu-quantity-row"><b>{quantitySelectionUnitLabel === "本" ? "本数" : "数量"}</b><div className="shochu-quantity-control" aria-label={`${quantitySelectionItem.name}の数量`}><button type="button" onClick={() => adjustQuantitySelection(-1)} disabled={quantitySelection.quantity <= quantitySelectionMinimumAdded} aria-label={`${quantitySelectionStep}${quantitySelectionUnitLabel}減らす`}><Minus size={22} weight="bold" /></button><b aria-live="polite">{quantitySelection.quantity}{quantitySelectionUnitLabel}</b><button type="button" onClick={() => adjustQuantitySelection(1)} disabled={quantitySelection.baseQuantity + quantitySelection.quantity + quantitySelectionStep > 99} aria-label={`${quantitySelectionStep}${quantitySelectionUnitLabel}増やす`}><Plus size={22} weight="bold" /></button></div></div>
+          <p className="price-hidden-note">確定すると、今回選んだ数量だけカートに追加されます。1行の上限は99{quantitySelectionUnitLabel}です。</p>
+          {quantitySelectionError ? <p className="sake-selection-error" role="alert">{quantitySelectionError}</p> : null}
+          <div className="shochu-selection-footer"><div className="modal-actions"><button type="button" className="button button--quiet" onClick={() => { setQuantitySelection(null); setQuantitySelectionError(""); }}>キャンセル</button><button type="button" className="button button--primary button--large" onClick={commitQuantitySelection} disabled={!quantitySelectionCanConfirm}>{quantitySelection.quantity}{quantitySelectionUnitLabel}をカートに追加</button></div></div>
         </div>
       </Modal> : null}
       {sakeSelection && selectedSakeItem ? <Modal title="提供方法・温度を選ぶ" onClose={() => setSakeSelection(null)} wide className="modal--sake" footer={<div className="modal-actions"><button className="button button--quiet" onClick={() => { setSakeSelection(null); setSakeSelectionError(""); }}>キャンセル</button>{selectedSakeVariant && sakeSelection.temperature && sakeTemperatureOptions(selectedSakeVariant).includes(sakeSelection.temperature) ? <button className="button button--primary button--large" onClick={addSakeSelection}>これにする</button> : null}</div>}>
@@ -1976,7 +2043,7 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
       </Modal> : null}
       {modal === "staff" ? <Modal title="スタッフを呼びますか？" onClose={() => { if (!staffCallSubmitting) setModal(null); }}><p className="modal-lead">テーブル {device.tableId} からスタッフへお知らせします。</p>{staffCallCooldownRemainingSeconds > 0 ? <p role="status">次の呼び出しまであと {staffCallCooldownRemainingSeconds} 秒です。</p> : null}<div className="modal-actions"><button className="button button--quiet" disabled={staffCallSubmitting} onClick={() => setModal(null)}>やめる</button><button className="button button--primary button--large" disabled={staffCallSubmitting || staffCallCooldownRemainingSeconds > 0} onClick={callStaff}><Bell size={22} weight="bold" /> {staffCallSubmitting ? "送信中" : staffCallCooldownRemainingSeconds > 0 ? `あと${staffCallCooldownRemainingSeconds}秒` : "呼び出す"}</button></div></Modal> : null}
       {modal === "feature" ? <Modal title="確認" onClose={() => setModal(null)}><p className="modal-lead">この機能は次の実装段階で接続します。</p><div className="modal-actions"><button className="button button--primary" onClick={() => setModal(null)}>閉じる</button></div></Modal> : null}
-      {modal === "history" ? <Modal title="これまでのご注文" onClose={() => setModal(null)} wide><div className="customer-history">{apiMode && apiHistoryState.loading ? <div className="empty-state"><ClipboardText size={42} /><p>注文履歴を読み込んでいます。</p></div> : apiMode && apiHistoryState.error ? <div className="empty-state"><ClipboardText size={42} /><p>注文履歴を取得できません。</p></div> : customerHistory.length ? customerHistory.map((order) => <article key={order.id}><header><b>{formatTime(order.createdAt)} のご注文</b><span className={`status-chip status-${order.status}`}>{customerTransportLabel(order)}</span></header>{order.items.map((item) => <div key={item.id}><span>{selectionDisplayName({ name: item.nameSnapshot }, item)}</span><b>{item.quantity}点</b></div>)}</article>) : <div className="empty-state"><ClipboardText size={42} /><p>注文履歴はまだありません。</p></div>}</div></Modal> : null}
+      {modal === "history" ? <Modal title="これまでのご注文" onClose={() => setModal(null)} wide><div className="customer-history">{apiMode && apiHistoryState.loading ? <div className="empty-state"><ClipboardText size={42} /><p>注文履歴を読み込んでいます。</p></div> : apiMode && apiHistoryState.error ? <div className="empty-state"><ClipboardText size={42} /><p>注文履歴を取得できません。</p></div> : customerHistory.length ? customerHistory.map((order) => <article key={order.id}><header><b>{formatTime(order.createdAt)} のご注文</b><span className={`status-chip status-${order.status}`}>{customerTransportLabel(order)}</span></header>{order.items.map((item) => <div key={item.id}><span>{selectionDisplayName({ name: item.nameSnapshot }, item)}</span><b>{item.quantity}{item.quantityUnitLabelSnapshot ?? "点"}</b></div>)}</article>) : <div className="empty-state"><ClipboardText size={42} /><p>注文履歴はまだありません。</p></div>}</div></Modal> : null}
       {detailItem ? <Modal title={detailItem.name} titleExtra={detailItem.detail?.reading ? <span className="modal__title-reading">{detailItem.detail.reading}</span> : null} onClose={() => setDetailItem(null)} wide className="modal--product-detail" footer={<div className="modal-actions product-detail__actions"><button className="button button--quiet" onClick={() => setDetailItem(null)}>一覧へ戻る</button>{detailItem.categoryId === "shochu" && detailItem.servingOptions?.length ? <button className="button button--primary button--large" onClick={() => chooseShochuFromDetail(detailItem)}>これにする</button> : detailItem.categoryId === "sake" && detailItem.variants?.length ? <button className="button button--primary button--large" onClick={() => chooseSakeFromDetail(detailItem)}>これにする</button> : null}</div>}><div className="product-detail">{detailItem.detail?.imageUri || detailItem.imageUri ? <div className="product-detail__image"><img src={detailItem.detail?.imageUri || detailItem.imageUri} alt={detailItem.name} style={imageLayoutStyle(detailItem, "detail")} /></div> : null}<div>{detailItem.detail?.itemType ? <span className="category-tag">{detailItem.detail.itemType}</span> : null}<p className="product-detail__description">{detailItem.detail?.description || detailItem.description}</p><dl>{[["産地", "origin"], ["蔵元", "producer"], ["味の特徴", "taste"], ["香り", "aroma"], ["甘辛", "sweetness"], ["キレ", "finish"]].filter(([, key]) => detailItem.detail?.[key]).map(([label, key]) => <div key={key}><dt>{label}</dt><dd>{detailItem.detail[key]}</dd></div>)}</dl>{detailItem.detail?.recommendation ? <blockquote>{detailItem.detail.recommendation}</blockquote> : null}</div></div></Modal> : null}
       {showBusinessNotice && businessHours.noticeEnabled && businessHours.noticeText.trim() ? <Modal title="営業日・営業時間のご案内" titleId="business-hours-notice-title" onClose={() => setShowBusinessNotice(false)} className="modal--business-hours-notice" footer={<div className="modal-actions"><button type="button" className="button button--primary" onClick={() => setShowBusinessNotice(false)}>閉じる</button></div>}><div className="business-hours-notice__body"><p>{businessHours.noticeText}</p></div></Modal> : null}
     </div>
@@ -2294,6 +2361,7 @@ function KitchenScreen({ state, updateState, apiState, checkoutState, onServe, o
       currentBillableAmountYen: item.currentBillableAmountYen ?? item.lineTotalYen,
       quantity: item.quantity, quantityReduced: item.quantityReduced ?? 0,
       billableQuantity: item.billableQuantity ?? item.quantity,
+      quantityUnitLabelSnapshot: item.quantityUnitLabelSnapshot ?? null,
       lineTotalYen: item.lineTotalYen, isServed: item.isServed, servedAt: item.servedAtMs ? new Date(item.servedAtMs).toISOString() : null,
       servedByDeviceId: item.servedByDeviceId ?? null,
       isCancelled: item.isCancelled === true,
@@ -2591,7 +2659,7 @@ function KitchenScreen({ state, updateState, apiState, checkoutState, onServe, o
       <KitchenOrderSound orders={activeOrders} staffCalls={activeCalls} checkoutRequests={activeCheckouts} suppressStaffCalls={apiState?.suppressStaffCalls} ready={demoMode || (apiMode && !apiState.loading && !apiState.error)} requestStartedAt={apiState?.notificationRequestStartedAt} demoMode={demoMode} />
       {apiMode && (pendingOrderAttempt || orderAttemptState.error || orderAttemptMessage) ? <div className="checkout-feedback" role="status">
         {orderAttemptState.error ? <p role="alert">{orderAttemptState.error}</p> : null}
-        {pendingOrderAttempt ? <><p>{pendingOrderAttempt.kind === "addition" ? "テーブル " + pendingOrderAttempt.request.tableId + " の追加注文" : "注文行への1点追加"}：{orderAttemptState.busy ? "保存を確認中です。" : "結果が未確認です。保存した内容で照合します。"}画面を閉じても確認記録を保持します。</p>{pendingOrderAttempt.kind === "addition" ? <p>保存内容：{pendingOrderAttempt.request.items.map((item) => (item.name || state.menuItems.find((menu) => menu.id === item.menuItemId)?.name || "登録商品") + " ×" + item.quantity).join("、")}</p> : null}<button type="button" className="button button--primary" disabled={orderAttemptState.busy} onClick={() => void retryPendingKitchenOrder()}>{orderAttemptState.busy ? "確認中…" : "同じ内容で照合・再送"}</button></> : null}
+        {pendingOrderAttempt ? <><p>{pendingOrderAttempt.kind === "addition" ? "テーブル " + pendingOrderAttempt.request.tableId + " の追加注文" : "注文行への1点追加"}：{orderAttemptState.busy ? "保存を確認中です。" : "結果が未確認です。保存した内容で照合します。"}画面を閉じても確認記録を保持します。</p>{pendingOrderAttempt.kind === "addition" ? <p>保存内容：{pendingOrderAttempt.request.items.map((item) => { const summary = kitchenAdditionItemSummary(item, state.menuItems); return `${summary.name} ×${summary.quantity}${summary.unitLabel}${summary.hasPriceSnapshot ? `（単価 ${yen(summary.unitPriceYen)}／1${summary.unitLabel}）` : "（旧形式：単価・販売単位snapshotなし、内容確認が必要）"}`; }).join("、")}</p> : null}<button type="button" className="button button--primary" disabled={orderAttemptState.busy} onClick={() => void retryPendingKitchenOrder()}>{orderAttemptState.busy ? "確認中…" : "同じ内容で照合・再送"}</button></> : null}
         {orderAttemptMessage ? <p>{orderAttemptMessage}</p> : null}
       </div> : null}
       {apiMode && apiState.loading ? <div className="kitchen-empty"><p>注文を読み込み中です。</p></div> : null}
@@ -2623,13 +2691,13 @@ function KitchenScreen({ state, updateState, apiState, checkoutState, onServe, o
                 const renderItem = (item) => <div className={`order-item-row ${item.isServed ? "is-served" : ""}`} key={item.id}>
                   <div className={`order-item ${item.isServed ? "is-served" : ""}`}>
                     <button type="button" className="order-item__name" aria-label={`${kitchenMenuName(item, kitchenAliases)}のキャンセル確認を開く`} onClick={() => setCancellationTarget({ action: "cancel", orderId, item, order })} disabled={cancellationLocked}>
-                      <span><b>{kitchenMenuName(item, kitchenAliases)}</b><small>{Number(item.billableQuantity ?? item.quantity ?? 0)}点</small></span>
+                      <span><b>{kitchenMenuName(item, kitchenAliases)}</b><small>{Number(item.billableQuantity ?? item.quantity ?? 0)}{item.quantityUnitLabelSnapshot ?? "点"}</small></span>
                     </button>
                     <button type="button" className={`order-item__serve${item.isServed ? " is-served" : ""}`} aria-label={item.isServed ? `${kitchenMenuName(item, kitchenAliases)}は提供済み` : `${kitchenMenuName(item, kitchenAliases)}を提供済みにする`} aria-pressed={item.isServed} aria-busy={servingItemKey === `${orderId}:${item.id}`} onClick={() => void toggleServed(orderId, item.id)} disabled={item.isServed || servingLocked || Boolean(servingItemKey)}>{servingItemKey === `${orderId}:${item.id}` ? <span aria-hidden="true">…</span> : item.isServed ? <Check size={20} weight="bold" aria-hidden="true" /> : null}</button>
                   </div>
                   {servingErrors[`${orderId}:${item.id}`] ? <p className="order-item-serve-error" role="alert">{servingErrors[`${orderId}:${item.id}`]}</p> : null}
                   <button type="button" className="order-item-price" aria-label={`${kitchenMenuName(item, kitchenAliases)}の単価と数量を編集`} onClick={() => { priceDraftOpenedRevision.current = ++priceDraftRevision.current; setPriceTarget({ ...item, id: item.id, orderId, locked: cancellationLocked }); setPriceDraft(String(item.currentUnitPriceYen ?? item.adjustedUnitPriceYen ?? item.unitPriceYenSnapshot ?? item.unitPriceSnapshot ?? 0)); setPriceError(""); setQuantityError(""); setQuantityZeroConfirm(false); }} disabled={cancellationLocked}>単価 {yen(item.currentUnitPriceYen ?? item.adjustedUnitPriceYen ?? item.unitPriceYenSnapshot ?? item.unitPriceSnapshot ?? 0)}</button>
-                  {item.quantityHistory?.length ? <details className="order-item-quantity-history"><summary>数量操作 {item.quantityHistory.length}件</summary>{item.quantityHistory.map((event) => <p key={event.eventId}>{event.action === "added" ? "追加注文 +1点" : "数量 −1点"}・{event.actorLabel || event.actorDeviceId}・{formatDateTime(new Date(event.occurredAtMs))}・{event.isServedSnapshot ? "操作時：提供済み" : "操作時：未提供"}{event.relatedOrderId ? `・追加注文 ${event.relatedOrderId.slice(0, 8)}` : ""}</p>)}</details> : null}
+                  {item.quantityHistory?.length ? <details className="order-item-quantity-history"><summary>数量操作 {item.quantityHistory.length}件</summary>{item.quantityHistory.map((event) => <p key={event.eventId}>{event.action === "added" ? `追加注文 +1${item.quantityUnitLabelSnapshot ?? "点"}` : `数量 −1${item.quantityUnitLabelSnapshot ?? "点"}`}・{event.actorLabel || event.actorDeviceId}・{formatDateTime(new Date(event.occurredAtMs))}・{event.isServedSnapshot ? "操作時：提供済み" : "操作時：未提供"}{event.relatedOrderId ? `・追加注文 ${event.relatedOrderId.slice(0, 8)}` : ""}</p>)}</details> : null}
                 </div>;
                 return <section className={`kitchen-order-card ${order.isDrinkOrder ? "is-drink-order" : ""}`} key={order.id} aria-label={`${order.isDrinkOrder ? "ドリンク注文" : "注文"} ${formatTime(order.createdAt)}`}>
                   <header>{canCollapse ? <button type="button" className="order-details-toggle" aria-expanded={expanded} onClick={() => setCollapsedOrders((current) => ({ ...current, [order.id]: !current[order.id] }))}><b>注文内容を{expanded ? "非表示" : "表示"}</b></button> : <b>{order.isDrinkOrder ? "ドリンク注文" : "注文"}</b>}<time>{formatTime(order.createdAt)}</time><small>{order.items.length}品</small></header>
@@ -2642,8 +2710,8 @@ function KitchenScreen({ state, updateState, apiState, checkoutState, onServe, o
                       const currentUnitPrice = Number(item.currentUnitPriceYen ?? item.adjustedUnitPriceYen ?? item.unitPriceYenSnapshot ?? item.unitPriceSnapshot ?? 0);
                       const excludedAmount = currentUnitPrice * cancelledQuantity;
                       return <div className="order-item-row order-item-row--cancelled" key={item.id}>
-                        <div className="cancelled-order-item"><b>{kitchenMenuName(item, kitchenAliases)}</b><span>キャンセル済み{cancellationEvent?.operationId ? "（数量0点化）" : ""}・会計から除外 {cancelledQuantity}点／{yen(excludedAmount)}（現在請求 0円）</span>
-                          {item.cancellationHistory?.length ? <details><summary>取消履歴 {item.cancellationHistory.length}件</summary>{item.cancellationHistory.map((event) => <p key={event.eventId}>{event.action === "cancelled" ? event.operationId ? "数量0点化によるキャンセル" : "商品キャンセル" : "キャンセル取消し"}・{event.actorLabel || event.actorDeviceId}・{formatDateTime(new Date(event.occurredAtMs))}{event.reason ? `・理由：${event.reason}` : ""}・提供状態：{event.isServedSnapshot ? "提供済み" : "未提供"}</p>)}</details> : null}
+                        <div className="cancelled-order-item"><b>{kitchenMenuName(item, kitchenAliases)}</b><span>キャンセル済み{cancellationEvent?.operationId ? `（数量0${item.quantityUnitLabelSnapshot ?? "点"}化）` : ""}・会計から除外 {cancelledQuantity}{item.quantityUnitLabelSnapshot ?? "点"}／{yen(excludedAmount)}（現在請求 0円）</span>
+                          {item.cancellationHistory?.length ? <details><summary>取消履歴 {item.cancellationHistory.length}件</summary>{item.cancellationHistory.map((event) => <p key={event.eventId}>{event.action === "cancelled" ? event.operationId ? `数量0${item.quantityUnitLabelSnapshot ?? "点"}化によるキャンセル` : "商品キャンセル" : "キャンセル取消し"}・{event.actorLabel || event.actorDeviceId}・{formatDateTime(new Date(event.occurredAtMs))}{event.reason ? `・理由：${event.reason}` : ""}・提供状態：{event.isServedSnapshot ? "提供済み" : "未提供"}</p>)}</details> : null}
                         </div>
                         <button type="button" className="order-item-restore" onClick={() => setCancellationTarget({ action: "restore", orderId, item, order })} disabled={cancellationLocked}>キャンセルを取り消す</button>
                       </div>;
@@ -2660,14 +2728,14 @@ function KitchenScreen({ state, updateState, apiState, checkoutState, onServe, o
       </div> : null}
     </section>
     {priceTarget ? <Modal title="注文単価・数量の変更" onClose={() => { if (!priceBusy && !quantityBusy) { setPriceTarget(null); setQuantityZeroConfirm(false); } }}>
-      <p className="modal-lead">{kitchenMenuName(priceTarget, kitchenAliases)}<br />注文時数量 {priceTarget.quantity}点・請求対象 {Number(priceTarget.billableQuantity ?? priceTarget.quantity)}点<br />注文時単価（変更上限）：{yen(priceTarget.unitPriceYenSnapshot ?? priceTarget.unitPriceSnapshot ?? 0)}／現在の単価：{yen(priceTarget.currentUnitPriceYen ?? priceTarget.adjustedUnitPriceYen ?? priceTarget.unitPriceYenSnapshot ?? priceTarget.unitPriceSnapshot ?? 0)}</p>
+      <p className="modal-lead">{kitchenMenuName(priceTarget, kitchenAliases)}<br />注文時数量 {priceTarget.quantity}{priceTarget.quantityUnitLabelSnapshot ?? "点"}・請求対象 {Number(priceTarget.billableQuantity ?? priceTarget.quantity)}{priceTarget.quantityUnitLabelSnapshot ?? "点"}<br />注文時単価（変更上限）：{yen(priceTarget.unitPriceYenSnapshot ?? priceTarget.unitPriceSnapshot ?? 0)}／現在の単価：{yen(priceTarget.currentUnitPriceYen ?? priceTarget.adjustedUnitPriceYen ?? priceTarget.unitPriceYenSnapshot ?? priceTarget.unitPriceSnapshot ?? 0)}</p>
       <div className="kitchen-quantity-editor" aria-label="注文数量の編集">
         <span>請求対象数量</span>
-        <button type="button" onClick={() => void submitQuantityAdjustment("decrease")} disabled={quantityBusy || priceTarget.locked} aria-label="数量を1点減らす"><Minus size={20} weight="bold" /></button>
-        <b aria-live="polite">{Number(priceTarget.billableQuantity ?? priceTarget.quantity)}点</b>
-        <button type="button" onClick={() => void submitQuantityAdjustment("increase")} disabled={quantityBusy || priceTarget.locked || (apiMode && Boolean(pendingOrderAttempt || orderAttemptState.error))} aria-label="同じ商品を1点追加注文"><Plus size={20} weight="bold" /></button>
+        <button type="button" onClick={() => void submitQuantityAdjustment("decrease")} disabled={quantityBusy || priceTarget.locked} aria-label={`数量を1${priceTarget.quantityUnitLabelSnapshot ?? "点"}減らす`}><Minus size={20} weight="bold" /></button>
+        <b aria-live="polite">{Number(priceTarget.billableQuantity ?? priceTarget.quantity)}{priceTarget.quantityUnitLabelSnapshot ?? "点"}</b>
+        <button type="button" onClick={() => void submitQuantityAdjustment("increase")} disabled={quantityBusy || priceTarget.locked || (apiMode && Boolean(pendingOrderAttempt || orderAttemptState.error))} aria-label={`同じ商品を1${priceTarget.quantityUnitLabelSnapshot ?? "点"}追加注文`}><Plus size={20} weight="bold" /></button>
       </div>
-      {quantityZeroConfirm ? <div className="quantity-zero-confirm" role="alert"><b>最後の1点を請求対象から外しますか？</b><p>確認後、この注文行は削除されずキャンセル扱いで履歴に残ります。取消し復元で1点に戻せます。</p><label><span>理由（任意）</span><textarea value={quantityReason} onChange={(event) => setQuantityReason(event.target.value)} maxLength={300} disabled={quantityBusy} /></label><div className="modal-actions"><button type="button" className="button button--quiet" onClick={() => setQuantityZeroConfirm(false)} disabled={quantityBusy}>戻る</button><button type="button" className="button button--primary" onClick={() => void submitQuantityAdjustment("decrease", true)} disabled={quantityBusy || priceTarget.locked}>{quantityBusy ? "保存中…" : "0点にしてキャンセル"}</button></div></div> : null}
+      {quantityZeroConfirm ? <div className="quantity-zero-confirm" role="alert"><b>最後の1{priceTarget.quantityUnitLabelSnapshot ?? "点"}を請求対象から外しますか？</b><p>確認後、この注文行は削除されずキャンセル扱いで履歴に残ります。取消し復元で1{priceTarget.quantityUnitLabelSnapshot ?? "点"}に戻せます。</p><label><span>理由（任意）</span><textarea value={quantityReason} onChange={(event) => setQuantityReason(event.target.value)} maxLength={300} disabled={quantityBusy} /></label><div className="modal-actions"><button type="button" className="button button--quiet" onClick={() => setQuantityZeroConfirm(false)} disabled={quantityBusy}>戻る</button><button type="button" className="button button--primary" onClick={() => void submitQuantityAdjustment("decrease", true)} disabled={quantityBusy || priceTarget.locked}>{quantityBusy ? "保存中…" : `0${priceTarget.quantityUnitLabelSnapshot ?? "点"}にしてキャンセル`}</button></div></div> : null}
       <label className="price-adjustment-field">変更後の単価<input aria-label="変更後の単価" type="number" min="0" max={priceTarget.unitPriceYenSnapshot ?? priceTarget.unitPriceSnapshot} step="1" value={priceDraft} onChange={(event) => { priceDraftRevision.current += 1; setPriceDraft(event.target.value); }} disabled={priceBusy || quantityBusy || priceTarget.locked} />円</label>
       <p className="price-adjustment-total">変更後の行合計：<b>{yen((Number(priceDraft) || 0) * Number(priceTarget.billableQuantity ?? priceTarget.quantity))}</b></p>
       {pendingOrderAttempt?.kind === "increase" && pendingOrderAttempt.request.orderId === priceTarget.orderId && Number(pendingOrderAttempt.request.orderItemId) === Number(priceTarget.id) ? <button type="button" className="button button--primary" disabled={orderAttemptState.busy} onClick={() => void retryPendingKitchenQuantity()}>{orderAttemptState.busy ? "保存を確認中…" : "同じ内容で照合・再送"}</button> : null}
@@ -2719,18 +2787,22 @@ function KitchenAdditionModal({ target, menuItems, busy, pending: sharedPending,
   const availableMenuItems = menuItems.filter((item) => !item.isSoldOut && item.isActive !== false);
   const menuItemsForSection = availableMenuItems.filter((item) => menuSection === "drink" ? KITCHEN_DRINK_CATEGORY_IDS.has(item.categoryId) : !KITCHEN_DRINK_CATEGORY_IDS.has(item.categoryId));
   const [menuItemId, setMenuItemId] = useState(menuItemsForSection[0]?.id ?? availableMenuItems[0]?.id ?? "");
+  const selectedMenuItem = availableMenuItems.find((item) => item.id === menuItemId) ?? null;
   const [name, setName] = useState("");
   const [price, setPrice] = useState("");
-  const [quantity, setQuantity] = useState("1");
+  const [quantity, setQuantity] = useState(() => String(selectedMenuItem?.initialQuantity ?? selectedMenuItem?.minimumQuantity ?? 1));
   const [error, setError] = useState("");
-  const selectedMenuItem = availableMenuItems.find((item) => item.id === menuItemId) ?? null;
   const quantityValue = Number(quantity) || 1;
+  const quantityMinimum = kind === "menu" ? (selectedMenuItem?.minimumQuantity ?? 1) : 1;
+  const quantityStep = kind === "menu" ? (selectedMenuItem?.quantityStep ?? 1) : 1;
+  const quantityUnitLabel = kind === "menu" ? (selectedMenuItem?.quantityUnitLabel ?? "点") : "点";
   const editDraft = (setter, value) => { draftRevision.current += 1; setter(value); };
-  const adjustQuantity = (delta) => editDraft(setQuantity, String(Math.min(99, Math.max(1, quantityValue + delta))));
+  const adjustQuantity = (delta) => editDraft(setQuantity, String(Math.min(99, Math.max(quantityMinimum, quantityValue + delta * quantityStep))));
   const selectMenuSection = (section) => {
     editDraft(setMenuSection, section);
     const firstItem = availableMenuItems.find((item) => section === "drink" ? KITCHEN_DRINK_CATEGORY_IDS.has(item.categoryId) : !KITCHEN_DRINK_CATEGORY_IDS.has(item.categoryId));
     setMenuItemId(firstItem?.id ?? "");
+    setQuantity(String(firstItem?.initialQuantity ?? firstItem?.minimumQuantity ?? 1));
   };
   const retry = async () => {
     if (!pendingHere || busy || submitLock.current) return;
@@ -2763,14 +2835,17 @@ function KitchenAdditionModal({ target, menuItems, busy, pending: sharedPending,
     event.preventDefault();
     if (submitLock.current || locked) return;
     const count = Number(quantity);
-    if (!Number.isInteger(count) || count < 1 || count > 99) { setError("数量は1〜99点で入力してください。"); return; }
+    if (!Number.isInteger(count) || count < quantityMinimum || count > 99 || (count - quantityMinimum) % quantityStep !== 0) {
+      setError(`数量は${quantityMinimum}${quantityUnitLabel}以上、${quantityStep}${quantityUnitLabel}ずつ、1行99${quantityUnitLabel}まで選択してください。`);
+      return;
+    }
     const selected = kind === "menu" ? menuItems.find((item) => item.id === menuItemId) : null;
     if (kind === "menu" && (!selected || selected.isSoldOut || selected.isActive === false)) { setError("販売中の商品を選択してください。"); return; }
     if (kind !== "menu" && (!name.trim() || !Number.isSafeInteger(Number(price)) || Number(price) < 0)) { setError("商品名と0円以上の金額を入力してください。"); return; }
     setError("");
     submitLock.current = true;
     const item = kind === "menu"
-      ? { menuItemId: selected.id, name: selected.name, priceYen: Number(selected.price), quantity: count }
+      ? { menuItemId: selected.id, name: selected.name, priceYen: Number(selected.price), quantity: count, expectedUnitPriceYen: Number(selected.price), expectedQuantityUnitLabel: selected.quantityUnitLabel ?? "点" }
       : { name: name.trim(), priceYen: Number(price), quantity: count };
     const submission = { revision: draftRevision.current, id: null, attempt: null, recovery: null,
       request: { tableId: Number(target.tableId), sessionId: target.sessionId, items: [kitchenAdditionRequestItem(item)] } };
@@ -2806,31 +2881,44 @@ function KitchenAdditionModal({ target, menuItems, busy, pending: sharedPending,
         <p>テーブル {pending.request.tableId} の追加注文です。内容を保持し、保存状態を確認します。</p>
         {!sharedPending ? <p role="alert" className="checkout-feedback checkout-feedback--error">保存状態の確認が必要です。新しい追加注文にせず、保存結果を確認してください。</p> : null}
         {pending.request.items.map((item, index) => {
-          const registered = menuItems.find((menuItem) => menuItem.id === item.menuItemId);
-          return <article key={index}><b>{item.menuItemId ? registered?.name || `登録商品（ID：${item.menuItemId}）` : item.name}</b><span>数量：{item.quantity}点</span>{item.menuItemId ? <small>個別オプション指定なし</small> : <small>単価：{yen(item.priceYen)}・指定は商品名の表記どおり</small>}</article>;
+          const summary = kitchenAdditionItemSummary(item, menuItems);
+          return <article key={index}><b>{summary.name}</b><span>数量：{summary.quantity}{summary.unitLabel}</span>{summary.registeredMenuItem ? summary.hasPriceSnapshot ? <small>単価（1{summary.unitLabel}）{yen(summary.unitPriceYen)}・個別オプション指定なし</small> : <small>旧形式の保存内容には単価・販売単位snapshotがありません。最新設定で再計算せず、内容を確認してください。</small> : <small>単価：{yen(summary.unitPriceYen)}・指定は商品名の表記どおり</small>}</article>;
         })}
         <p className="checkout-feedback" role="status">{(openedPendingId.current === pending.id && draftRevision.current === 0) || (submissionRef.current?.id === pending.id && submissionRef.current.revision === draftRevision.current) ? "この保存済み操作の結果を確認します。" : "入力中の別注文はこの画面に保持しています。照合完了後に入力へ戻ります。"}</p>
         {error ? <p className="checkout-feedback checkout-feedback--error" role="alert">{error}</p> : null}
       </section> : null}
       <div className="kitchen-add-order-scroll" hidden={pendingHere}>
-        <div className="kitchen-add-order-tabs"><button type="button" disabled={locked} className={kind === "menu" ? "is-active" : ""} onClick={() => editDraft(setKind, "menu")}>既存メニュー</button><button type="button" disabled={locked} className={kind === "food" ? "is-active" : ""} onClick={() => editDraft(setKind, "food")}>その他フード</button><button type="button" disabled={locked} className={kind === "drink" ? "is-active" : ""} onClick={() => editDraft(setKind, "drink")}>その他ドリンク</button></div>
+        <div className="kitchen-add-order-tabs"><button type="button" disabled={locked} className={kind === "menu" ? "is-active" : ""} onClick={() => { editDraft(setKind, "menu"); setQuantity(String(selectedMenuItem?.initialQuantity ?? selectedMenuItem?.minimumQuantity ?? 1)); }}>既存メニュー</button><button type="button" disabled={locked} className={kind === "food" ? "is-active" : ""} onClick={() => { editDraft(setKind, "food"); setQuantity("1"); }}>その他フード</button><button type="button" disabled={locked} className={kind === "drink" ? "is-active" : ""} onClick={() => { editDraft(setKind, "drink"); setQuantity("1"); }}>その他ドリンク</button></div>
         {kind === "menu" ? <>
           <div className="kitchen-add-order-menu-sections" role="tablist" aria-label="メニュー区分">
             <button type="button" disabled={locked} role="tab" aria-selected={menuSection === "food"} className={menuSection === "food" ? "is-active" : ""} onClick={() => selectMenuSection("food")}>フード</button>
             <button type="button" disabled={locked} role="tab" aria-selected={menuSection === "drink"} className={menuSection === "drink" ? "is-active" : ""} onClick={() => selectMenuSection("drink")}>ドリンク</button>
           </div>
           <div className="kitchen-add-order-menu-grid" role="tabpanel" aria-label={`${menuSection === "food" ? "フード" : "ドリンク"}の商品一覧`}>
-            {menuItemsForSection.length ? menuItemsForSection.map((item) => <button key={item.id} type="button" disabled={locked} className={item.id === menuItemId ? "is-selected" : ""} aria-pressed={item.id === menuItemId} onClick={() => { editDraft(setMenuItemId, item.id); setError(""); }}><span>{kitchenAdditionMenuName(item)}</span></button>) : <p className="kitchen-add-order-empty">販売中の商品がありません。</p>}
+            {menuItemsForSection.length ? menuItemsForSection.map((item) => <button key={item.id} type="button" disabled={locked} className={item.id === menuItemId ? "is-selected" : ""} aria-pressed={item.id === menuItemId} onClick={() => { editDraft(setMenuItemId, item.id); setQuantity(String(item.initialQuantity ?? item.minimumQuantity ?? 1)); setError(""); }}><span>{kitchenAdditionMenuName(item)}</span></button>) : <p className="kitchen-add-order-empty">販売中の商品がありません。</p>}
           </div>
-          {selectedMenuItem ? <div className="kitchen-add-order-selection"><span>選択中</span><b>{kitchenAdditionMenuName(selectedMenuItem)}</b><small>単価 {yen(selectedMenuItem.price)}</small></div> : null}
+          {selectedMenuItem ? <div className="kitchen-add-order-selection"><span>選択中</span><b>{kitchenAdditionMenuName(selectedMenuItem)}</b><small>単価（1{quantityUnitLabel}）{yen(selectedMenuItem.price)}</small>{quantityMinimum > 1 ? <small>{quantityMinimum}{quantityUnitLabel}から・{quantityStep}{quantityUnitLabel}ずつ</small> : null}</div> : null}
         </> : <div className="kitchen-add-order-custom-fields"><label>商品名<input value={name} disabled={locked} onChange={(event) => editDraft(setName, event.target.value)} maxLength={120} autoFocus /></label><label>金額<input type="number" disabled={locked} min="0" max="10000000" step="1" value={price} onChange={(event) => editDraft(setPrice, event.target.value)} />円</label></div>}
-        <div className="kitchen-add-order-quantity"><span>数量</span><div className="kitchen-add-order-quantity-control"><button type="button" aria-label="数量を1減らす" onClick={() => adjustQuantity(-1)} disabled={locked || quantityValue <= 1}>−</button><output aria-label="数量">{quantityValue}点</output><button type="button" aria-label="数量を1増やす" onClick={() => adjustQuantity(1)} disabled={locked || quantityValue >= 99}>＋</button></div></div>
+        <div className="kitchen-add-order-quantity"><span>数量</span><div className="kitchen-add-order-quantity-control"><button type="button" aria-label={`${quantityStep}${quantityUnitLabel}減らす`} onClick={() => adjustQuantity(-1)} disabled={locked || quantityValue <= quantityMinimum}>−</button><output aria-label="数量">{quantityValue}{quantityUnitLabel}</output><button type="button" aria-label={`${quantityStep}${quantityUnitLabel}増やす`} onClick={() => adjustQuantity(1)} disabled={locked || quantityValue + quantityStep > 99}>＋</button></div></div>
         {pending ? <p className="checkout-feedback" role="status">未確認の内容を保持しています。変更せず同じ操作を照合・再送してください。</p> : null}
         {error ? <p className="checkout-feedback checkout-feedback--error" role="alert">{error}</p> : null}
         <p className="modal-lead">この追加注文は現在のsessionに未提供品として登録されます。</p>
       </div>
     </form>
   </Modal>;
+}
+
+function kitchenAdditionItemSummary(item, menuItems) {
+  const registeredMenuItem = typeof item.menuItemId === "string" && item.menuItemId.length > 0;
+  const registered = registeredMenuItem ? menuItems.find((menuItem) => menuItem.id === item.menuItemId) : null;
+  return {
+    name: item.name || registered?.name || `登録商品（ID：${item.menuItemId}）`,
+    quantity: item.quantity,
+    unitLabel: item.expectedQuantityUnitLabel ?? "点",
+    unitPriceYen: registeredMenuItem ? item.expectedUnitPriceYen : item.priceYen,
+    hasPriceSnapshot: (registeredMenuItem ? item.expectedUnitPriceYen : item.priceYen) !== undefined,
+    registeredMenuItem,
+  };
 }
 
 function cancelledQuantityForDisplay(item) {
@@ -2850,10 +2938,11 @@ function OrderItemCancellationModal({ target, onClose, onSave }) {
   const [error, setError] = useState("");
   const restoring = target.action === "restore";
   const cancellationProductName = kitchenMenuName(target.item, {});
+  const cancellationUnitLabel = target.item.quantityUnitLabelSnapshot ?? "点";
   const cancellationQuantity = Number(target.item.billableQuantity ?? target.item.quantity ?? 0);
   const cancellationUnitPrice = Number(target.item.currentUnitPriceYen ?? target.item.adjustedUnitPriceYen ?? target.item.unitPriceYenSnapshot ?? target.item.unitPriceSnapshot ?? 0);
   const cancellationAmount = cancellationUnitPrice * cancellationQuantity;
-  const cancelButtonLabel = `${cancellationProductName} ${cancellationQuantity}点をキャンセル`;
+  const cancelButtonLabel = `${cancellationProductName} ${cancellationQuantity}${cancellationUnitLabel}をキャンセル`;
   const submit = async () => {
     setBusy(true);
     setError("");
@@ -2866,8 +2955,8 @@ function OrderItemCancellationModal({ target, onClose, onSave }) {
     }
   };
   return <Modal title={restoring ? "キャンセルを取り消しますか？" : "注文商品をキャンセルしますか？"} onClose={() => { if (!busy) onClose(); }}>
-    <p className="modal-lead">{restoring ? `${cancellationProductName} のキャンセルを取り消します。提供状態は現在のまま維持します。` : `${cancellationProductName} ${cancellationQuantity}点をキャンセルし、今回の会計から外します。注文の記録は残ります。提供済みの場合、提供した記録も残ります。`}</p>
-    {!restoring ? <p className="cancellation-amount-preview">今回の会計から外す金額：{yen(cancellationUnitPrice)} × {cancellationQuantity}点 = <b>{yen(cancellationAmount)}</b></p> : null}
+    <p className="modal-lead">{restoring ? `${cancellationProductName} のキャンセルを取り消します。提供状態は現在のまま維持します。` : `${cancellationProductName} ${cancellationQuantity}${cancellationUnitLabel}をキャンセルし、今回の会計から外します。注文の記録は残ります。提供済みの場合、提供した記録も残ります。`}</p>
+    {!restoring ? <p className="cancellation-amount-preview">今回の会計から外す金額：{yen(cancellationUnitPrice)} × {cancellationQuantity}{cancellationUnitLabel} = <b>{yen(cancellationAmount)}</b></p> : null}
     <label className="payment-void-form"><span>理由（任意）</span><textarea value={reason} onChange={(event) => setReason(event.target.value)} maxLength={300} placeholder="必要な場合だけ入力してください" disabled={busy} /></label>
     {error ? <p className="checkout-feedback checkout-feedback--error" role="alert">{error}</p> : null}
     <div className="modal-actions"><button type="button" className="button button--quiet" onClick={onClose} disabled={busy}>戻る</button><button type="button" className="button button--primary" onClick={() => void submit()} disabled={busy}>{busy ? "処理中…" : restoring ? "キャンセルを取り消す" : cancelButtonLabel}</button></div>
@@ -3013,10 +3102,10 @@ function HistoryScreen({ state, apiMode = false, loadHistory = null, loadPayment
                   const currentUnitPrice = Number(item.currentUnitPriceYen ?? item.unitPriceSnapshot ?? 0);
                   const billableQuantity = Number(item.billableQuantity ?? item.quantity);
                   return <span className={`history-order-item ${item.isCancelled ? "is-cancelled" : ""}`} key={item.id}>
-                    <span>{selectionDisplayName({ nameSnapshot: item.nameSnapshot }, item)} <b>{item.isCancelled ? `注文時 ${item.quantity}点` : `${billableQuantity}点請求対象`}</b></span>
-                    <small>注文時 {yen(item.lineTotalYenSnapshot ?? item.unitPriceSnapshot * item.quantity)}{item.isCancelled ? `・キャンセル対象 ${cancelledQuantity}点／${yen(currentUnitPrice * cancelledQuantity)}` : ""}・現在請求 {yen(item.currentBillableAmountYen ?? item.lineTotalYen ?? item.unitPriceSnapshot * item.quantity)}</small>
-                    {(item.quantityHistory ?? []).map((event) => <small className="cancellation-audit-entry" key={event.eventId}>{event.action === "added" ? "追加注文 +1点" : "数量 −1点"}・{event.actorLabel || event.actorDeviceId}・{formatDateTime(new Date(event.occurredAtMs))}・操作時{event.isServedSnapshot ? "提供済み" : "未提供"}</small>)}
-                    {(item.cancellationHistory ?? []).map((event) => <small className="cancellation-audit-entry" key={event.eventId}>{event.action === "cancelled" ? event.operationId ? "数量0点化によるキャンセル" : "商品キャンセル" : "キャンセル取消し"}・{event.actorLabel || event.actorDeviceId}・{formatDateTime(new Date(event.occurredAtMs))}{event.reason ? `・${event.reason}` : ""}・当時{event.isServedSnapshot ? "提供済み" : "未提供"}</small>)}
+                    <span>{selectionDisplayName({ nameSnapshot: item.nameSnapshot }, item)} <b>{item.isCancelled ? `注文時 ${item.quantity}${item.quantityUnitLabelSnapshot ?? "点"}` : `${billableQuantity}${item.quantityUnitLabelSnapshot ?? "点"}請求対象`}</b></span>
+                    <small>注文時 {yen(item.lineTotalYenSnapshot ?? item.unitPriceSnapshot * item.quantity)}{item.isCancelled ? `・キャンセル対象 ${cancelledQuantity}${item.quantityUnitLabelSnapshot ?? "点"}／${yen(currentUnitPrice * cancelledQuantity)}` : ""}・現在請求 {yen(item.currentBillableAmountYen ?? item.lineTotalYen ?? item.unitPriceSnapshot * item.quantity)}</small>
+                    {(item.quantityHistory ?? []).map((event) => <small className="cancellation-audit-entry" key={event.eventId}>{event.action === "added" ? `追加注文 +1${item.quantityUnitLabelSnapshot ?? "点"}` : `数量 −1${item.quantityUnitLabelSnapshot ?? "点"}`}・{event.actorLabel || event.actorDeviceId}・{formatDateTime(new Date(event.occurredAtMs))}・操作時{event.isServedSnapshot ? "提供済み" : "未提供"}</small>)}
+                    {(item.cancellationHistory ?? []).map((event) => <small className="cancellation-audit-entry" key={event.eventId}>{event.action === "cancelled" ? event.operationId ? `数量0${item.quantityUnitLabelSnapshot ?? "点"}化によるキャンセル` : "商品キャンセル" : "キャンセル取消し"}・{event.actorLabel || event.actorDeviceId}・{formatDateTime(new Date(event.occurredAtMs))}{event.reason ? `・${event.reason}` : ""}・当時{event.isServedSnapshot ? "提供済み" : "未提供"}</small>)}
                     {apiMode && onChangeItemCancellation ? <button type="button" className={item.isCancelled ? "order-item-restore" : "order-item-cancel"} onClick={() => setCancellationTarget({ action: item.isCancelled ? "restore" : "cancel", order, item })} disabled={historyOperationLocked(order)}>{item.isCancelled ? "キャンセルを取り消す" : "商品をキャンセル"}</button> : null}
                   </span>;
                 })}</div></td>
@@ -3029,7 +3118,7 @@ function HistoryScreen({ state, apiMode = false, loadHistory = null, loadPayment
           <div className="payment-history__heading"><div><span className="section-kicker">PAYMENT HISTORY</span><h2 id="payment-history-title">会計履歴</h2><p>支払確認後に保存した記録です。席リセットだけの操作は含みません。</p></div></div>
           {apiMode && paymentRemoteState.loading ? <div className="empty-state"><p>会計履歴を読み込み中です。</p></div> : null}
           {apiMode && paymentRemoteState.error ? <div className="empty-state"><p>会計履歴を取得できませんでした。</p></div> : null}
-          {!apiMode || (!paymentRemoteState.loading && !paymentRemoteState.error) ? paymentRemoteState.payments.length ? <div className="payment-history-list">{paymentRemoteState.payments.map((payment) => <article className={`payment-history-card payment-history-card--${payment.status}`} key={payment.paymentRecordId}><header><div><b>テーブル {payment.tableId}</b><span>{formatDateTime(new Date(payment.paidAtMs))}・{paymentMethodLabel(payment.paymentMethod)}</span></div><strong>{yen(payment.confirmedTotalYen)}</strong></header><p className="payment-history-card__meta">会計記録 {payment.paymentRecordId}・session {payment.tableSessionId}</p><details><summary>注文商品・追加料金の内訳</summary><div className="payment-history-card__details"><h4>注文商品</h4>{payment.orderItems.map((item) => <div key={`${payment.paymentRecordId}-${item.orderItemId}`}><span>{item.formalNameSnapshot}{item.variantNameSnapshot ? ` ${item.variantNameSnapshot}` : ""} × {item.quantity}</span><b>{yen(item.lineTotalYen)}</b></div>)}{payment.adjustments.length ? <><h4>追加料金</h4>{payment.adjustments.map((item) => <div key={`${payment.paymentRecordId}-${item.sortOrder}`}><span>{item.label}</span><b>{yen(item.amountYen)}</b></div>)}</> : null}</div></details>{payment.status === "voided" ? <p className="payment-history-card__void">取消済み：{payment.voidReason}</p> : onVoidPayment ? <button type="button" className="button button--quiet" onClick={() => { setVoidError(""); setVoidReason(""); setVoidTarget(payment); }}>誤記録として取消</button> : null}</article>)}</div> : <div className="empty-state"><p>会計履歴はありません。</p></div> : null}
+          {!apiMode || (!paymentRemoteState.loading && !paymentRemoteState.error) ? paymentRemoteState.payments.length ? <div className="payment-history-list">{paymentRemoteState.payments.map((payment) => <article className={`payment-history-card payment-history-card--${payment.status}`} key={payment.paymentRecordId}><header><div><b>テーブル {payment.tableId}</b><span>{formatDateTime(new Date(payment.paidAtMs))}・{paymentMethodLabel(payment.paymentMethod)}</span></div><strong>{yen(payment.confirmedTotalYen)}</strong></header><p className="payment-history-card__meta">会計記録 {payment.paymentRecordId}・session {payment.tableSessionId}</p><details><summary>注文商品・追加料金の内訳</summary><div className="payment-history-card__details"><h4>注文商品</h4>{payment.orderItems.map((item) => <div key={`${payment.paymentRecordId}-${item.orderItemId}`}><span>{item.formalNameSnapshot}{item.variantNameSnapshot ? ` ${item.variantNameSnapshot}` : ""} × {item.quantity}{item.quantityUnitLabelSnapshot ?? "点"}</span><b>{yen(item.lineTotalYen)}</b></div>)}{payment.adjustments.length ? <><h4>追加料金</h4>{payment.adjustments.map((item) => <div key={`${payment.paymentRecordId}-${item.sortOrder}`}><span>{item.label}</span><b>{yen(item.amountYen)}</b></div>)}</> : null}</div></details>{payment.status === "voided" ? <p className="payment-history-card__void">取消済み：{payment.voidReason}</p> : onVoidPayment ? <button type="button" className="button button--quiet" onClick={() => { setVoidError(""); setVoidReason(""); setVoidTarget(payment); }}>誤記録として取消</button> : null}</article>)}</div> : <div className="empty-state"><p>会計履歴はありません。</p></div> : null}
         </section>
       </section>
       {cancellationTarget ? <OrderItemCancellationModal key={`${cancellationTarget.action}-${cancellationTarget.order.id}-${cancellationTarget.item.id}`} target={cancellationTarget} onClose={() => setCancellationTarget(null)} onSave={saveHistoryCancellation} /> : null}
@@ -4146,6 +4235,22 @@ function AdminScreen({ state, updateState, section = "menu" }) {
       return;
     }
     const targetId = editingMenuId ?? (menuCreateIdRef.current ??= makeId("menu"));
+    const quantitySelectionEnabled = form.get("quantitySelectionEnabled") === "on";
+    const minimumQuantity = Number(form.get("minimumQuantity"));
+    const initialQuantity = Number(form.get("initialQuantity"));
+    const quantityStep = Number(form.get("quantityStep"));
+    const quantityUnitLabel = form.get("quantityUnitLabel")?.toString().trim() || "点";
+    if (!quantitySelectionEnabled && (minimumQuantity !== 1 || initialQuantity !== 1 || quantityStep !== 1)) {
+      setCatalogState((current) => ({ ...current, message: "数量選択がOFFの場合は、最低・初期・増減をすべて1にしてください。最低数量を維持する場合は数量選択をONにしてください。" }));
+      return;
+    }
+    if (quantitySelectionEnabled && (!Number.isSafeInteger(minimumQuantity) || minimumQuantity < 1 || minimumQuantity > 99
+      || !Number.isSafeInteger(initialQuantity) || initialQuantity < minimumQuantity || initialQuantity > 99
+      || !Number.isSafeInteger(quantityStep) || quantityStep < 1 || quantityStep > 99
+      || (initialQuantity - minimumQuantity) % quantityStep !== 0 || [...quantityUnitLabel].length > 8)) {
+      setCatalogState((current) => ({ ...current, message: "数量選択は、最低・初期・増減を1〜99で設定し、初期数量を最低数量以上かつ増減単位に合わせてください。" }));
+      return;
+    }
     const variantDefinitions = [
       ["グラス", "110ml", "glassPrice", "glass", "glassCold", "glassHot"],
       ["徳利1合", "180ml", "tokuriPrice", "tokuri", "tokuriCold", "tokuriHot"],
@@ -4218,7 +4323,16 @@ function AdminScreen({ state, updateState, section = "menu" }) {
       },
       variants: servingOptions.length ? [] : variants,
       servingOptions,
+      quantitySelectionEnabled,
+      minimumQuantity,
+      initialQuantity,
+      quantityStep,
+      quantityUnitLabel,
     };
+    if (quantitySelectionEnabled && servingOptions.some((option) => option.isActive !== false)) {
+      setCatalogState((current) => ({ ...current, message: "飲み方選択と数量選択は併用できません。飲み方選択を解除してから保存してください。" }));
+      return;
+    }
     const nextItem = editingMenuId ? {
       ...(editingMenu ?? {}),
       ...patch,
@@ -4608,6 +4722,15 @@ function AdminScreen({ state, updateState, section = "menu" }) {
             <label>キレ<input name="finish" defaultValue={editingMenu?.detail?.finish ?? ""} /></label>
             <label className="menu-editor__wide">詳細説明<textarea name="detailDescription" defaultValue={editingMenu?.detail?.description ?? ""} /></label>
             <label className="menu-editor__wide">おすすめコメント<textarea name="recommendation" defaultValue={editingMenu?.detail?.recommendation ?? ""} /></label>
+            </div></details>
+            <details className="menu-editor__section"><summary>注文時の数量選択</summary><div className="menu-editor__section-body">
+            <label className="menu-editor__check"><input type="checkbox" name="quantitySelectionEnabled" defaultChecked={editingMenu?.quantitySelectionEnabled ?? false} disabled={Boolean(editingMenu?.servingOptions?.some((option) => option.isActive !== false))} /> 注文時に数量を選択する</label>
+            {editingMenu?.servingOptions?.some((option) => option.isActive !== false) ? <p className="menu-editor__help">飲み方選択UIと重なるため、この商品では数量選択を設定できません。</p> : null}
+            <label>最低数量<input name="minimumQuantity" type="number" min="1" max="99" defaultValue={editingMenu?.minimumQuantity ?? 1} /></label>
+            <label>初期数量<input name="initialQuantity" type="number" min="1" max="99" defaultValue={editingMenu?.initialQuantity ?? editingMenu?.minimumQuantity ?? 1} /></label>
+            <label>増減単位<input name="quantityStep" type="number" min="1" max="99" defaultValue={editingMenu?.quantityStep ?? 1} /></label>
+            <label>販売単位<input name="quantityUnitLabel" type="text" maxLength="8" defaultValue={editingMenu?.quantityUnitLabel ?? "点"} /></label>
+            <p className="menu-editor__help">OFFでは＋から販売単位を1つ追加します。OFFにする場合は最低・初期・増減をすべて1にしてください。最低数量を維持する場合はONにします。1行の上限は99です。</p>
             </div></details>
             <details className="menu-editor__section"><summary>販売・客席表示（売り切れ・注文方法・表示先）</summary><div className="menu-editor__section-body">
             <label>客席での表示<select name="customerVisibilityMode" defaultValue={editingMenu?.customerVisibilityMode ?? "all_tables"}><option value="all_tables">全テーブル</option><option value="per_session">来店ごとに許可</option></select></label>

@@ -190,9 +190,8 @@ test("customer menu uses major category navigation with a collapsible rail", () 
   assert.match(appSource, /food-gifu/);
   assert.match(appSource, /CUSTOMER_WINTER_CATEGORY_IDS/);
   assert.match(customerScreen, /冬季限定・現在注文できません/);
-  assert.match(customerScreen, /<Modal title="串カツ"/);
-  assert.match(customerScreen, /各種2本から/);
-  assert.match(customerScreen, /Math\.max\(2/);
+  assert.match(customerScreen, /quantitySelectionEnabled && item\.minimumQuantity > 1/);
+  assert.match(customerScreen, /item\.quantitySelectionEnabled \? <button className="add-button" onClick=\{\(\) => openQuantitySelection\(item\)\}/);
   assert.match(customerScreen, /majorNavOpen/);
   assert.match(customerScreen, /customer-app--category-collapsed/);
   assert.match(appSource, /大分類カテゴリー/);
@@ -325,10 +324,10 @@ test("customer footer keeps information replaceable and shows smoking availabili
   assert.doesNotMatch(customerScreen, /アレルギー・原材料についてはスタッフまでお尋ねください。|<strong>店内禁煙<\/strong>/);
 });
 
-test("cart cancel buttons decrement one quantity at a time", () => {
-  assert.match(customerScreen, /const decrementCartRow = \(key\) => \{[\s\S]*if \(row\.quantity <= 1\)[\s\S]*row\.quantity - 1/);
-  assert.match(customerScreen, /row\.unavailable \? removeCartRow\(row\.key\) : decrementCartRow\(row\.key\)/);
-  assert.match(customerScreen, /を1点取り消す/);
+test("cart decrement buttons preserve configured minimums and steps", () => {
+  assert.match(customerScreen, /const next = decrementCustomerCartSelection\(current, key, row\.item\)/);
+  assert.match(customerScreen, /const decrementAction = customerCartDecrementAction\(row\); const removeRow = row\.unavailable \|\| row\.quantityConfigurationStale \|\| decrementAction\.kind === "remove"/);
+  assert.match(customerScreen, /`を\$\{decrementAction\.quantityStep\}\$\{decrementAction\.unitLabel\}取り消す`/);
 });
 
 
@@ -435,7 +434,7 @@ test("API customer staff call submits an idempotent request and shows success on
 });
 
 test("revoked customer authorization keeps the cart visible and blocks enqueue until discard", () => {
-  assert.match(customerScreen, /onAuthorizationFailure: blockCartAfterAuthenticationFailure/);
+  assert.match(customerScreen, /onAuthorizationFailure: blockConnectionAuthorization/);
   assert.match(visitConfigRefreshSource, /config\?\.status === "unauthorized"/);
   assert.match(customerScreen, /contextCheck\?\.status === "unauthorized"/);
   assert.match(customerScreen, /setCartAuthorizationRequired\(true\)/);
@@ -448,12 +447,12 @@ test("revoked customer authorization keeps the cart visible and blocks enqueue u
 
 test("cart retains display snapshots for unavailable menu items and blocks the complete order", () => {
   assert.match(customerScreen, /const cartRows = customerCartRows\(cart, menuItems\)/);
-  assert.match(customerScreen, /const hasUnavailableCartRows = cartRows\.some\(\(row\) => row\.unavailable\)/);
+  assert.match(customerScreen, /const hasUnavailableCartRows = cartRows\.some\(\(row\) => row\.unavailable \|\| row\.quantityConfigurationStale\)/);
   assert.match(customerScreen, /replaceCart\(addCustomerCartSelection\(cartRef\.current, item, selection, normalizedQuantity\)\)/);
   assert.match(customerScreen, /現在注文できない商品があります。内容をご確認ください/);
   assert.match(customerScreen, /if \(!cartRows\.length \|\| hasUnavailableCartRows \|\| cartContextStale \|\| submitLock\.current\) return/);
   assert.match(customerScreen, /disabled=\{!cartCount \|\| hasUnavailableCartRows \|\| cartContextLoading \|\| cartContextStale\}/);
-  assert.match(customerScreen, /row\.unavailable \? removeCartRow\(row\.key\) : decrementCartRow\(row\.key\)/);
+  assert.match(customerScreen, /decrementAction\.kind === "remove"/);
   assert.match(customerScreen, /items: cartRows\.map\(\(row\) => \(\{[\s\S]*menuItemId: row\.item\.menuItemId \?\? row\.item\.id,[\s\S]*quantity: row\.quantity,[\s\S]*variantId: row\.variant\.variantId/);
   const enqueueBlockStart = customerScreen.indexOf("const outboxRecord = await orderClient.enqueue");
   const enqueueBlock = customerScreen.slice(enqueueBlockStart, customerScreen.indexOf("const order = {", enqueueBlockStart));
@@ -611,6 +610,14 @@ test("admin menu creation and editing share the full form and preserve the exist
   assert.match(appSource, /name="glassCold"/);
   assert.match(appSource, /name="tokuri2Hot"/);
   assert.match(appSource, /name="shochuOptions" defaultChecked=\{Boolean\(editingMenu\?\.servingOptions\?\.length\)\}/);
+  assert.match(appSource, /name="quantitySelectionEnabled" defaultChecked=\{editingMenu\?\.quantitySelectionEnabled \?\? false\}/);
+  assert.match(appSource, /name="minimumQuantity" type="number" min="1" max="99"/);
+  assert.match(appSource, /name="initialQuantity" type="number" min="1" max="99"/);
+  assert.match(appSource, /name="quantityStep" type="number" min="1" max="99"/);
+  assert.match(appSource, /name="quantityUnitLabel" type="text" maxLength="8"/);
+  assert.match(appSource, /if \(!quantitySelectionEnabled && \(minimumQuantity !== 1 \|\| initialQuantity !== 1 \|\| quantityStep !== 1\)\)/);
+  assert.match(appSource, /数量選択がOFFの場合は、最低・初期・増減をすべて1にしてください/);
+  assert.match(styles, /\.menu-editor__help \{ grid-column: 1 \/ -1;/);
   assert.match(appSource, /mode=\{editingMenu\?\.tableVisibilityMode \?\? "all_tables"\}/);
   assert.match(appSource, /setMenuEditorPlacementEdge\(null\)/);
 });
@@ -876,18 +883,22 @@ test("sake product details and order snapshots retain the shared selection model
   assert.match(customerScreen, /variantNameSnapshot|servingOptionNameSnapshot/);
   assert.match(customerScreen, /variantVolumeSnapshot/);
   assert.match(customerScreen, /temperatureSnapshot/);
-  assert.match(customerScreen, /unitPriceSnapshot: row\.variant\?\.priceYen/);
+  assert.match(customerScreen, /unitPriceSnapshot: row\.unitPriceYenSnapshot \?\? row\.variant\?\.priceYen/);
 });
 
-test("串カツ keeps the selected variant visible without a second flavor picker", () => {
-  assert.match(appSource, /KUSHIKATSU_MENU_ITEM_ID/);
-  assert.match(appSource, /串カツは各種類2本からご注文いただけます/);
-  assert.match(appSource, /variant: kushikatsuSelectionVariant/);
-  assert.match(customerScreen, /<Modal title="串カツ"/);
+test("quantity selection is generic, applies after variants, and does not use the serving-options modal twice", () => {
+  assert.match(customerScreen, /const openQuantitySelection = \(sourceItem, selection = \{\}\) =>/);
+  assert.match(customerScreen, /if \(!item\.quantitySelectionEnabled\) \{/);
+  assert.match(customerScreen, /setQuantitySelection\(\{ itemId: item\.id, variantId: variant\?\.variantId/);
+  assert.match(customerScreen, /const quantitySelectionVariant = quantitySelectionItem\?\.variants\.find/);
+  assert.match(customerScreen, /PriceDisplay priceYen=\{quantitySelectionVariant\.priceYen\}/);
+  assert.match(customerScreen, /item\.servingOptions\.length \? <button className="shochu-serving-button"/);
+  assert.match(customerScreen, /commitQuantitySelection/);
+  assert.match(customerScreen, /onClose=\{\(\) => \{ setQuantitySelection\(null\); setQuantitySelectionError\(""\); \}\}/);
+  assert.match(customerScreen, /quantitySelection\.baseQuantity \+ quantitySelection\.quantity <= 99/);
+  assert.doesNotMatch(customerScreen, /openKushikatsuSelection|kushikatsuSelectionVariant/);
   assert.match(customerScreen, /titleExtra=\{<span className="kushikatsu-modal-instruction">数量を選択してください<\/span>\}/);
-  assert.doesNotMatch(customerScreen, /選択中の味/);
-  assert.match(customerScreen, /kushikatsuSelectionVariant\?\.name/);
-  assert.match(customerScreen, /1本 税込 \{yen\(kushikatsuSelectionVariant\?\.priceYen\)\}/);
+  assert.match(customerScreen, /quantitySelectionVariant\.name/);
   assert.match(customerScreen, /className="kushikatsu-unit-price"/);
   assert.match(styles, /\.kushikatsu-unit-price \{[\s\S]*display: flex[\s\S]*justify-content: space-between/);
   assert.match(styles, /\.kushikatsu-quantity-row \{[\s\S]*width: 100%[\s\S]*display: flex[\s\S]*box-sizing: border-box/);
@@ -896,20 +907,18 @@ test("串カツ keeps the selected variant visible without a second flavor picke
   assert.match(styles, /\.kushikatsu-quantity-row \.shochu-quantity-control > button \{[\s\S]*width: 64px[\s\S]*min-width: 64px[\s\S]*max-width: 64px[\s\S]*padding: 0[\s\S]*margin: 0/);
   assert.match(styles, /\.kushikatsu-quantity-row \.shochu-quantity-control > b \{[\s\S]*width: 92px[\s\S]*min-width: 92px[\s\S]*max-width: 92px[\s\S]*height: 64px/);
   assert.match(styles, /@media \(max-width: 600px\)[\s\S]*flex-basis: 200px[\s\S]*56px 88px 56px/);
-  assert.doesNotMatch(customerScreen, /kushikatsu-variant-list|味を1種類選び/);
-  assert.match(customerScreen, /className="add-button" onClick=\{\(\) => openKushikatsuSelection\(item\)\}/);
-  assert.match(customerScreen, /\{kushikatsuSelection\.quantity\}本をカートに追加/);
-  assert.doesNotMatch(customerScreen, /kushikatsuSelectionVariant\?\.name\} \{kushikatsuSelection\.quantity\}本をカートに追加/);
+  assert.match(customerScreen, /\{quantitySelection\.quantity\}\{quantitySelectionUnitLabel\}をカートに追加/);
+  assert.doesNotMatch(customerScreen, /KUSHIKATSU_MENU_ITEM_ID[\s\S]*openQuantitySelection/);
   assert.match(customerScreen, /taxExcludedYen\(item\.price\)/);
 });
 
-test("customer expands only the menu model for individual kushikatsu rows", () => {
-  assert.match(appSource, /function expandCustomerMenuItems/);
-  assert.match(appSource, /isKushikatsuVirtual: true/);
-  assert.match(appSource, /menuItemId: item\.id/);
+test("retired legacy kushikatsu variants stay isolated from current split products", () => {
+  const expansion = appSource.slice(appSource.indexOf("function expandCustomerMenuItems"), appSource.indexOf("function ", appSource.indexOf("function expandCustomerMenuItems") + 12));
+  assert.match(expansion, /item\.id !== KUSHIKATSU_MENU_ITEM_ID \|\| !item\.variants\?\.length/);
+  assert.match(expansion, /isKushikatsuVirtual: true/);
+  assert.match(expansion, /menuItemId: item\.id/);
   assert.match(customerScreen, /expandCustomerMenuItems\(menuItems\.filter/);
-  assert.match(customerScreen, /item\.isKushikatsuVirtual === true/);
-  assert.match(customerScreen, /本数を選ぶ/);
+  assert.match(customerScreen, /sourceItem\?\.isKushikatsuVirtual/);
   assert.doesNotMatch(appSource, /id: "special", name: "名物"/);
   assert.match(appSource, /\{ id: "special-hine", name: "名物", categoryIds/);
   assert.match(appSource, /\{ id: "special-reservation", name: "予約限定", categoryIds/);

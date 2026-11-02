@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { addCustomerCartSelection, customerCartItemSnapshot, customerCartRows, removeCustomerCartSelection } from "../src/customer-cart.js";
+import { addCustomerCartSelection, customerCartDecrementAction, customerCartItemSnapshot, customerCartRows, decrementCustomerCartSelection, removeCustomerCartSelection } from "../src/customer-cart.js";
 
 const regularItem = { id: "regular", name: "QA通常商品", categoryId: "qa" };
 const restrictedItem = { id: "restricted", name: "QA来店限定商品", categoryId: "qa" };
@@ -77,4 +77,69 @@ test("customer display snapshots contain only item text needed by the cart", () 
     customerVisibilityMode: "per_session",
     sessionId: "server-only",
   }), { name: "商品名", baseName: "正式商品名", categoryId: "qa" });
+});
+
+test("quantity item keeps its price and unit snapshot and flags changed quantity rules", () => {
+  const item = {
+    id: "fixture-sticks",
+    name: "架空串",
+    categoryId: "qa",
+    price: 225,
+    quantitySelectionEnabled: true,
+    minimumQuantity: 2,
+    initialQuantity: 2,
+    quantityStep: 1,
+    quantityUnitLabel: "本",
+  };
+  const cart = addCustomerCartSelection({}, item, {}, 2);
+  const [row] = customerCartRows(cart, [item]);
+  assert.equal(row.quantity, 2);
+  assert.equal(row.quantityUnitLabelSnapshot, "本");
+  assert.equal(row.unitPriceYenSnapshot, 225);
+  assert.equal(row.quantityConfigurationStale, false);
+
+  const changedItem = { ...item, minimumQuantity: 3, initialQuantity: 3 };
+  const [staleRow] = customerCartRows(cart, [changedItem]);
+  assert.equal(staleRow.quantityConfigurationStale, true);
+  assert.equal(staleRow.unitPriceYenSnapshot, 225);
+});
+
+test("cart decrement follows the configured minimum, step, and selling unit", () => {
+  const item = { id: "fixture-sticks", name: "架空串", price: 225, quantitySelectionEnabled: true, minimumQuantity: 2, initialQuantity: 2, quantityStep: 1, quantityUnitLabel: "本" };
+  const threeSticks = addCustomerCartSelection({}, item, {}, 3);
+  const [threeStickRow] = customerCartRows(threeSticks, [item]);
+  assert.deepEqual(customerCartDecrementAction(threeStickRow), { kind: "decrement", quantityStep: 1, unitLabel: "本" });
+  const twoSticks = decrementCustomerCartSelection(threeSticks, threeStickRow.key, item);
+  assert.equal(twoSticks[threeStickRow.key].quantity, 2);
+  assert.equal(customerCartDecrementAction(customerCartRows(twoSticks, [item])[0]).kind, "remove");
+  assert.deepEqual(decrementCustomerCartSelection(twoSticks, threeStickRow.key, item), {});
+
+  const steppedItem = { ...item, minimumQuantity: 2, initialQuantity: 2, quantityStep: 2 };
+  const fourSticks = addCustomerCartSelection({}, steppedItem, {}, 4);
+  const [fourStickRow] = customerCartRows(fourSticks, [steppedItem]);
+  const twoByStep = decrementCustomerCartSelection(fourSticks, fourStickRow.key, steppedItem);
+  assert.equal(twoByStep[fourStickRow.key].quantity, 2);
+});
+
+test("legacy cart row cannot be submitted for a product requiring a price assertion", () => {
+  const legacyCart = {
+    legacy: {
+      menuItemId: "fixture-chicken",
+      quantity: 2,
+      displaySnapshot: { name: "旧商品名", baseName: "旧商品名", categoryId: "qa" },
+    },
+  };
+  const currentItem = {
+    id: "fixture-chicken",
+    name: "新商品名",
+    categoryId: "qa",
+    price: 225,
+    quantitySelectionEnabled: false,
+    priceAssertionRequired: true,
+    quantityUnitLabel: "本",
+  };
+  const [row] = customerCartRows(legacyCart, [currentItem]);
+  assert.equal(row.quantityConfigurationStale, true);
+  assert.equal(row.quantity, 2);
+  assert.equal(row.item.name, "新商品名");
 });

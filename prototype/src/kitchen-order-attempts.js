@@ -11,7 +11,17 @@ function normalize(kind, request) {
     if (!Number.isSafeInteger(Number(request?.tableId)) || Number(request.tableId) < 1 || !UUID.test(request?.sessionId ?? "") || !Array.isArray(request.items) || !request.items.length) throw failure("追加注文の内容を確認してください。", "INVALID_KITCHEN_OPERATION");
     return { tableId: Number(request.tableId), sessionId: request.sessionId, items: request.items.map((item) => {
       if (!Number.isSafeInteger(Number(item.quantity)) || Number(item.quantity) < 1 || Number(item.quantity) > 99) throw failure("数量を確認してください。", "INVALID_KITCHEN_OPERATION");
-      if (typeof item.menuItemId === "string" && item.menuItemId.trim()) return { menuItemId: item.menuItemId.trim(), quantity: Number(item.quantity) };
+      const hasExpectedPrice = item.expectedUnitPriceYen !== undefined;
+      const hasExpectedUnit = item.expectedQuantityUnitLabel !== undefined;
+      if (hasExpectedPrice !== hasExpectedUnit
+        || (hasExpectedPrice && (!Number.isSafeInteger(item.expectedUnitPriceYen) || item.expectedUnitPriceYen < 0
+          || typeof item.expectedQuantityUnitLabel !== "string" || !item.expectedQuantityUnitLabel.trim()
+          || [...item.expectedQuantityUnitLabel].length > 8))) throw failure("商品価格と販売単位を確認してください。", "INVALID_KITCHEN_OPERATION");
+      if (typeof item.menuItemId === "string" && item.menuItemId.trim()) return {
+        menuItemId: item.menuItemId.trim(),
+        quantity: Number(item.quantity),
+        ...(hasExpectedPrice ? { expectedUnitPriceYen: item.expectedUnitPriceYen, expectedQuantityUnitLabel: item.expectedQuantityUnitLabel } : {}),
+      };
       if (typeof item.name !== "string" || !item.name.trim() || !Number.isSafeInteger(Number(item.priceYen)) || Number(item.priceYen) < 0) throw failure("商品名と金額を確認してください。", "INVALID_KITCHEN_OPERATION");
       return { name: item.name.trim(), priceYen: Number(item.priceYen), quantity: Number(item.quantity) };
     }) };

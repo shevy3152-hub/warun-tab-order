@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { adjustKitchenItemUnitPrice, adjustKitchenOrderItemQuantity, cancelKitchenCheckout, cancelKitchenOrderItem, closeKitchenTableSession, fetchKitchenCheckoutRequests, fetchKitchenOrderHistory, fetchKitchenOrders, fetchKitchenPaymentHistory, fetchKitchenSnapshot, kitchenAdditionRequestItem, kitchenApiConfigured, markKitchenItemServed, payKitchenCheckout, readyKitchenCheckout, resolveKitchenStaffCall, restoreKitchenOrderItem, saveKitchenCheckoutAdjustments, subscribeKitchenInvalidations, voidKitchenPayment } from "../src/kitchen-api.js";
+import { adjustKitchenItemUnitPrice, adjustKitchenOrderItemQuantity, cancelKitchenCheckout, cancelKitchenOrderItem, closeKitchenTableSession, createKitchenOrder, fetchKitchenCheckoutRequests, fetchKitchenOrderHistory, fetchKitchenOrders, fetchKitchenPaymentHistory, fetchKitchenSnapshot, kitchenAdditionRequestItem, kitchenApiConfigured, markKitchenItemServed, payKitchenCheckout, readyKitchenCheckout, resolveKitchenStaffCall, restoreKitchenOrderItem, saveKitchenCheckoutAdjustments, subscribeKitchenInvalidations, voidKitchenPayment } from "../src/kitchen-api.js";
 
 const TOKEN = "fixture-kitchen-runtime-token";
 
 test("kitchen addition request strips menu snapshot fields for registered menu items", () => {
   assert.deepEqual(kitchenAdditionRequestItem({ menuItemId: " edamame ", name: "枝豆", priceYen: 380, quantity: "2" }), { menuItemId: "edamame", quantity: 2 });
+  assert.deepEqual(kitchenAdditionRequestItem({ menuItemId: " chicken ", priceYen: 225, quantity: "2", expectedUnitPriceYen: 225, expectedQuantityUnitLabel: "本" }), { menuItemId: "chicken", quantity: 2, expectedUnitPriceYen: 225, expectedQuantityUnitLabel: "本" });
   assert.deepEqual(kitchenAdditionRequestItem({ name: "口頭フード", priceYen: "750", quantity: "2" }), { name: "口頭フード", priceYen: 750, quantity: 2 });
 });
 
@@ -92,6 +93,18 @@ test("kitchen serving update preserves API status and error code for the UI", as
   await assert.rejects(
     () => markKitchenItemServed({ env, orderId: "order-1", orderItemId: 11 }),
     (error) => error.status === 409 && error.code === "ORDER_CONFLICT",
+  );
+});
+
+test("kitchen menu addition tells staff to review stale price and unit intents", async () => {
+  const env = environment(async () => ({
+    ok: false,
+    status: 409,
+    async json() { return { error: { code: "MENU_ITEM_CONFIGURATION_CHANGED" } }; },
+  }));
+  await assert.rejects(
+    () => createKitchenOrder({ env, tableId: 1, sessionId: "session", clientOrderId: "00000000-0000-4000-8000-000000000001", items: [] }),
+    (error) => error.status === 409 && error.code === "MENU_ITEM_CONFIGURATION_CHANGED" && error.message.includes("入力し直してください"),
   );
 });
 

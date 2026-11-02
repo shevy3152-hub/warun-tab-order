@@ -174,6 +174,26 @@ function mapMenuVariant(variant, admin = false) {
   return response;
 }
 
+function mapQuantitySelection(item) {
+  const settings = {
+    quantitySelectionEnabled: item.quantitySelectionEnabled === undefined ? false : requireBoolean(item.quantitySelectionEnabled),
+    minimumQuantity: item.minimumQuantity === undefined ? 1 : requireInteger(item.minimumQuantity, 1),
+    initialQuantity: item.initialQuantity === undefined ? 1 : requireInteger(item.initialQuantity, 1),
+    quantityStep: item.quantityStep === undefined ? 1 : requireInteger(item.quantityStep, 1),
+    quantityUnitLabel: item.quantityUnitLabel === undefined ? '点' : requireString(item.quantityUnitLabel),
+    priceAssertionRequired: item.priceAssertionRequired === undefined ? false : requireBoolean(item.priceAssertionRequired),
+  };
+  if ([settings.minimumQuantity, settings.initialQuantity, settings.quantityStep].some((value) => value > 99)
+    || settings.initialQuantity < settings.minimumQuantity
+    || (settings.initialQuantity - settings.minimumQuantity) % settings.quantityStep !== 0
+    || [...settings.quantityUnitLabel].length > 8
+    || (!settings.quantitySelectionEnabled
+      && (settings.minimumQuantity !== 1 || settings.initialQuantity !== 1 || settings.quantityStep !== 1))) {
+    throw invalidDto();
+  }
+  return settings;
+}
+
 function mapServingOption(option, admin = false) {
   requireObject(option);
   const response = {
@@ -227,6 +247,7 @@ function mapCustomerMenuItem(item) {
     version: requireInteger(item.version, 1),
     variants: requireArray(item.variants).map((variant) => mapMenuVariant(variant)),
     servingOptions: requireArray(item.servingOptions).map((option) => mapServingOption(option)),
+    ...mapQuantitySelection(item),
   });
   optionalStringField(item, response, 'sectionKey');
   if (Object.hasOwn(item, 'detail')) response.detail = mapProductDetail(item.detail);
@@ -269,6 +290,7 @@ function mapAdminMenuItem(item) {
     detail: mapProductDetail(item.detail),
     variants: requireArray(item.variants).map((variant) => mapMenuVariant(variant, true)),
     servingOptions: requireArray(item.servingOptions).map((option) => mapServingOption(option, true)),
+    ...mapQuantitySelection(item),
   });
   optionalStringField(item, response, 'sectionKey');
   if (new Set(response.tableVisibilityTableIds).size !== response.tableVisibilityTableIds.length) throw invalidDto();
@@ -365,6 +387,7 @@ function mapStaffOrderItem(item) {
   for (const key of ['variantId', 'variantNameSnapshot', 'variantVolumeSnapshot', 'temperatureSnapshot', 'servingOptionId', 'servingOptionNameSnapshot']) {
     optionalStringField(item, response, key);
   }
+  if (item.quantityUnitLabelSnapshot != null) response.quantityUnitLabelSnapshot = requireString(item.quantityUnitLabelSnapshot);
   return response;
 }
 
@@ -409,6 +432,7 @@ function mapCustomerOrderItem(item) {
   if (Object.hasOwn(item, 'servedAtMs') && item.servedAtMs !== null) {
     response.servedAtMs = requireInteger(item.servedAtMs);
   }
+  if (item.quantityUnitLabelSnapshot != null) response.quantityUnitLabelSnapshot = requireString(item.quantityUnitLabelSnapshot);
   for (const key of ['variantId', 'variantNameSnapshot', 'variantVolumeSnapshot', 'temperatureSnapshot', 'servingOptionId', 'servingOptionNameSnapshot']) {
     optionalStringField(item, response, key);
   }
@@ -776,6 +800,7 @@ export function mapPaymentRecordResponse(record) {
       variantVolumeSnapshot: item.variantVolumeSnapshot === null ? null : requireString(item.variantVolumeSnapshot),
       temperatureSnapshot: item.temperatureSnapshot === null ? null : requireString(item.temperatureSnapshot),
       servingOptionNameSnapshot: item.servingOptionNameSnapshot === null ? null : requireString(item.servingOptionNameSnapshot),
+      quantityUnitLabelSnapshot: item.quantityUnitLabelSnapshot === null ? null : requireString(item.quantityUnitLabelSnapshot),
       unitPriceYenSnapshot: requireInteger(item.unitPriceYenSnapshot),
       adjustedUnitPriceYen: item.adjustedUnitPriceYen === null ? null : requireInteger(item.adjustedUnitPriceYen),
       currentUnitPriceYen: requireInteger(item.currentUnitPriceYen ?? item.unitPriceYenSnapshot),

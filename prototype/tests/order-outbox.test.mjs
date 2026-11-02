@@ -379,6 +379,34 @@ test("outbox success events map to a customer sent notice after recovery", () =>
     kind: "error",
     message: "端末の接続を確認できません。注文内容を保持しています。スタッフへ確認してください。",
   });
+  assert.deepEqual(customerOrderNoticeFromOutboxEvent({ clientOrderId: uuid(46), state: "review_required", displayState: "review_required", lastErrorCode: "MENU_ITEM_CONFIGURATION_CHANGED" }), {
+    kind: "error",
+    message: "商品価格または販売単位が変更されています。注文内容を保持しています。メニューを更新してスタッフへ確認してください。",
+  });
+});
+
+test("price-asserted order intents use schema v4 and stale configuration retains the exact outbox payload", async () => {
+  const calls = [];
+  const store = createMemoryOutbox();
+  const service = createOrderOutbox({
+    store,
+    transport: { ...successfulTransport("created", calls), async send(payload) { calls.push(payload); return { kind: "rejected", errorCode: "MENU_ITEM_CONFIGURATION_CHANGED" }; } },
+    idFactory: () => uuid(47),
+    autoRetry: false,
+  });
+  const request = { items: [{ menuItemId: "fixture-chicken", quantity: 2, expectedUnitPriceYen: 225, expectedQuantityUnitLabel: "本" }] };
+  const payload = createOrderPayload({ clientOrderId: uuid(48), ...request });
+  assert.equal(payload.schemaVersion, 4);
+  assert.deepEqual(payload.items[0], request.items[0]);
+  const record = await service.enqueue(request);
+  const result = await service.flush({ clientOrderId: record.clientOrderId });
+  const retained = await store.get(record.clientOrderId);
+  assert.equal(result.state, "review_required");
+  assert.equal(retained.state, "review_required");
+  assert.equal(retained.lastErrorCode, "MENU_ITEM_CONFIGURATION_CHANGED");
+  assert.deepEqual(retained.payload.items, request.items);
+  assert.equal((await service.flush({ clientOrderId: record.clientOrderId, force: true })).state, "review_required");
+  assert.equal(calls.length, 1);
 });
 
 test("stale outbox submissions are retained in a non-retrying staff-review state", async () => {

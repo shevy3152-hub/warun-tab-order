@@ -203,6 +203,7 @@ function mapOrderItem(row, cancellationHistory = [], quantityHistory = []) {
   if (row.temperature_snapshot !== null) item.temperatureSnapshot = row.temperature_snapshot;
   if (row.serving_option_id !== null) item.servingOptionId = row.serving_option_id;
   if (row.serving_option_name_snapshot !== null) item.servingOptionNameSnapshot = row.serving_option_name_snapshot;
+  if (row.quantity_unit_label_snapshot !== null) item.quantityUnitLabelSnapshot = row.quantity_unit_label_snapshot;
   return item;
 }
 
@@ -383,7 +384,8 @@ export function createEventRepository({ database } = {}) {
           variant_volume_snapshot,
           temperature_snapshot,
           serving_option_id,
-          serving_option_name_snapshot
+          serving_option_name_snapshot,
+          quantity_unit_label_snapshot
         FROM order_items
         WHERE order_id = ?
         ORDER BY is_cancelled, is_served, line_index, order_item_id

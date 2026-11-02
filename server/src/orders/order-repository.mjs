@@ -10,7 +10,6 @@ const MAX_ITEMS = 50;
 const MAX_QUANTITY = 99;
 const MAX_LINE_TOTAL_YEN = 100_000_000;
 const MAX_ORDER_TOTAL_YEN = 100_000_000;
-const MIN_QUANTITY_MENU_ITEM_IDS = new Set(['food-kushi-kushikatsu']);
 const TEMPERATURES = new Set(['冷酒', '燗酒']);
 const UUID_V4_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const VISIT_CONTEXT_PATTERN = /^v1_[0-9a-f]{64}$/;
@@ -76,6 +75,10 @@ function normalizeKitchenAdditionItems(items) {
     const name = item.name == null ? null : String(item.name).trim();
     const priceYen = item.priceYen == null ? null : item.priceYen;
     const quantity = item.quantity;
+    const expectedUnitPriceYen = item.expectedUnitPriceYen;
+    const expectedQuantityUnitLabel = item.expectedQuantityUnitLabel;
+    const hasExpectedPrice = expectedUnitPriceYen !== undefined;
+    const hasExpectedUnit = expectedQuantityUnitLabel !== undefined;
     if ((menuItemId === null) === (name === null)) {
       throw repositoryError(ORDER_ERROR_CODES.INVALID_ORDER_REQUEST, `items[${index}] must be a menu item or a custom item.`);
     }
@@ -88,7 +91,19 @@ function normalizeKitchenAdditionItems(items) {
     if (name !== null && (!Number.isSafeInteger(priceYen) || priceYen < 0 || priceYen > 10_000_000)) {
       throw repositoryError(ORDER_ERROR_CODES.INVALID_ORDER_REQUEST, `items[${index}].priceYen must be a non-negative integer.`);
     }
-    return { menuItemId, name, priceYen, quantity };
+    if (hasExpectedPrice !== hasExpectedUnit
+      || (hasExpectedPrice && (!Number.isSafeInteger(expectedUnitPriceYen) || expectedUnitPriceYen < 0
+        || typeof expectedQuantityUnitLabel !== 'string' || !expectedQuantityUnitLabel.trim()
+        || [...expectedQuantityUnitLabel].length > 8))) {
+      throw repositoryError(ORDER_ERROR_CODES.INVALID_ORDER_REQUEST, `items[${index}] has an invalid expected price or unit label.`);
+    }
+    if (menuItemId === null && hasExpectedPrice) {
+      throw repositoryError(ORDER_ERROR_CODES.INVALID_ORDER_REQUEST, `items[${index}] cannot assert a registered menu price.`);
+    }
+    return {
+      menuItemId, name, priceYen, quantity,
+      ...(hasExpectedPrice ? { expectedUnitPriceYen, expectedQuantityUnitLabel } : {}),
+    };
   });
 }
 
@@ -113,6 +128,10 @@ function normalizeItems(items) {
     const variantId = item.variantId ?? null;
     const servingOptionId = item.servingOptionId ?? null;
     const temperature = item.temperature ?? null;
+    const expectedUnitPriceYen = item.expectedUnitPriceYen;
+    const expectedQuantityUnitLabel = item.expectedQuantityUnitLabel;
+    const hasExpectedUnitPrice = expectedUnitPriceYen !== undefined;
+    const hasExpectedUnitLabel = expectedQuantityUnitLabel !== undefined;
     if (
       typeof menuItemId !== 'string'
       || menuItemId.trim() === ''
@@ -154,6 +173,12 @@ function normalizeItems(items) {
         `items[${index}] cannot combine a price variant and a serving option.`,
       );
     }
+    if (hasExpectedUnitPrice !== hasExpectedUnitLabel
+      || (hasExpectedUnitPrice && (!Number.isSafeInteger(expectedUnitPriceYen) || expectedUnitPriceYen < 0
+        || typeof expectedQuantityUnitLabel !== 'string' || !expectedQuantityUnitLabel.trim()
+        || [...expectedQuantityUnitLabel].length > 8))) {
+      throw repositoryError(ORDER_ERROR_CODES.INVALID_ORDER_REQUEST, `items[${index}] has an invalid expected price or unit label.`);
+    }
 
     const selectionKey = `${menuItemId}\u0000${variantId ?? ''}\u0000${servingOptionId ?? ''}\u0000${temperature ?? ''}`;
     if (seenSelections.has(selectionKey)) {
@@ -164,7 +189,14 @@ function normalizeItems(items) {
     }
     seenSelections.add(selectionKey);
 
-    return { menuItemId, quantity, variantId, servingOptionId, temperature };
+    return {
+      menuItemId,
+      quantity,
+      variantId,
+      servingOptionId,
+      temperature,
+      ...(hasExpectedUnitPrice ? { expectedUnitPriceYen, expectedQuantityUnitLabel } : {}),
+    };
   });
 
   return normalizedItems.sort((left, right) => {
@@ -193,8 +225,8 @@ function normalizeOrderRequest(request) {
   }
 
   const schemaVersion = request.schemaVersion ?? 1;
-  if (![1, 2, 3].includes(schemaVersion)) {
-    throw repositoryError(ORDER_ERROR_CODES.INVALID_ORDER_REQUEST, 'schemaVersion must be 1, 2, or 3.');
+  if (![1, 2, 3, 4].includes(schemaVersion)) {
+    throw repositoryError(ORDER_ERROR_CODES.INVALID_ORDER_REQUEST, 'schemaVersion must be 1, 2, 3, or 4.');
   }
   const items = normalizeItems(request.items);
   if (schemaVersion === 1 && items.some((item) => item.variantId || item.servingOptionId)) {
@@ -202,6 +234,9 @@ function normalizeOrderRequest(request) {
   }
   if (schemaVersion < 3 && items.some((item) => item.temperature)) {
     throw repositoryError(ORDER_ERROR_CODES.INVALID_ORDER_REQUEST, 'Temperature selections require schemaVersion 3.');
+  }
+  if (schemaVersion < 4 && items.some((item) => Object.hasOwn(item, 'expectedUnitPriceYen'))) {
+    throw repositoryError(ORDER_ERROR_CODES.INVALID_ORDER_REQUEST, 'Expected price/unit assertions require schemaVersion 4.');
   }
   const visitContextId = request.visitContextId ?? null;
   if (visitContextId !== null && (typeof visitContextId !== 'string' || !VISIT_CONTEXT_PATTERN.test(visitContextId))) {
@@ -218,12 +253,13 @@ function normalizeOrderRequest(request) {
 
 function buildCanonicalIntent({ schemaVersion, authenticatedDeviceId, visitContextId, items }) {
   if (visitContextId) {
-    const canonicalItems = items.map(({ menuItemId, quantity, variantId, servingOptionId, temperature }) => ({
+    const canonicalItems = items.map(({ menuItemId, quantity, variantId, servingOptionId, temperature, expectedUnitPriceYen, expectedQuantityUnitLabel }) => ({
       menuItemId,
       quantity,
       ...(variantId ? { variantId } : {}),
       ...(servingOptionId ? { servingOptionId } : {}),
       ...(temperature ? { temperature } : {}),
+      ...(expectedUnitPriceYen !== undefined ? { expectedUnitPriceYen, expectedQuantityUnitLabel } : {}),
     }));
     return JSON.stringify({
       fingerprintVersion: 4,
@@ -241,14 +277,15 @@ function buildCanonicalIntent({ schemaVersion, authenticatedDeviceId, visitConte
     });
   }
   return JSON.stringify({
-    fingerprintVersion: schemaVersion === 3 ? 3 : 2,
+    fingerprintVersion: schemaVersion === 4 ? 4 : schemaVersion === 3 ? 3 : 2,
     authenticatedDeviceId,
-    items: items.map(({ menuItemId, quantity, variantId, servingOptionId, temperature }) => ({
+    items: items.map(({ menuItemId, quantity, variantId, servingOptionId, temperature, expectedUnitPriceYen, expectedQuantityUnitLabel }) => ({
       menuItemId,
       quantity,
       ...(variantId ? { variantId } : {}),
       ...(servingOptionId ? { servingOptionId } : {}),
       ...(temperature ? { temperature } : {}),
+      ...(expectedUnitPriceYen !== undefined ? { expectedUnitPriceYen, expectedQuantityUnitLabel } : {}),
     })),
   });
 }
@@ -359,6 +396,7 @@ function mapOrderItemRow(row, cancellationHistory = [], quantityHistory = []) {
     adjustedUnitPriceYen: amounts.adjustedUnitPriceYen,
     currentUnitPriceYen: amounts.currentUnitPriceYen,
     quantity: amounts.quantity,
+    quantityUnitLabelSnapshot: row.quantity_unit_label_snapshot ?? null,
     quantityReduced: amounts.quantityReduced,
     billableQuantity: amounts.billableQuantity,
     lineTotalYenSnapshot: amounts.lineTotalYenSnapshot,
@@ -446,6 +484,7 @@ export function createOrderRepository({ database, now = Date.now, idFactory = ra
           ,temperature_snapshot
           ,serving_option_id
           ,serving_option_name_snapshot
+          ,quantity_unit_label_snapshot
         FROM order_items
         WHERE order_id = ?
         ORDER BY line_index
@@ -619,7 +658,7 @@ export function createOrderRepository({ database, now = Date.now, idFactory = ra
                oi.is_served, oi.is_cancelled, oi.served_at_ms,
                oi.served_by_device_id, oi.variant_id, oi.variant_name_snapshot,
                oi.variant_volume_snapshot, oi.temperature_snapshot,
-               oi.serving_option_id, oi.serving_option_name_snapshot,
+               oi.serving_option_id, oi.serving_option_name_snapshot, oi.quantity_unit_label_snapshot,
                o.customer_device_id, o.table_id, o.table_number_snapshot,
                o.session_id, o.status, o.completed_at_ms, o.total_amount_yen,
                o.accepted_at_ms, o.version, s.closed_at_ms,
@@ -762,6 +801,7 @@ export function createOrderRepository({ database, now = Date.now, idFactory = ra
       findMenuItem: database.prepare(`
         SELECT
           menu_item_id,
+          category_id,
           formal_name,
           kitchen_alias,
           price_yen,
@@ -770,6 +810,12 @@ export function createOrderRepository({ database, now = Date.now, idFactory = ra
           is_active,
           customer_visibility_mode,
           table_visibility_mode
+          ,quantity_selection_enabled
+          ,minimum_quantity
+          ,initial_quantity
+          ,quantity_step
+          ,quantity_unit_label
+          ,price_assertion_required
         FROM menu_items
         WHERE menu_item_id = ?
       `),
@@ -842,9 +888,10 @@ export function createOrderRepository({ database, now = Date.now, idFactory = ra
           temperature_snapshot,
           serving_option_id,
           serving_option_name_snapshot,
+          quantity_unit_label_snapshot,
           created_at_ms,
           updated_at_ms
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `),
       insertEvent: database.prepare(`
         INSERT INTO event_log (
@@ -1056,13 +1103,18 @@ export function createOrderRepository({ database, now = Date.now, idFactory = ra
             throw repositoryError(ORDER_ERROR_CODES.MENU_ITEM_NOT_FOUND, `Menu variant is not available: ${item.variantId}`);
           }
           let availableTemperatures = ['冷酒'];
+          let hasConfiguredTemperatures = false;
           try {
             const parsed = JSON.parse(variant.temperature_options_json ?? '[]');
-            if (Array.isArray(parsed) && parsed.length > 0 && parsed.every((temperature) => TEMPERATURES.has(temperature))) availableTemperatures = parsed;
+            if (Array.isArray(parsed) && parsed.length > 0 && parsed.every((temperature) => TEMPERATURES.has(temperature))) {
+              availableTemperatures = parsed;
+              hasConfiguredTemperatures = true;
+            }
           } catch {
             // Keep malformed legacy data safe by allowing only cold service.
           }
-          if (normalized.schemaVersion === 3 && !item.temperature) {
+          if ((normalized.schemaVersion === 3 && !item.temperature)
+            || (normalized.schemaVersion === 4 && menuItem.category_id === 'sake' && hasConfiguredTemperatures && !item.temperature)) {
             throw repositoryError(ORDER_ERROR_CODES.INVALID_ORDER_REQUEST, `A temperature is required: ${item.menuItemId}`);
           }
           if (item.temperature && !availableTemperatures.includes(item.temperature)) {
@@ -1082,14 +1134,28 @@ export function createOrderRepository({ database, now = Date.now, idFactory = ra
         if (activeVariantCount > 0 && activeServingOptionCount > 0) {
           throw repositoryError(ORDER_ERROR_CODES.DATABASE_FAILURE, `Menu item configuration is ambiguous: ${item.menuItemId}`);
         }
-        if (MIN_QUANTITY_MENU_ITEM_IDS.has(item.menuItemId) && item.quantity < 2) {
+        const unitPriceYen = variant?.price_yen ?? menuItem.price_yen;
+        const quantitySelectionEnabled = menuItem.quantity_selection_enabled === 1;
+        const configuredUnitLabel = menuItem.quantity_unit_label;
+        if (quantitySelectionEnabled && activeServingOptionCount > 0) {
+          throw repositoryError(ORDER_ERROR_CODES.DATABASE_FAILURE, `Quantity selection conflicts with serving options: ${item.menuItemId}`);
+        }
+        if (((quantitySelectionEnabled || menuItem.price_assertion_required === 1) && item.expectedUnitPriceYen === undefined)
+          || (item.expectedUnitPriceYen !== undefined
+            && (item.expectedUnitPriceYen !== unitPriceYen || item.expectedQuantityUnitLabel !== configuredUnitLabel))) {
           throw repositoryError(
-            ORDER_ERROR_CODES.INVALID_ORDER_REQUEST,
-            '串カツは各種類2本からご注文いただけます',
+            ORDER_ERROR_CODES.MENU_ITEM_CONFIGURATION_CHANGED,
+            'The product price or selling unit changed after it was added. Review the saved order before retrying.',
           );
         }
-
-        const unitPriceYen = variant?.price_yen ?? menuItem.price_yen;
+        if (quantitySelectionEnabled
+          && (item.quantity < menuItem.minimum_quantity
+            || (item.quantity - menuItem.minimum_quantity) % menuItem.quantity_step !== 0)) {
+          throw repositoryError(
+            ORDER_ERROR_CODES.INVALID_ORDER_REQUEST,
+            `This product requires at least ${menuItem.minimum_quantity} ${configuredUnitLabel}; the quantity must follow its configured step.`,
+          );
+        }
         const lineTotalYen = unitPriceYen * item.quantity;
         if (!Number.isSafeInteger(lineTotalYen) || lineTotalYen > MAX_LINE_TOTAL_YEN) {
           throw repositoryError(
@@ -1118,6 +1184,7 @@ export function createOrderRepository({ database, now = Date.now, idFactory = ra
           ...(item.temperature ? { temperatureSnapshot: item.temperature } : {}),
           servingOptionId: servingOption?.serving_option_id ?? null,
           servingOptionNameSnapshot: servingOption?.name ?? null,
+          quantityUnitLabelSnapshot: quantitySelectionEnabled || configuredUnitLabel !== '点' ? configuredUnitLabel : null,
           quantity: item.quantity,
           lineTotalYen,
         };
@@ -1152,6 +1219,7 @@ export function createOrderRepository({ database, now = Date.now, idFactory = ra
           snapshot.temperatureSnapshot ?? null,
           snapshot.servingOptionId,
           snapshot.servingOptionNameSnapshot,
+          snapshot.quantityUnitLabelSnapshot,
           acceptedAtMs,
           acceptedAtMs,
         );
@@ -1290,9 +1358,22 @@ export function createOrderRepository({ database, now = Date.now, idFactory = ra
           if (!menuItem || menuItem.is_active !== 1) throw repositoryError(ORDER_ERROR_CODES.MENU_ITEM_NOT_FOUND, `Menu item is not available: ${item.menuItemId}`);
           if (menuItem.is_sold_out === 1) throw repositoryError(ORDER_ERROR_CODES.MENU_ITEM_SOLD_OUT, `Menu item is sold out: ${item.menuItemId}`);
           const unitPriceYen = Number(menuItem.price_yen);
-          return { lineIndex, menuItemId: menuItem.menu_item_id, formalNameSnapshot: menuItem.formal_name, kitchenAliasSnapshot: menuItem.kitchen_alias, unitPriceYenSnapshot: unitPriceYen, quantity: item.quantity, lineTotalYen: unitPriceYen * item.quantity };
+          if (menuItem.quantity_selection_enabled === 1
+            && (item.quantity < menuItem.minimum_quantity
+              || (item.quantity - menuItem.minimum_quantity) % menuItem.quantity_step !== 0)) {
+            throw repositoryError(ORDER_ERROR_CODES.INVALID_ORDER_REQUEST, `This product requires at least ${menuItem.minimum_quantity} ${menuItem.quantity_unit_label} and follows increments of ${menuItem.quantity_step}.`);
+          }
+          if (((menuItem.quantity_selection_enabled === 1 || menuItem.price_assertion_required === 1) && item.expectedUnitPriceYen === undefined)
+            || (item.expectedUnitPriceYen !== undefined
+              && (item.expectedUnitPriceYen !== unitPriceYen || item.expectedQuantityUnitLabel !== menuItem.quantity_unit_label))) {
+            throw repositoryError(
+              ORDER_ERROR_CODES.MENU_ITEM_CONFIGURATION_CHANGED,
+              'The product price or selling unit changed after this addition was prepared. Review it before retrying.',
+            );
+          }
+          return { lineIndex, menuItemId: menuItem.menu_item_id, formalNameSnapshot: menuItem.formal_name, kitchenAliasSnapshot: menuItem.kitchen_alias, unitPriceYenSnapshot: unitPriceYen, quantityUnitLabelSnapshot: menuItem.quantity_selection_enabled === 1 || menuItem.quantity_unit_label !== '点' ? menuItem.quantity_unit_label : null, quantity: item.quantity, lineTotalYen: unitPriceYen * item.quantity };
         }
-        return { lineIndex, menuItemId: null, formalNameSnapshot: item.name, kitchenAliasSnapshot: item.name.slice(0, 40), unitPriceYenSnapshot: item.priceYen, quantity: item.quantity, lineTotalYen: item.priceYen * item.quantity };
+        return { lineIndex, menuItemId: null, formalNameSnapshot: item.name, kitchenAliasSnapshot: item.name.slice(0, 40), unitPriceYenSnapshot: item.priceYen, quantityUnitLabelSnapshot: null, quantity: item.quantity, lineTotalYen: item.priceYen * item.quantity };
       });
       const totalAmountYen = snapshots.reduce((sum, item) => sum + item.lineTotalYen, 0);
       if (!Number.isSafeInteger(totalAmountYen) || totalAmountYen > MAX_ORDER_TOTAL_YEN) throw repositoryError(ORDER_ERROR_CODES.INVALID_ORDER_REQUEST, 'Order total exceeds the supported limit.');
@@ -1300,7 +1381,7 @@ export function createOrderRepository({ database, now = Date.now, idFactory = ra
       const requestFingerprint = fingerprintCanonicalIntent(canonicalRequestJson);
       statements.insertKitchenAdditionOrder.run(orderId, normalizedClientOrderId, requestFingerprint, canonicalRequestJson, customerDevice.assigned_customer_device_id, normalizedTableId, normalizedSessionId, normalizedTableId, totalAmountYen, acceptedAtMs, principal.deviceId);
       const resultItems = snapshots.map((snapshot) => {
-        const insertion = statements.insertOrderItem.run(orderId, snapshot.lineIndex, snapshot.menuItemId, snapshot.formalNameSnapshot, snapshot.kitchenAliasSnapshot, snapshot.unitPriceYenSnapshot, snapshot.quantity, snapshot.lineTotalYen, null, null, null, null, null, null, acceptedAtMs, acceptedAtMs);
+        const insertion = statements.insertOrderItem.run(orderId, snapshot.lineIndex, snapshot.menuItemId, snapshot.formalNameSnapshot, snapshot.kitchenAliasSnapshot, snapshot.unitPriceYenSnapshot, snapshot.quantity, snapshot.lineTotalYen, null, null, null, null, null, null, snapshot.quantityUnitLabelSnapshot, acceptedAtMs, acceptedAtMs);
         return { orderItemId: Number(insertion.lastInsertRowid), ...snapshot, adjustedUnitPriceYen: null, currentUnitPriceYen: snapshot.unitPriceYenSnapshot, lineTotalYenSnapshot: snapshot.lineTotalYen, isServed: false, servedAtMs: null };
       });
       if (checkout?.status === 'requested') statements.updateRequestedCheckoutTotal.run(orderPricing.getSessionTotalYen(normalizedSessionId), acceptedAtMs, checkout.checkout_request_id);
@@ -1824,7 +1905,7 @@ export function createOrderRepository({ database, now = Date.now, idFactory = ra
           target.kitchen_alias_snapshot, unitPriceYen, 1, unitPriceYen,
           target.variant_id, target.variant_name_snapshot, target.variant_volume_snapshot,
           target.temperature_snapshot, target.serving_option_id,
-          target.serving_option_name_snapshot, changedAtMs, changedAtMs,
+          target.serving_option_name_snapshot, target.quantity_unit_label_snapshot, changedAtMs, changedAtMs,
         );
         const newOrderItemId = Number(lineInsertion.lastInsertRowid);
         statements.insertQuantityEvent.run(

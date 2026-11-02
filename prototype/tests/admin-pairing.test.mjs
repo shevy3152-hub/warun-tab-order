@@ -96,6 +96,11 @@ test('saveAdminMenuItem sends the authenticated optimistic catalog write contrac
       description: '説明',
       price: 880,
       isSoldOut: false,
+      quantitySelectionEnabled: true,
+      minimumQuantity: 2,
+      initialQuantity: 2,
+      quantityStep: 1,
+      quantityUnitLabel: '本',
       sortOrder: 2,
       detail: { enabled: true, showImageInList: true, reading: 'じゅんまいぎんじょう', aroma: '穏やか', sweetness: 'やや辛口', finish: 'きれい' },
       variants: [],
@@ -114,6 +119,9 @@ test('saveAdminMenuItem sends the authenticated optimistic catalog write contrac
   assert.equal(JSON.parse(captured.options.body).detail.aroma, '穏やか');
   assert.equal(JSON.parse(captured.options.body).detail.showImageInList, true);
   assert.equal(JSON.parse(captured.options.body).detail.reading, 'じゅんまいぎんじょう');
+  assert.deepEqual(Object.fromEntries(['quantitySelectionEnabled', 'minimumQuantity', 'initialQuantity', 'quantityStep', 'quantityUnitLabel'].map((key) => [key, JSON.parse(captured.options.body)[key]])), {
+    quantitySelectionEnabled: true, minimumQuantity: 2, initialQuantity: 2, quantityStep: 1, quantityUnitLabel: '本',
+  });
   assert.equal(result.version, 5);
 });
 

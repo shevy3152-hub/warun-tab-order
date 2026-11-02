@@ -493,6 +493,11 @@ export async function saveAdminMenuItem({ env = globalThis, item, expectedVersio
       tableVisibilityTableIds: item.tableVisibilityMode === "all_tables" ? [] : [...(item.tableVisibilityTableIds ?? [])],
       isActive: item.isActive !== false,
       sortOrder: item.sortOrder ?? 0,
+      quantitySelectionEnabled: item.quantitySelectionEnabled,
+      minimumQuantity: item.minimumQuantity,
+      initialQuantity: item.initialQuantity,
+      quantityStep: item.quantityStep,
+      quantityUnitLabel: item.quantityUnitLabel,
       imageUri: item.imageUri ?? null,
       sectionKey: item.sectionKey ?? null,
       detail: {

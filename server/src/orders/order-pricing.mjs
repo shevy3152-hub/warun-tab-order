@@ -57,6 +57,7 @@ export function createOrderPricingRepository(database) {
       oi.temperature_snapshot,
       oi.serving_option_id,
       oi.serving_option_name_snapshot,
+      oi.quantity_unit_label_snapshot,
       oi.unit_price_yen_snapshot,
       oi.adjusted_unit_price_yen,
       oi.quantity,

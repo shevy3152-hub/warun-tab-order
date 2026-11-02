@@ -35,6 +35,13 @@ const EXPECTED_TABLES = [
   'customer_order_start_notice_settings',
 ];
 
+function restoreV24OrderItemSnapshotTrigger(database) {
+  const migration = readFileSync(new URL('../../docs/schema-v4-migration.sql', import.meta.url), 'utf8');
+  const trigger = migration.match(/CREATE TRIGGER trg_order_items_immutable_snapshots[\s\S]*?END;/)?.[0];
+  assert.ok(trigger, 'the v24 snapshot trigger fixture must exist');
+  database.exec(trigger);
+}
+
 const EXPECTED_INDEXES = [
   'idx_order_item_price_adjustments_item',
   'idx_order_items_order_cancelled_served',
@@ -193,19 +200,19 @@ function createV14Database(databasePath) {
   return database;
 }
 
-test('new database creates its parent directory and applies schema v24', async () => {
+test('new database creates its parent directory and applies schema v25', async () => {
   await withTemporaryDatabase(({ databasePath }) => {
     const connection = initializeDatabase({ databasePath });
     assert.equal(existsSync(databasePath), true);
-    assert.equal(connection.schemaVersion, 24);
+    assert.equal(connection.schemaVersion, 25);
     connection.close();
   });
 });
 
-test('new database records PRAGMA user_version = 24 and customer notice defaults', async () => {
+test('new database records PRAGMA user_version = 25 and customer notice defaults', async () => {
   await withTemporaryDatabase(({ databasePath }) => {
     const connection = initializeDatabase({ databasePath });
-    assert.equal(pragmaValue(connection.database, 'user_version'), 24);
+    assert.equal(pragmaValue(connection.database, 'user_version'), 25);
     assert.deepEqual({ ...connection.database.prepare('SELECT heading_text, body_text, version FROM customer_order_start_notice_settings WHERE singleton_id = 1').get() }, {
       heading_text: 'ご注文の前にご確認ください',
       body_text: '20歳未満の入店禁止\n飲酒運転しません・させません\nSNS投稿・LIVE配信禁止\nお支払いは現金のみ',
@@ -217,7 +224,7 @@ test('new database records PRAGMA user_version = 24 and customer notice defaults
   });
 });
 
-test('schema v22 through v24 keeps catalog rows and initializes archive state to NULL', async () => {
+test('schema v22 through v25 keeps catalog rows and initializes new settings safely', async () => {
   await withTemporaryDatabase(({ databasePath }) => {
     const initial = initializeDatabase({ databasePath });
     const database = initial.database;
@@ -225,20 +232,97 @@ test('schema v22 through v24 keeps catalog rows and initializes archive state to
     database.prepare(`INSERT INTO menu_items (menu_item_id, category_id, formal_name, kitchen_alias, description, price_yen, is_sold_out, is_active, sort_order, image_uri, version, created_at_ms, updated_at_ms, section_key) VALUES ('migration-product', 'migration-fixture', '保持する商品', '保持名', '保持する説明', 480, 0, 1, 9, '/menu-images/keep.webp', 4, 101, 201, 'dish')`).run();
     initial.close();
 
-    // Recreate the v22 schema shape in this isolated fixture to exercise the v22->v24 runners.
+    // Recreate the v22 schema shape in this isolated fixture to exercise the v22->v25 runners.
     const v22 = new DatabaseSync(databasePath);
-    v22.exec('DROP TABLE customer_theme_assets; DROP INDEX idx_menu_items_archived_category; ALTER TABLE menu_items DROP COLUMN archived_at_ms; PRAGMA user_version = 22;');
+    v22.exec(`
+      DROP TABLE customer_theme_assets;
+      DROP INDEX idx_menu_items_archived_category;
+      DROP TRIGGER trg_order_items_immutable_snapshots;
+      ALTER TABLE menu_items DROP COLUMN archived_at_ms;
+      ALTER TABLE menu_items DROP COLUMN quantity_unit_label;
+      ALTER TABLE menu_items DROP COLUMN price_assertion_required;
+      ALTER TABLE menu_items DROP COLUMN quantity_step;
+      ALTER TABLE menu_items DROP COLUMN initial_quantity;
+      ALTER TABLE menu_items DROP COLUMN minimum_quantity;
+      ALTER TABLE menu_items DROP COLUMN quantity_selection_enabled;
+      ALTER TABLE order_items DROP COLUMN quantity_unit_label_snapshot;
+      ALTER TABLE payment_order_items DROP COLUMN quantity_unit_label_snapshot;
+      PRAGMA user_version = 22;
+    `);
+    restoreV24OrderItemSnapshotTrigger(v22);
     v22.close();
 
     const migrated = initializeDatabase({ databasePath });
     try {
-      assert.equal(migrated.schemaVersion, 24);
-      assert.equal(pragmaValue(migrated.database, 'user_version'), 24);
+      assert.equal(migrated.schemaVersion, 25);
+      assert.equal(pragmaValue(migrated.database, 'user_version'), 25);
       assert.deepEqual({ ...migrated.database.prepare(`SELECT category_id, formal_name, kitchen_alias, description, price_yen, is_active, sort_order, image_uri, version, archived_at_ms FROM menu_items WHERE menu_item_id = 'migration-product'`).get() }, {
         category_id: 'migration-fixture', formal_name: '保持する商品', kitchen_alias: '保持名', description: '保持する説明', price_yen: 480, is_active: 1, sort_order: 9, image_uri: '/menu-images/keep.webp', version: 4, archived_at_ms: null,
       });
       assert.equal(migrated.database.prepare('PRAGMA integrity_check').get().integrity_check, 'ok');
+      assert.deepEqual({ ...migrated.database.prepare("SELECT quantity_selection_enabled, minimum_quantity, initial_quantity, quantity_step, quantity_unit_label FROM menu_items WHERE menu_item_id = 'migration-product'").get() }, {
+        quantity_selection_enabled: 0, minimum_quantity: 1, initial_quantity: 1, quantity_step: 1, quantity_unit_label: '点',
+      });
       assert.deepEqual(migrated.database.prepare('PRAGMA foreign_key_check').all(), []);
+    } finally { migrated.close(); }
+  });
+});
+
+test('schema v25 changes only the confirmed menu rows and preserves old order snapshots', async () => {
+  await withTemporaryDatabase(({ databasePath }) => {
+    const initial = initializeDatabase({ databasePath });
+    const database = initial.database;
+    seedOrderParents(database);
+    database.prepare(`INSERT INTO categories (category_id, name, sort_order, is_visible, version, created_at_ms, updated_at_ms) VALUES ('food-chicken', '鶏料理', 1, 1, 1, 1000, 1000)`).run();
+    database.prepare(`INSERT INTO categories (category_id, name, sort_order, is_visible, version, created_at_ms, updated_at_ms) VALUES ('food-kushi', '串', 2, 1, 1, 1000, 1000)`).run();
+    database.prepare(`INSERT INTO menu_items (menu_item_id, category_id, formal_name, kitchen_alias, price_yen, is_sold_out, is_active, sort_order, created_at_ms, updated_at_ms) VALUES ('food-chicken-torikawa', 'food-chicken', 'ぱりぱり鶏皮（2本）', '鶏皮2本', 450, 1, 1, 1, 1000, 1000)`).run();
+    const kushiRows = [
+      ['menu-1e155a5f-bcae-4813-8a4c-e2f477d5d521', '串カツ　ソース', 180],
+      ['menu-7c38047d-94c2-478b-946f-bd330011f571', '串カツ　塩レモン', 180],
+      ['menu-878962fb-4c69-4858-84ba-7ac4e922097c', '串カツ　みそ', 190],
+      ['menu-cb34634d-7320-4eb6-ac37-f65e1a33c493', '串カツ　おろしポン酢', 200],
+    ];
+    const insertProduct = database.prepare(`INSERT INTO menu_items (menu_item_id, category_id, formal_name, kitchen_alias, price_yen, is_sold_out, is_active, sort_order, created_at_ms, updated_at_ms) VALUES (?, 'food-kushi', ?, ?, ?, 0, 1, 1, 1000, 1000)`);
+    for (const [id, name, price] of kushiRows) insertProduct.run(id, name, name, price);
+    insertProduct.run('food-kushi-kushikatsu', '旧串カツ', '旧串カツ', 180);
+    database.prepare(`UPDATE menu_items SET is_active = 0 WHERE menu_item_id = 'food-kushi-kushikatsu'`).run();
+    insertOrder(database);
+    database.prepare(`INSERT INTO order_items (order_id, line_index, menu_item_id, formal_name_snapshot, kitchen_alias_snapshot, unit_price_yen_snapshot, quantity, line_total_yen, created_at_ms, updated_at_ms) VALUES (?, 1, 'food-chicken-torikawa', 'ぱりぱり鶏皮（2本）', '鶏皮2本', 450, 1, 450, 2000, 2000)`).run(ORDER_ID);
+    initial.close();
+
+    const v24 = new DatabaseSync(databasePath);
+    v24.exec(`
+      DROP TRIGGER trg_order_items_immutable_snapshots;
+      ALTER TABLE menu_items DROP COLUMN price_assertion_required;
+      ALTER TABLE menu_items DROP COLUMN quantity_unit_label;
+      ALTER TABLE menu_items DROP COLUMN quantity_step;
+      ALTER TABLE menu_items DROP COLUMN initial_quantity;
+      ALTER TABLE menu_items DROP COLUMN minimum_quantity;
+      ALTER TABLE menu_items DROP COLUMN quantity_selection_enabled;
+      ALTER TABLE order_items DROP COLUMN quantity_unit_label_snapshot;
+      ALTER TABLE payment_order_items DROP COLUMN quantity_unit_label_snapshot;
+      PRAGMA user_version = 24;
+    `);
+    restoreV24OrderItemSnapshotTrigger(v24);
+    v24.close();
+
+    const migrated = initializeDatabase({ databasePath });
+    try {
+      const migratedDb = migrated.database;
+      assert.equal(migrated.schemaVersion, 25);
+      assert.deepEqual({ ...migratedDb.prepare(`SELECT category_id, formal_name, price_yen, is_sold_out, is_active, quantity_selection_enabled, minimum_quantity, initial_quantity, quantity_step, quantity_unit_label, price_assertion_required FROM menu_items WHERE menu_item_id = 'food-chicken-torikawa'`).get() }, {
+        category_id: 'food-chicken', formal_name: 'ぱりぱり鶏皮', price_yen: 225, is_sold_out: 1, is_active: 1, quantity_selection_enabled: 1, minimum_quantity: 2, initial_quantity: 2, quantity_step: 1, quantity_unit_label: '本', price_assertion_required: 1,
+      });
+      assert.deepEqual(migratedDb.prepare(`SELECT menu_item_id, price_yen, is_active, quantity_selection_enabled, minimum_quantity, initial_quantity, quantity_step, quantity_unit_label FROM menu_items WHERE menu_item_id IN (${kushiRows.map(() => '?').join(',')}) ORDER BY menu_item_id`).all(...kushiRows.map(([id]) => id)).map((row) => ({ ...row })), kushiRows.map(([menu_item_id, , price_yen]) => ({ menu_item_id, price_yen, is_active: 1, quantity_selection_enabled: 1, minimum_quantity: 2, initial_quantity: 2, quantity_step: 1, quantity_unit_label: '本' })).sort((a, b) => a.menu_item_id.localeCompare(b.menu_item_id)));
+      assert.deepEqual({ ...migratedDb.prepare(`SELECT is_active, quantity_selection_enabled, minimum_quantity FROM menu_items WHERE menu_item_id = 'food-kushi-kushikatsu'`).get() }, { is_active: 0, quantity_selection_enabled: 1, minimum_quantity: 2 });
+      assert.deepEqual({ ...migratedDb.prepare(`SELECT formal_name_snapshot, unit_price_yen_snapshot, quantity, line_total_yen, quantity_unit_label_snapshot FROM order_items WHERE order_id = ? AND menu_item_id = 'food-chicken-torikawa'`).get(ORDER_ID) }, {
+        formal_name_snapshot: 'ぱりぱり鶏皮（2本）', unit_price_yen_snapshot: 450, quantity: 1, line_total_yen: 450, quantity_unit_label_snapshot: null,
+      });
+      assert.throws(
+        () => migratedDb.prepare('UPDATE order_items SET quantity_unit_label_snapshot = ? WHERE order_id = ?').run('本', ORDER_ID),
+        /order identity, price, name, and unit snapshots are immutable/,
+      );
+      assert.deepEqual(migratedDb.prepare('PRAGMA foreign_key_check').all(), []);
     } finally { migrated.close(); }
   });
 });
@@ -260,8 +344,8 @@ test('schema v14 migrates to v17 without changing order-time snapshots or existi
 
     const connection = initializeDatabase({ databasePath });
     const database = connection.database;
-    assert.equal(connection.schemaVersion, 24);
-    assert.equal(pragmaValue(database, 'user_version'), 24);
+    assert.equal(connection.schemaVersion, 25);
+    assert.equal(pragmaValue(database, 'user_version'), 25);
     assert.equal(database.prepare('SELECT schema_version FROM system_state').get().schema_version, 16);
     assert.deepEqual({ ...database.prepare('SELECT unit_price_yen_snapshot, line_total_yen, is_cancelled FROM order_items WHERE order_id = ?').get(ORDER_ID) }, {
       unit_price_yen_snapshot: 380,
@@ -315,7 +399,7 @@ test('schema v17 migration adds theme objects without rebuilding event infrastru
       eventLog: connection.database.prepare('SELECT COUNT(*) AS count FROM event_log').get().count,
       systemState: connection.database.prepare('SELECT COUNT(*) AS count FROM system_state').get().count,
     }, beforeCounts);
-    assert.equal(pragmaValue(connection.database, 'user_version'), 24);
+    assert.equal(pragmaValue(connection.database, 'user_version'), 25);
     assert.equal(connection.database.prepare('SELECT schema_version FROM system_state').get().schema_version, 16);
     assert.equal(connection.database.prepare('SELECT COUNT(*) AS count FROM customer_theme_variants').get().count, 2);
     connection.close();
@@ -417,7 +501,11 @@ test('schema v19 through v24 preserves operational data, non-theme objects, and 
     const afterTriggers = database.prepare("SELECT name, sql FROM sqlite_schema WHERE type = 'trigger' AND name NOT IN ('trg_staff_calls_session_valid_insert', 'trg_staff_calls_session_immutable_origin') ORDER BY name").all();
     assert.deepEqual(afterIndexes.filter(({ name }) => name !== 'idx_menu_items_archived_category'), beforeIndexes);
     assert.equal(afterIndexes.some(({ name }) => name === 'idx_menu_items_archived_category'), true);
-    assert.deepEqual(afterTriggers, beforeTriggers);
+    assert.deepEqual(
+      afterTriggers.filter(({ name }) => name !== 'trg_order_items_immutable_snapshots'),
+      beforeTriggers.filter(({ name }) => name !== 'trg_order_items_immutable_snapshots'),
+    );
+    assert.match(afterTriggers.find(({ name }) => name === 'trg_order_items_immutable_snapshots')?.sql ?? '', /quantity_unit_label_snapshot/);
     assert.deepEqual(database.prepare('SELECT menu_item_id, formal_name, price_yen, version FROM menu_items WHERE menu_item_id = ?').get('edamame'), beforeItem);
     assert.deepEqual({ ...database.prepare('SELECT singleton_id, theme_key, version, created_at_ms, updated_at_ms FROM customer_theme_settings').get() }, {
       singleton_id: 1, theme_key: 'camellia', version: 7, created_at_ms: 2100, updated_at_ms: 2200,
@@ -434,9 +522,13 @@ test('schema v19 through v24 preserves operational data, non-theme objects, and 
     assert.equal(database.prepare('SELECT COUNT(*) AS count FROM categories').get().count, beforeCategoryCount);
     assert.deepEqual(Object.fromEntries(Object.keys(beforeHistory).map((table) => [
       table,
-      database.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all().map((row) => ({ ...row })),
+      database.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all().map((row) => Object.fromEntries(
+        Object.keys(beforeHistory[table][0] ?? {}).map((column) => [column, row[column]]),
+      )),
     ])), beforeHistory);
-    assert.equal(pragmaValue(database, 'user_version'), 24);
+    assert.equal(database.prepare('SELECT quantity_unit_label_snapshot FROM order_items WHERE order_id = ?').get(ORDER_ID).quantity_unit_label_snapshot, null);
+    assert.equal(database.prepare('SELECT quantity_unit_label_snapshot FROM payment_order_items WHERE payment_record_id = ?').get(paymentRecordId).quantity_unit_label_snapshot, null);
+    assert.equal(pragmaValue(database, 'user_version'), 25);
     assert.deepEqual({ ...database.prepare('SELECT heading_text, body_text, version FROM customer_order_start_notice_settings WHERE singleton_id = 1').get() }, {
       heading_text: 'ご注文の前にご確認ください',
       body_text: '20歳未満の入店禁止\n飲酒運転しません・させません\nSNS投稿・LIVE配信禁止\nお支払いは現金のみ',
@@ -506,7 +598,7 @@ test('schema v21 migration preserves existing staff calls without guessing their
 
     const migrated = initializeDatabase({ databasePath });
     try {
-      assert.equal(migrated.schemaVersion, 24);
+      assert.equal(migrated.schemaVersion, 25);
       const afterMigration = migrated.database.prepare(`
         SELECT staff_call_id, client_call_id, customer_device_id, table_id,
           table_number_snapshot, call_type, status, created_at_ms, version, table_session_id
@@ -612,8 +704,8 @@ test('schema v7 migrates to v8 with every existing menu item in normal mode', as
     raw.close();
 
     const connection = initializeDatabase({ databasePath });
-    assert.equal(connection.schemaVersion, 24);
-    assert.equal(pragmaValue(connection.database, 'user_version'), 24);
+    assert.equal(connection.schemaVersion, 25);
+    assert.equal(pragmaValue(connection.database, 'user_version'), 25);
     assert.equal(connection.database.prepare('SELECT schema_version FROM system_state').get().schema_version, 16);
     assert.equal(connection.database.prepare("SELECT COUNT(*) AS count FROM menu_items WHERE ordering_mode = 'normal'").get().count, 1);
     assert.equal(connection.database.prepare('SELECT COUNT(*) AS count FROM menu_items').get().count, 1);
@@ -676,8 +768,8 @@ test('schema v9 clone migrates through v10, v11, and v12 with notice defaults an
     raw.close();
 
     const connection = initializeDatabase({ databasePath });
-    assert.equal(connection.schemaVersion, 24);
-    assert.equal(pragmaValue(connection.database, 'user_version'), 24);
+    assert.equal(connection.schemaVersion, 25);
+    assert.equal(pragmaValue(connection.database, 'user_version'), 25);
     const noticeDefaults = connection.database.prepare('SELECT notice_text, notice_enabled FROM business_hours').get();
     assert.equal(noticeDefaults.notice_text, '');
     assert.equal(noticeDefaults.notice_enabled, 0);
@@ -723,7 +815,7 @@ test('a valid schema v17 database can be closed and reopened', async () => {
   await withTemporaryDatabase(({ databasePath }) => {
     initializeDatabase({ databasePath }).close();
     const reopened = initializeDatabase({ databasePath });
-    assert.equal(reopened.schemaVersion, 24);
+    assert.equal(reopened.schemaVersion, 25);
     assert.equal(reopened.database.prepare('SELECT COUNT(*) AS count FROM customer_theme_settings').get().count, 0);
     reopened.close();
   });
@@ -860,8 +952,8 @@ test('legacy schema v1 migrates through schema v10 and assigns existing orders t
       WHERE order_id = ?
     `).get(ORDER_ID);
 
-    assert.equal(connection.schemaVersion, 24);
-    assert.equal(pragmaValue(connection.database, 'user_version'), 24);
+    assert.equal(connection.schemaVersion, 25);
+    assert.equal(pragmaValue(connection.database, 'user_version'), 25);
     assert.equal(connection.database.prepare('SELECT schema_version FROM system_state').get().schema_version, 16);
     assert.deepEqual({
       orders: connection.database.prepare('SELECT COUNT(*) AS count FROM orders').get().count,
@@ -934,8 +1026,8 @@ test('schema v4 fixture migrates through the formal v7 path while preserving cat
 
     const connection = initializeDatabase({ databasePath: v4Path });
     const database = connection.database;
-    assert.equal(connection.schemaVersion, 24);
-    assert.equal(pragmaValue(database, 'user_version'), 24);
+    assert.equal(connection.schemaVersion, 25);
+    assert.equal(pragmaValue(database, 'user_version'), 25);
     assert.equal(database.prepare('PRAGMA integrity_check').get().integrity_check, 'ok');
     assert.deepEqual({
       orders: database.prepare('SELECT COUNT(*) AS count FROM orders').get().count,
@@ -1012,11 +1104,11 @@ test('invalid item quantities are rejected by CHECK constraints', async () => {
   });
 });
 
-test('schema versions newer than v24 are rejected without migration', async () => {
+test('schema versions newer than v25 are rejected without migration', async () => {
   await withTemporaryDatabase(({ directory }) => {
-    const databasePath = join(directory, 'version-5.sqlite3');
+    const databasePath = join(directory, 'version-26.sqlite3');
     const raw = new DatabaseSync(databasePath);
-    raw.exec('PRAGMA user_version = 25;');
+    raw.exec('PRAGMA user_version = 26;');
     raw.close();
 
     assert.throws(

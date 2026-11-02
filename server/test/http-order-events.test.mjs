@@ -452,6 +452,45 @@ test('created order is safely acknowledged, committed atomically, and then wakes
   });
 });
 
+test('old price intents are held for review and asserted quantity orders persist their unit snapshot', async () => {
+  await withFixture(async ({ port, database }) => {
+    database.prepare(`
+      UPDATE menu_items
+      SET price_yen = 225, quantity_selection_enabled = 1,
+        minimum_quantity = 2, initial_quantity = 2, quantity_step = 1,
+        quantity_unit_label = '本', price_assertion_required = 1
+      WHERE menu_item_id = 'edamame'
+    `).run();
+
+    const oldIntent = await postOrder(port, CUSTOMER_A_TOKEN, orderBody(uuid(1_210), [
+      { menuItemId: 'edamame', quantity: 2 },
+    ]));
+    assertError(oldIntent, 409, 'MENU_ITEM_CONFIGURATION_CHANGED');
+    assert.equal(count(database, 'orders'), 0);
+    assert.equal(count(database, 'order_items'), 0);
+
+    const currentIntent = await postOrder(port, CUSTOMER_A_TOKEN, orderBody(uuid(1_211), [
+      { menuItemId: 'edamame', quantity: 2, expectedUnitPriceYen: 225, expectedQuantityUnitLabel: '本' },
+    ], { schemaVersion: 4 }));
+    assert.equal(currentIntent.statusCode, 201);
+    assert.equal(count(database, 'orders'), 1);
+    assert.deepEqual({ ...database.prepare(`
+      SELECT quantity, unit_price_yen_snapshot, line_total_yen, quantity_unit_label_snapshot
+      FROM order_items
+    `).get() }, { quantity: 2, unit_price_yen_snapshot: 225, line_total_yen: 450, quantity_unit_label_snapshot: '本' });
+
+    const kitchenSnapshot = await request({ port, path: '/v1/snapshot', headers: bearer(KITCHEN_TOKEN) });
+    assert.equal(kitchenSnapshot.statusCode, 200);
+    const kitchenOrder = kitchenSnapshot.json.activeOrders.find((order) => order.clientOrderId === uuid(1_211));
+    assert.equal(kitchenOrder.items[0].quantityUnitLabelSnapshot, '本');
+
+    const history = await request({ port, path: '/v1/customer/order-history', headers: bearer(CUSTOMER_A_TOKEN) });
+    assert.equal(history.statusCode, 200);
+    assert.equal(history.json.orders[0].items[0].quantityUnitLabelSnapshot, '本');
+    assert.doesNotMatch(history.rawBody, /totalAmountYen|lineTotalYen/);
+  });
+});
+
 test('customer staff call is authenticated, visit-session bound, idempotent, committed to SSE, and sounds in kitchen snapshot', async () => {
   await withFixture(async ({ port, database }) => {
     const stream = await openSse({ port, token: KITCHEN_TOKEN });
@@ -889,6 +928,29 @@ test('kitchen menu and custom additions reuse the open session and preserve snap
     assert.equal(replay.statusCode, 200);
     assert.equal(replay.headers['idempotency-result'], 'replayed');
     assert.equal(database.prepare("SELECT COUNT(*) AS count FROM orders WHERE order_origin = 'kitchen_addition'").get().count, 2);
+  });
+});
+
+test('kitchen additions reject stale configured price intents and snapshot the selling unit', async () => {
+  await withFixture(async ({ port, database }) => {
+    const original = await postOrder(port, CUSTOMER_A_TOKEN, orderBody(uuid(1_190), [{ menuItemId: 'edamame', quantity: 1 }]));
+    assert.equal(original.statusCode, 201);
+    const sessionId = database.prepare('SELECT session_id FROM orders LIMIT 1').get().session_id;
+    database.prepare(`UPDATE menu_items SET price_yen = 225, quantity_selection_enabled = 1, minimum_quantity = 2, initial_quantity = 2, quantity_step = 1, quantity_unit_label = '本', price_assertion_required = 1 WHERE menu_item_id = 'edamame'`).run();
+
+    const stale = await postKitchenOrder(port, KITCHEN_TOKEN, {
+      tableId: 1, sessionId, clientOrderId: uuid(1_191), items: [{ menuItemId: 'edamame', quantity: 2 }],
+    });
+    assertError(stale, 409, 'MENU_ITEM_CONFIGURATION_CHANGED');
+    assert.equal(count(database, 'order_items'), 1);
+
+    const current = await postKitchenOrder(port, KITCHEN_TOKEN, {
+      tableId: 1, sessionId, clientOrderId: uuid(1_192), items: [{ menuItemId: 'edamame', quantity: 2, expectedUnitPriceYen: 225, expectedQuantityUnitLabel: '本' }],
+    });
+    assert.equal(current.statusCode, 201, current.rawBody);
+    assert.deepEqual({ ...database.prepare(`SELECT quantity, unit_price_yen_snapshot, line_total_yen, quantity_unit_label_snapshot FROM order_items WHERE order_id = ?`).get(current.json.orders[0].orderId) }, {
+      quantity: 2, unit_price_yen_snapshot: 225, line_total_yen: 450, quantity_unit_label_snapshot: '本',
+    });
   });
 });
 

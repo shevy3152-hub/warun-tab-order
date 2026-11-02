@@ -220,6 +220,7 @@ test('new HTTP error codes have stable status and public messages', () => {
     ['MENU_ITEM_NOT_FOUND', 422, 'A requested menu item is unavailable.'],
     ['MENU_ITEM_SOLD_OUT', 422, 'A requested menu item is sold out.'],
     ['MENU_ITEM_RESERVATION_ONLY', 422, 'この商品は予約限定のため注文できません'],
+    ['MENU_ITEM_CONFIGURATION_CHANGED', 409, '商品価格または販売単位が更新されています。注文内容を確認してください。'],
     ['EVENT_HISTORY_UNAVAILABLE', 410, 'Event history is unavailable.'],
   ];
   for (const [code, statusCode, message] of expected) {

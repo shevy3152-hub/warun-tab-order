@@ -5,7 +5,7 @@ import { DatabaseSync } from 'node:sqlite';
 
 export const LEGACY_SCHEMA_VERSION = 1;
 export const SESSION_SCHEMA_VERSION = 2;
-export const SCHEMA_VERSION = 24;
+export const SCHEMA_VERSION = 25;
 
 export const REQUIRED_TABLES = Object.freeze([
   'system_state',
@@ -172,6 +172,7 @@ export const DEFAULT_V23_MIGRATION_PATH = resolve(
   moduleDirectory, '..', '..', '..', 'docs', 'schema-v23-migration.sql',
 );
 export const DEFAULT_V24_MIGRATION_PATH = resolve(moduleDirectory, '..', '..', '..', 'docs', 'schema-v24-migration.sql');
+export const DEFAULT_V25_MIGRATION_PATH = resolve(moduleDirectory, '..', '..', '..', 'docs', 'schema-v25-migration.sql');
 
 export class DatabaseInitializationError extends Error {
   constructor(code, message, options = undefined) {
@@ -1017,6 +1018,7 @@ export function initializeDatabase({
   v22MigrationPath = DEFAULT_V22_MIGRATION_PATH,
   v23MigrationPath = DEFAULT_V23_MIGRATION_PATH,
   v24MigrationPath = DEFAULT_V24_MIGRATION_PATH,
+  v25MigrationPath = DEFAULT_V25_MIGRATION_PATH,
 } = {}) {
   const resolvedDatabasePath = resolveFilePath(databasePath, 'databasePath');
   const resolvedSchemaPath = resolveFilePath(schemaPath, 'schemaPath');
@@ -1042,6 +1044,7 @@ export function initializeDatabase({
   const resolvedV22MigrationPath = resolveFilePath(v22MigrationPath, 'v22MigrationPath');
   const resolvedV23MigrationPath = resolveFilePath(v23MigrationPath, 'v23MigrationPath');
   const resolvedV24MigrationPath = resolveFilePath(v24MigrationPath, 'v24MigrationPath');
+  const resolvedV25MigrationPath = resolveFilePath(v25MigrationPath, 'v25MigrationPath');
 
   mkdirSync(dirname(resolvedDatabasePath), { recursive: true });
 
@@ -1176,7 +1179,13 @@ export function initializeDatabase({
       try { database.exec(readFileSync(resolvedV24MigrationPath, 'utf8')); }
       catch (error) { try { if (database.isTransaction) database.exec('ROLLBACK;'); } catch {} throw new DatabaseInitializationError('MIGRATION_FAILED', 'The customer theme asset migration failed.', { cause: error }); }
       enableWriteAheadLogging(database);
-      currentVersion = SCHEMA_VERSION;
+      currentVersion = 24;
+    }
+    if (currentVersion === 24) {
+      try { database.exec(readFileSync(resolvedV25MigrationPath, 'utf8')); }
+      catch (error) { try { if (database.isTransaction) database.exec('ROLLBACK;'); } catch {} throw new DatabaseInitializationError('MIGRATION_FAILED', 'The quantity selection migration failed.', { cause: error }); }
+      enableWriteAheadLogging(database);
+      currentVersion = 25;
     }
     if (currentVersion === SCHEMA_VERSION) {
       if (!hasSessionExtension(database)) {

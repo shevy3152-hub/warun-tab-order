@@ -62,6 +62,12 @@ test("rapid repeated addition saves share one in-flight mutation", async () => {
   assert.equal(f.controller.getState().pending.length, 0);
 });
 
+test("kitchen addition retries preserve expected price and selling unit", async () => {
+  const f = fixture();
+  await f.controller.submitAddition({ ...addition, items: [{ menuItemId: "fictional-item", quantity: 2, expectedUnitPriceYen: 225, expectedQuantityUnitLabel: "本" }] });
+  assert.deepEqual(f.calls[0].body.items, [{ menuItemId: "fictional-item", quantity: 2, expectedUnitPriceYen: 225, expectedQuantityUnitLabel: "本" }]);
+});
+
 test("rapid repeated one-item increases share one in-flight mutation", async () => {
   const f = fixture({ pause: true });
   const first = f.controller.submitIncrease(increase);
@@ -191,13 +197,13 @@ test("actual modal submit lock stops same-tick clicks and catches failed saves",
   const modal = source.slice(source.indexOf("function KitchenAdditionModal"), source.indexOf("function cancelledQuantityForDisplay"));
   const submitCode = modal.slice(modal.indexOf("  const submit ="), modal.indexOf("  return <Modal"));
   let calls = 0; let release; let error = "";
-  const submit = new Function("submitLock", "locked", "quantity", "kind", "menuItems", "menuItemId", "setError", "onSubmit", "draftRevision", "submissionRef", "mountedRef", "pendingRef", "confirmedIdRef", "onConfirmed", "target", "kitchenAdditionRequestItem", submitCode + "; return submit;")({ current: false }, false, "1", "menu", [{ id: "fictional-item", name: "架空検証品", price: 300 }], "fictional-item", (value) => { error = value; }, async () => { calls++; await new Promise((resolve) => { release = resolve; }); throw new Error("架空通信エラー"); }, { current: 0 }, { current: null }, { current: true }, { current: null }, { current: null }, () => { throw new Error("failed save must not close the modal"); }, { tableId: 1, sessionId: uuid(10) }, kitchenAdditionRequestItem);
+  const submit = new Function("submitLock", "locked", "quantity", "quantityMinimum", "quantityStep", "quantityUnitLabel", "kind", "menuItems", "menuItemId", "setError", "onSubmit", "draftRevision", "submissionRef", "mountedRef", "pendingRef", "confirmedIdRef", "onConfirmed", "target", "kitchenAdditionRequestItem", submitCode + "; return submit;")({ current: false }, false, "1", 1, 1, "点", "menu", [{ id: "fictional-item", name: "架空検証品", price: 300 }], "fictional-item", (value) => { error = value; }, async () => { calls++; await new Promise((resolve) => { release = resolve; }); throw new Error("架空通信エラー"); }, { current: 0 }, { current: null }, { current: true }, { current: null }, { current: null }, () => { throw new Error("failed save must not close the modal"); }, { tableId: 1, sessionId: uuid(10) }, kitchenAdditionRequestItem);
   const first = submit({ preventDefault: noop }); const second = submit({ preventDefault: noop });
   assert.equal(calls, 1); release(); await Promise.all([first, second]); assert.equal(error, "架空通信エラー");
 });
 
 test("quantity increase acknowledgement remains confirmed if its later display refresh fails", async () => {
-  const adjust = handler("adjustKitchenItemQuantity", "changeKitchenOrderItemCancellation", { window: {}, adjustKitchenItemQuantityRequest: async () => ({ orderId: uuid(20) }), fetchKitchenSnapshot: async () => { throw new Error("isolated refresh error"); }, fetchKitchenCheckoutRequests: async () => [], setKitchenApiState: noop, setKitchenCheckoutState: noop });
+  const adjust = handler("adjustKitchenItemQuantity", "changeKitchenOrderItemCancellation", { window: {}, kitchenRefresher: { current: { refresh: async () => { throw new Error("isolated refresh error"); } } }, adjustKitchenItemQuantityRequest: async () => ({ orderId: uuid(20) }) });
   assert.deepEqual(await adjust({ direction: "increase" }), { orderId: uuid(20) }); await tick();
 });
 
@@ -236,7 +242,7 @@ test("addition modal late save leaves changed input and a replacement instance i
     const revision = { current: 1 }; const mounted = { current: true }; const pending = { current: null };
     let closed = 0; let release; let submitted;
     const submit = modalHandler("submit", "return <Modal", {
-      submitLock: { current: false }, locked: false, quantity: "2", kind: "menu", menuItems: [{ id: "fictional-item", name: "架空検証品", price: 300 }], menuItemId: "fictional-item",
+      submitLock: { current: false }, locked: false, quantity: "2", quantityMinimum: 1, quantityStep: 1, quantityUnitLabel: "点", kind: "menu", menuItems: [{ id: "fictional-item", name: "架空検証品", price: 300 }], menuItemId: "fictional-item",
       setError: (message) => { if (message) throw new Error(message); }, target: { tableId: 1, sessionId: uuid(10) }, kitchenAdditionRequestItem, draftRevision: revision, submissionRef: { current: null }, mountedRef: mounted, pendingRef: pending, confirmedIdRef: { current: null }, onConfirmed: () => { closed++; },
       onSubmit: async (item, onPrepared) => { submitted = structuredClone(item); onPrepared(uuid(1)); await new Promise((resolve) => { release = resolve; }); },
     });
@@ -245,7 +251,7 @@ test("addition modal late save leaves changed input and a replacement instance i
     if (scenario === "unmounted") mounted.current = false;
     if (scenario === "different-pending") pending.current = { id: uuid(2) };
     release(); await waiting;
-    assert.deepEqual(submitted, { menuItemId: "fictional-item", name: "架空検証品", priceYen: 300, quantity: 2 });
+    assert.deepEqual(submitted, { menuItemId: "fictional-item", name: "架空検証品", priceYen: 300, quantity: 2, expectedUnitPriceYen: 300, expectedQuantityUnitLabel: "点" });
     assert.equal(closed, scenario === "unchanged" ? 1 : 0, scenario);
   }
 });
@@ -389,7 +395,7 @@ test("preparation modal keeps ownership by storage proof rather than the error c
     const submissionRef = { current: null }; let error = "";
     const attempt = { id: uuid(1), kind: "addition", request: addition };
     const submit = modalHandler("submit", "return <Modal", {
-      submitLock: { current: false }, locked: false, quantity: "1", kind: "menu", menuItems: [{ id: "fictional-item", name: "架空品", price: 300 }], menuItemId: "fictional-item", target: { tableId: 1, sessionId: uuid(10) }, kitchenAdditionRequestItem,
+      submitLock: { current: false }, locked: false, quantity: "1", quantityMinimum: 1, quantityStep: 1, quantityUnitLabel: "点", kind: "menu", menuItems: [{ id: "fictional-item", name: "架空品", price: 300 }], menuItemId: "fictional-item", target: { tableId: 1, sessionId: uuid(10) }, kitchenAdditionRequestItem,
       setError: (value) => { error = value; }, draftRevision: { current: 2 }, submissionRef, mountedRef: { current: true }, pendingRef: { current: attempt }, confirmedIdRef: { current: null }, onConfirmed: () => { throw new Error("failed preparation must not close"); },
       onSubmit: async (item, prepared, failed) => { prepared(attempt.id, attempt.request); failed({ attempt, state: canRelease ? "absent" : "present", canRelease }); throw Object.assign(new Error("isolated preparation error"), { code: "KITCHEN_ORDER_LOCK_UNAVAILABLE" }); },
     });
@@ -407,6 +413,15 @@ test("preparation unassigned unknown input is not mistaken for a null acknowledg
   const known = { ...unassigned, id: uuid(1) };
   assert.equal(pending(null, known, { current: known.id }), null);
   assert.equal(pending(null, known, { current: uuid(2) }), known);
+});
+
+test("kitchen unit labels match the visible stored quantity and legacy additions remain explicit", () => {
+  assert.match(source, /aria-label=\{`数量を1\$\{priceTarget\.quantityUnitLabelSnapshot \?\? "点"\}減らす`\}/);
+  assert.match(source, /aria-label=\{`同じ商品を1\$\{priceTarget\.quantityUnitLabelSnapshot \?\? "点"\}追加注文`\}/);
+  assert.match(source, /unitLabel: item\.expectedQuantityUnitLabel \?\? "点"/);
+  assert.match(source, /kitchenAdditionItemSummary\(item, state\.menuItems\)/);
+  assert.match(source, /旧形式の保存内容には単価・販売単位snapshotがありません/);
+  assert.match(source, /旧形式：単価・販売単位snapshotなし、内容確認が必要/);
 });
 
 function mixedResponses(kind) {

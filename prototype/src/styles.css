@@ -1068,6 +1068,7 @@ h1, h2, h3, p { margin: 0; }
 .menu-editor__section > summary { min-height: 44px; display: flex; align-items: center; cursor: pointer; color: var(--red); font-size: 15px; font-weight: 900; }
 .menu-editor__section[open] > summary { border-bottom: 1px solid var(--line); margin-bottom: 10px; }
 .menu-editor__section-body { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px 10px; align-items: end; }
+.menu-editor__help { grid-column: 1 / -1; margin: 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
 .menu-editor__sort-order { display: grid; align-content: start; gap: 8px; }
 .menu-editor__sort-order > label { display: grid; gap: 6px; }
 .menu-editor__sort-order > label > span { display: flex; align-items: baseline; gap: 10px; }

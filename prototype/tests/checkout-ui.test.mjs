@@ -62,9 +62,9 @@ test("history item operations fail closed until checkout state is known and lock
 });
 
 test("cancellation confirmation keeps accepted copy and shows the current billable quantity and amount", () => {
-  assert.match(appSource, /\$\{cancellationProductName\} \$\{cancellationQuantity\}点をキャンセルし、今回の会計から外します。注文の記録は残ります。提供済みの場合、提供した記録も残ります。/);
-  assert.match(appSource, /今回の会計から外す金額：\{yen\(cancellationUnitPrice\)\} × \{cancellationQuantity\}点/);
+  assert.match(appSource, /\$\{cancellationProductName\} \$\{cancellationQuantity\}\$\{cancellationUnitLabel\}をキャンセルし、今回の会計から外します。注文の記録は残ります。提供済みの場合、提供した記録も残ります。/);
+  assert.match(appSource, /今回の会計から外す金額：\{yen\(cancellationUnitPrice\)\} × \{cancellationQuantity\}\{cancellationUnitLabel\}/);
   assert.match(appSource, /function cancelledQuantityForDisplay\(item\)/);
-  assert.match(appSource, /会計から除外 \{cancelledQuantity\}点／\{yen\(excludedAmount\)\}/);
-  assert.match(appSource, /数量0点化によるキャンセル/);
+  assert.match(appSource, /会計から除外 \{cancelledQuantity\}\{item\.quantityUnitLabelSnapshot \?\? "点"\}／\{yen\(excludedAmount\)\}/);
+  assert.match(appSource, /数量0\$\{item\.quantityUnitLabelSnapshot \?\? "点"\}化によるキャンセル/);
 });

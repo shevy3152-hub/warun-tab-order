@@ -688,15 +688,28 @@ test('customer menu returns only the identifiers and fields needed for ordering'
       'description',
       'formalName',
       'imageUri',
+      'initialQuantity',
       'isSoldOut',
       'menuItemId',
+      'minimumQuantity',
       'orderingMode',
+      'priceAssertionRequired',
       'priceYen',
+      'quantitySelectionEnabled',
+      'quantityStep',
+      'quantityUnitLabel',
       'servingOptions',
       'sortOrder',
       'variants',
       'version',
     ]);
+    assert.deepEqual({
+      enabled: tamago.quantitySelectionEnabled,
+      minimum: tamago.minimumQuantity,
+      initial: tamago.initialQuantity,
+      step: tamago.quantityStep,
+      unit: tamago.quantityUnitLabel,
+    }, { enabled: false, minimum: 1, initial: 1, step: 1, unit: '点' });
     const edamame = menu.items.find(({ menuItemId }) => menuItemId === 'edamame');
     assert.equal(Object.hasOwn(edamame, 'imageUri'), false);
   });
@@ -850,6 +863,96 @@ test('admin menu ordering mode round-trips and rejects invalid values', async ()
     assert.equal(saved.version, tamago.version + 1);
     assert.equal(catalog.getMenuForPrincipal(admin).items.find(({ menuItemId }) => menuItemId === tamago.menuItemId).orderingMode, 'reservation_only');
     assertCatalogError(() => catalog.writeMenuItem(admin, { ...request, expectedVersion: saved.version, orderingMode: 'invalid' }), CATALOG_ERROR_CODES.INVALID_WRITE_REQUEST);
+  });
+});
+
+test('quantity settings round-trip and an old client update preserves omitted settings', async () => {
+  await withCatalogFixture(({ authenticator, catalog, database }) => {
+    const admin = authenticate(authenticator, ADMIN_TOKEN);
+    const item = catalog.getMenuForPrincipal(admin).items.find(({ menuItemId }) => menuItemId === 'tamago');
+    database.prepare(`UPDATE menu_items SET price_assertion_required = 1 WHERE menu_item_id = ?`).run(item.menuItemId);
+    const fullWrite = (expectedVersion, fields = {}) => ({
+      expectedVersion,
+      menuItemId: item.menuItemId,
+      categoryId: item.categoryId,
+      formalName: item.formalName,
+      kitchenAlias: item.kitchenAlias,
+      description: item.description,
+      priceYen: item.priceYen,
+      isSoldOut: item.isSoldOut,
+      isActive: item.isActive,
+      orderingMode: item.orderingMode,
+      customerVisibilityMode: item.customerVisibilityMode,
+      tableVisibilityMode: item.tableVisibilityMode,
+      tableVisibilityTableIds: item.tableVisibilityTableIds,
+      sortOrder: item.sortOrder,
+      imageUri: item.imageUri,
+      sectionKey: item.sectionKey,
+      detail: item.detail,
+      variants: item.variants,
+      servingOptions: item.servingOptions,
+      ...fields,
+    });
+    const saved = catalog.writeMenuItem(admin, fullWrite(item.version, {
+      quantitySelectionEnabled: true,
+      minimumQuantity: 2,
+      initialQuantity: 2,
+      quantityStep: 1,
+      quantityUnitLabel: '本',
+    }));
+    const customerItem = catalog.getMenuForPrincipal(authenticate(authenticator, CUSTOMER_TOKEN)).items.find(({ menuItemId }) => menuItemId === item.menuItemId);
+    assert.deepEqual({ enabled: customerItem.quantitySelectionEnabled, minimum: customerItem.minimumQuantity, initial: customerItem.initialQuantity, step: customerItem.quantityStep, unit: customerItem.quantityUnitLabel, assertion: customerItem.priceAssertionRequired }, {
+      enabled: true, minimum: 2, initial: 2, step: 1, unit: '本', assertion: true,
+    });
+
+    const oldClientWrite = fullWrite(saved.version);
+    for (const key of ['quantitySelectionEnabled', 'minimumQuantity', 'initialQuantity', 'quantityStep', 'quantityUnitLabel']) delete oldClientWrite[key];
+    catalog.writeMenuItem(admin, oldClientWrite);
+    const afterOldClient = catalog.getMenuForPrincipal(admin).items.find(({ menuItemId }) => menuItemId === item.menuItemId);
+    assert.deepEqual({ enabled: afterOldClient.quantitySelectionEnabled, minimum: afterOldClient.minimumQuantity, initial: afterOldClient.initialQuantity, step: afterOldClient.quantityStep, unit: afterOldClient.quantityUnitLabel, assertion: afterOldClient.priceAssertionRequired }, {
+      enabled: true, minimum: 2, initial: 2, step: 1, unit: '本', assertion: true,
+    });
+    assertCatalogError(() => catalog.writeMenuItem(admin, fullWrite(afterOldClient.version, {
+      quantitySelectionEnabled: false,
+      minimumQuantity: 2,
+      initialQuantity: 2,
+      quantityStep: 1,
+      quantityUnitLabel: '本',
+    })), CATALOG_ERROR_CODES.INVALID_WRITE_REQUEST);
+  });
+});
+
+test('quantity selection cannot be combined with active serving options', async () => {
+  await withCatalogFixture(({ authenticator, catalog, database }) => {
+    const admin = authenticate(authenticator, ADMIN_TOKEN);
+    database.prepare(`INSERT INTO menu_item_serving_options (serving_option_id, menu_item_id, name, sort_order, created_at_ms, updated_at_ms) VALUES ('quantity-conflict-serving', 'alpha-item', '水割り', 1, 6000, 6000)`).run();
+    const item = catalog.getMenuForPrincipal(admin).items.find(({ menuItemId }) => menuItemId === 'alpha-item');
+    assertCatalogError(() => catalog.writeMenuItem(admin, {
+      expectedVersion: item.version,
+      menuItemId: item.menuItemId,
+      categoryId: item.categoryId,
+      formalName: item.formalName,
+      kitchenAlias: item.kitchenAlias,
+      description: item.description,
+      priceYen: item.priceYen,
+      isSoldOut: item.isSoldOut,
+      isActive: item.isActive,
+      orderingMode: item.orderingMode,
+      customerVisibilityMode: item.customerVisibilityMode,
+      tableVisibilityMode: item.tableVisibilityMode,
+      tableVisibilityTableIds: item.tableVisibilityTableIds,
+      sortOrder: item.sortOrder,
+      imageUri: item.imageUri,
+      sectionKey: item.sectionKey,
+      detail: item.detail,
+      variants: item.variants,
+      servingOptions: catalog.getMenuForPrincipal(admin).items.find(({ menuItemId }) => menuItemId === 'alpha-item').servingOptions,
+      quantitySelectionEnabled: true,
+      minimumQuantity: 1,
+      initialQuantity: 1,
+      quantityStep: 1,
+      quantityUnitLabel: '杯',
+    }), CATALOG_ERROR_CODES.INVALID_WRITE_REQUEST);
   });
 });
 

@@ -658,6 +658,9 @@ function mapApplicationError(error) {
     if (error.code === ORDER_ERROR_CODES.MENU_ITEM_RESERVATION_ONLY) {
       return createHttpError(HTTP_ERROR_CODES.MENU_ITEM_RESERVATION_ONLY);
     }
+    if (error.code === ORDER_ERROR_CODES.MENU_ITEM_CONFIGURATION_CHANGED) {
+      return createHttpError(HTTP_ERROR_CODES.MENU_ITEM_CONFIGURATION_CHANGED);
+    }
     if (error.code === ORDER_ERROR_CODES.ORDER_CONFLICT) {
       return createHttpError(HTTP_ERROR_CODES.ORDER_CONFLICT);
     }
@@ -1402,6 +1405,10 @@ function createConfiguredHttpServer({
             ...(item.variantId ? { variantId: item.variantId } : {}),
             ...(item.temperature ? { temperature: item.temperature } : {}),
             ...(item.servingOptionId ? { servingOptionId: item.servingOptionId } : {}),
+            ...(Object.hasOwn(item, 'expectedUnitPriceYen') ? {
+              expectedUnitPriceYen: item.expectedUnitPriceYen,
+              expectedQuantityUnitLabel: item.expectedQuantityUnitLabel,
+            } : {}),
           })),
         });
         if (diagnosticContext) diagnosticContext.stage = 'saved';
@@ -1481,14 +1488,16 @@ function createConfiguredHttpServer({
         const items = body.items.map((item) => {
           if (!item || typeof item !== 'object' || Array.isArray(item)
             || !Number.isSafeInteger(item.quantity) || item.quantity < 1 || item.quantity > 99
-            || Object.keys(item).some((key) => !['menuItemId', 'name', 'priceYen', 'quantity'].includes(key))) {
+            || Object.keys(item).some((key) => !['menuItemId', 'name', 'priceYen', 'quantity', 'expectedUnitPriceYen', 'expectedQuantityUnitLabel'].includes(key))) {
             throw createHttpError(HTTP_ERROR_CODES.INVALID_ORDER_REQUEST);
           }
           const isMenu = typeof item.menuItemId === 'string' && item.menuItemId.trim() !== '';
           const isCustom = typeof item.name === 'string' && item.name.trim() !== '' && Number.isSafeInteger(item.priceYen);
-          if (isMenu === isCustom) throw createHttpError(HTTP_ERROR_CODES.INVALID_ORDER_REQUEST);
+          const hasExpectedPrice = item.expectedUnitPriceYen !== undefined;
+          const hasExpectedUnit = item.expectedQuantityUnitLabel !== undefined;
+          if (isMenu === isCustom || hasExpectedPrice !== hasExpectedUnit || (hasExpectedPrice && (!Number.isSafeInteger(item.expectedUnitPriceYen) || item.expectedUnitPriceYen < 0 || typeof item.expectedQuantityUnitLabel !== 'string' || !item.expectedQuantityUnitLabel.trim() || [...item.expectedQuantityUnitLabel].length > 8)) || (isCustom && hasExpectedPrice)) throw createHttpError(HTTP_ERROR_CODES.INVALID_ORDER_REQUEST);
           return isMenu
-            ? { menuItemId: item.menuItemId.trim(), quantity: item.quantity }
+            ? { menuItemId: item.menuItemId.trim(), quantity: item.quantity, ...(hasExpectedPrice ? { expectedUnitPriceYen: item.expectedUnitPriceYen, expectedQuantityUnitLabel: item.expectedQuantityUnitLabel } : {}) }
             : { name: item.name.trim(), priceYen: item.priceYen, quantity: item.quantity };
         });
         const result = requireService(orderRepository, 'createKitchenAddition').createKitchenAddition({

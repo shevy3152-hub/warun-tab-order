@@ -234,7 +234,7 @@ test('rejects unknown and server-controlled item fields', () => {
 
 test('validates schemaVersion, clientOrderId, and clientCreatedAtMs', () => {
   const invalidOrders = [
-    validOrder({ schemaVersion: 4 }),
+    validOrder({ schemaVersion: 5 }),
     validOrder({ clientOrderId: 'not-a-v4-uuid' }),
     validOrder({ clientCreatedAtMs: -1 }),
     validOrder({ clientCreatedAtMs: 1.5 }),
@@ -290,6 +290,23 @@ test('schemaVersion 3 accepts sake temperatures and rejects them for older schem
     validOrder({ schemaVersion: 3, items: [{ menuItemId: 'sake', variantId: 'sake_glass', temperature: '常温', quantity: 1 }] }),
   ]) {
     assert.throws(() => parseOrderJsonText(JSON.stringify(order)), (error) => (
+      assertBodyError(error, ORDER_JSON_BODY_ERROR_CODES.INVALID_ORDER_REQUEST, 400)
+    ));
+  }
+});
+
+test('schemaVersion 4 accepts paired price and unit assertions only', () => {
+  const result = parseOrderJsonText(JSON.stringify(validOrder({
+    schemaVersion: 4,
+    items: [{ menuItemId: 'chicken', quantity: 2, expectedUnitPriceYen: 225, expectedQuantityUnitLabel: '本' }],
+  })));
+  assert.deepEqual(result.items[0], { menuItemId: 'chicken', quantity: 2, expectedUnitPriceYen: 225, expectedQuantityUnitLabel: '本' });
+  for (const request of [
+    validOrder({ schemaVersion: 3, items: [{ menuItemId: 'chicken', quantity: 2, expectedUnitPriceYen: 225, expectedQuantityUnitLabel: '本' }] }),
+    validOrder({ schemaVersion: 4, items: [{ menuItemId: 'chicken', quantity: 2, expectedUnitPriceYen: 225 }] }),
+    validOrder({ schemaVersion: 4, items: [{ menuItemId: 'chicken', quantity: 2, expectedQuantityUnitLabel: '本' }] }),
+  ]) {
+    assert.throws(() => parseOrderJsonText(JSON.stringify(request)), (error) => (
       assertBodyError(error, ORDER_JSON_BODY_ERROR_CODES.INVALID_ORDER_REQUEST, 400)
     ));
   }

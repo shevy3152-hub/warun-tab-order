@@ -283,7 +283,28 @@ test('schemaVersion 3 validates sake temperatures and stores them as immutable s
   });
 });
 
-test('串カツ variants require at least two pieces per flavor and retain distinct snapshots', async () => {
+test('schemaVersion 4 requires temperature only for variants that define temperature choices', async () => {
+  await withFixture(({ database }) => {
+    database.prepare(`INSERT INTO categories (category_id, name, sort_order, created_at_ms, updated_at_ms) VALUES ('sake', '酒類', 5, 1000, 1000)`).run();
+    database.prepare(`UPDATE menu_items SET category_id = 'sake' WHERE menu_item_id = 'beer'`).run();
+    database.prepare(`INSERT INTO menu_item_variants (variant_id, menu_item_id, name, volume_label, price_yen, sort_order, temperature_options_json, created_at_ms, updated_at_ms) VALUES ('beer-glass-v4', 'beer', 'グラス', '110ml', 900, 1, ?, 1000, 1000)`).run(JSON.stringify(['冷酒']));
+    const repository = makeRepository(database);
+    assertOrderError(() => repository.createOrder(orderRequest({
+      schemaVersion: 4,
+      items: [{ menuItemId: 'beer', variantId: 'beer-glass-v4', quantity: 1, expectedUnitPriceYen: 900, expectedQuantityUnitLabel: '点' }],
+    })), ORDER_ERROR_CODES.INVALID_ORDER_REQUEST);
+    const valid = repository.createOrder(orderRequest({
+      schemaVersion: 4,
+      items: [
+        { menuItemId: 'beer', variantId: 'beer-glass-v4', temperature: '冷酒', quantity: 1, expectedUnitPriceYen: 900, expectedQuantityUnitLabel: '点' },
+        { menuItemId: 'edamame', quantity: 1, expectedUnitPriceYen: 380, expectedQuantityUnitLabel: '点' },
+      ],
+    }));
+    assert.equal(valid.order.items.length, 2);
+  });
+});
+
+test('configured minimum quantities apply per flavor variant and retain unit snapshots', async () => {
   await withFixture(({ database }) => {
     database.prepare(`
       INSERT INTO menu_items (
@@ -299,26 +320,79 @@ test('串カツ variants require at least two pieces per flavor and retain disti
     `);
     insertVariant.run('food-kushi-kushikatsu-sauce', 'ソース', 180, 1);
     insertVariant.run('food-kushi-kushikatsu-miso', '味噌', 190, 2);
+    database.prepare(`UPDATE menu_items SET quantity_selection_enabled = 1, minimum_quantity = 2, initial_quantity = 2, quantity_step = 1, quantity_unit_label = '本' WHERE menu_item_id = 'food-kushi-kushikatsu'`).run();
 
     const result = makeRepository(database).createOrder(orderRequest({
-      schemaVersion: 2,
+      schemaVersion: 4,
       items: [
-        { menuItemId: 'food-kushi-kushikatsu', variantId: 'food-kushi-kushikatsu-sauce', quantity: 2 },
-        { menuItemId: 'food-kushi-kushikatsu', variantId: 'food-kushi-kushikatsu-miso', quantity: 3 },
+        { menuItemId: 'food-kushi-kushikatsu', variantId: 'food-kushi-kushikatsu-sauce', quantity: 2, expectedUnitPriceYen: 180, expectedQuantityUnitLabel: '本' },
+        { menuItemId: 'food-kushi-kushikatsu', variantId: 'food-kushi-kushikatsu-miso', quantity: 3, expectedUnitPriceYen: 190, expectedQuantityUnitLabel: '本' },
       ],
     }));
     assert.deepEqual(result.order.items.map((item) => [item.variantNameSnapshot, item.unitPriceYenSnapshot, item.quantity]), [
       ['味噌', 190, 3],
       ['ソース', 180, 2],
     ]);
+    assert.deepEqual(result.order.items.map((item) => item.quantityUnitLabelSnapshot), ['本', '本']);
     assertOrderError(
       () => makeRepository(database, { orderIds: [ORDER_C] }).createOrder(orderRequest({
         clientOrderId: CLIENT_ORDER_B,
-        schemaVersion: 2,
-        items: [{ menuItemId: 'food-kushi-kushikatsu', variantId: 'food-kushi-kushikatsu-sauce', quantity: 1 }],
+        schemaVersion: 4,
+        items: [{ menuItemId: 'food-kushi-kushikatsu', variantId: 'food-kushi-kushikatsu-sauce', quantity: 1, expectedUnitPriceYen: 180, expectedQuantityUnitLabel: '本' }],
       })),
       ORDER_ERROR_CODES.INVALID_ORDER_REQUEST,
     );
+  });
+});
+
+test('legacy order intents cannot reprice a catalog item that requires a price assertion', async () => {
+  await withFixture(({ database }) => {
+    database.prepare(`INSERT INTO menu_items (menu_item_id, category_id, formal_name, kitchen_alias, price_yen, sort_order, created_at_ms, updated_at_ms) VALUES ('asserted-item', 'recommended', '架空鶏皮', '鶏皮', 225, 1, 1000, 1000)`).run();
+    database.prepare(`UPDATE menu_items SET price_assertion_required = 1, quantity_unit_label = '本' WHERE menu_item_id = 'asserted-item'`).run();
+    const repository = makeRepository(database);
+    assertOrderError(() => repository.createOrder(orderRequest({ items: [{ menuItemId: 'asserted-item', quantity: 2 }] })), ORDER_ERROR_CODES.MENU_ITEM_CONFIGURATION_CHANGED);
+    const accepted = repository.createOrder(orderRequest({
+      clientOrderId: CLIENT_ORDER_B,
+      schemaVersion: 4,
+      items: [{ menuItemId: 'asserted-item', quantity: 2, expectedUnitPriceYen: 225, expectedQuantityUnitLabel: '本' }],
+    }));
+    assert.equal(accepted.order.totalAmountYen, 450);
+    assert.equal(accepted.order.items[0].unitPriceYenSnapshot, 225);
+    assert.equal(accepted.order.items[0].quantityUnitLabelSnapshot, '本');
+  });
+});
+
+test('quantity selection enforces configured bounds, permits odd counts, and bills by unit price', async () => {
+  await withFixture(({ database }) => {
+    database.prepare(`UPDATE menu_items SET price_yen = 225, quantity_selection_enabled = 1, minimum_quantity = 2, initial_quantity = 2, quantity_step = 1, quantity_unit_label = '本' WHERE menu_item_id = 'edamame'`).run();
+    const repository = makeRepository(database, { orderIds: [ORDER_A, ORDER_B, ORDER_C, uuid(204), uuid(205)] });
+    for (const [clientOrderId, quantity, expectedTotal] of [
+      [CLIENT_ORDER_A, 2, 450],
+      [CLIENT_ORDER_B, 3, 675],
+      [CLIENT_ORDER_C, 5, 1125],
+    ]) {
+      const ordered = repository.createOrder(orderRequest({
+        clientOrderId,
+        schemaVersion: 4,
+        items: [{ menuItemId: 'edamame', quantity, expectedUnitPriceYen: 225, expectedQuantityUnitLabel: '本' }],
+      }));
+      assert.equal(ordered.order.items[0].quantity, quantity);
+      assert.equal(ordered.order.items[0].unitPriceYenSnapshot, 225);
+      assert.equal(ordered.order.items[0].lineTotalYenSnapshot, expectedTotal);
+      assert.equal(ordered.order.items[0].quantityUnitLabelSnapshot, '本');
+    }
+
+    assertOrderError(() => repository.createOrder(orderRequest({
+      clientOrderId: CLIENT_ORDER_D,
+      schemaVersion: 4,
+      items: [{ menuItemId: 'edamame', quantity: 1, expectedUnitPriceYen: 225, expectedQuantityUnitLabel: '本' }],
+    })), ORDER_ERROR_CODES.INVALID_ORDER_REQUEST);
+    database.prepare(`UPDATE menu_items SET quantity_step = 2 WHERE menu_item_id = 'edamame'`).run();
+    assertOrderError(() => repository.createOrder(orderRequest({
+      clientOrderId: CLIENT_ORDER_E,
+      schemaVersion: 4,
+      items: [{ menuItemId: 'edamame', quantity: 3, expectedUnitPriceYen: 225, expectedQuantityUnitLabel: '本' }],
+    })), ORDER_ERROR_CODES.INVALID_ORDER_REQUEST);
   });
 });
 

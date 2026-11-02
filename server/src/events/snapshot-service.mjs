@@ -276,6 +276,7 @@ function projectOrderItem(source) {
   optionalString(item, 'temperatureSnapshot', value.temperatureSnapshot);
   optionalString(item, 'servingOptionId', value.servingOptionId);
   optionalString(item, 'servingOptionNameSnapshot', value.servingOptionNameSnapshot);
+  optionalString(item, 'quantityUnitLabelSnapshot', value.quantityUnitLabelSnapshot);
   return item;
 }
 

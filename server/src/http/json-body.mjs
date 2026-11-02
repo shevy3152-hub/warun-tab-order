@@ -57,7 +57,7 @@ const TOP_LEVEL_KEYS = new Set([
   'visitContextId',
   'items',
 ]);
-const ITEM_KEYS = new Set(['menuItemId', 'quantity', 'variantId', 'servingOptionId', 'temperature']);
+const ITEM_KEYS = new Set(['menuItemId', 'quantity', 'variantId', 'servingOptionId', 'temperature', 'expectedUnitPriceYen', 'expectedQuantityUnitLabel']);
 
 function bodyError(code, options = undefined) {
   return new OrderJsonBodyError(code, options);
@@ -367,7 +367,7 @@ function requireExactKeys(value, allowedKeys, requiredKeys) {
 
 function validateOrderRequest(value) {
   requireExactKeys(value, TOP_LEVEL_KEYS, ['schemaVersion', 'clientOrderId', 'items']);
-  if (![1, 2, 3].includes(value.schemaVersion) || !CLIENT_ORDER_ID_PATTERN.test(value.clientOrderId)) {
+  if (![1, 2, 3, 4].includes(value.schemaVersion) || !CLIENT_ORDER_ID_PATTERN.test(value.clientOrderId)) {
     throw bodyError(ORDER_JSON_BODY_ERROR_CODES.INVALID_ORDER_REQUEST);
   }
   if (
@@ -414,6 +414,17 @@ function validateOrderRequest(value) {
     ) {
       throw bodyError(ORDER_JSON_BODY_ERROR_CODES.INVALID_ORDER_REQUEST);
     }
+    const hasExpectedPrice = Object.hasOwn(item, 'expectedUnitPriceYen');
+    const hasExpectedUnit = Object.hasOwn(item, 'expectedQuantityUnitLabel');
+    if ((hasExpectedPrice || hasExpectedUnit) && value.schemaVersion < 4) {
+      throw bodyError(ORDER_JSON_BODY_ERROR_CODES.INVALID_ORDER_REQUEST);
+    }
+    if (hasExpectedPrice !== hasExpectedUnit
+      || (hasExpectedPrice && (!Number.isSafeInteger(item.expectedUnitPriceYen) || item.expectedUnitPriceYen < 0
+        || typeof item.expectedQuantityUnitLabel !== 'string' || !item.expectedQuantityUnitLabel.trim()
+        || [...item.expectedQuantityUnitLabel].length > 8))) {
+      throw bodyError(ORDER_JSON_BODY_ERROR_CODES.INVALID_ORDER_REQUEST);
+    }
     const selectionKey = `${item.menuItemId}\u0000${variantId ?? ''}\u0000${servingOptionId ?? ''}\u0000${temperature ?? ''}`;
     if (seenSelections.has(selectionKey)) throw bodyError(ORDER_JSON_BODY_ERROR_CODES.INVALID_ORDER_REQUEST);
     seenSelections.add(selectionKey);
@@ -423,6 +434,10 @@ function validateOrderRequest(value) {
       ...(variantId ? { variantId } : {}),
       ...(servingOptionId ? { servingOptionId } : {}),
       ...(temperature ? { temperature } : {}),
+      ...(hasExpectedPrice ? {
+        expectedUnitPriceYen: item.expectedUnitPriceYen,
+        expectedQuantityUnitLabel: item.expectedQuantityUnitLabel,
+      } : {}),
     });
   });
 
