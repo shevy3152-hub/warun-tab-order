@@ -280,7 +280,7 @@ export function backupSafeCopyDatabase({ databasePath, backupPath } = {}) {
   }
 }
 
-function parseArguments(argv) {
+export function parseArguments(argv) {
   const options = {};
   for (let index = 0; index < argv.length; index += 1) {
     const key = argv[index];
@@ -288,7 +288,8 @@ function parseArguments(argv) {
     if (!["--db", "--token-file", "--backup", "--mode"].includes(key) || typeof value !== "string") {
       throw new Error("Usage: node server/scripts/provision-safe-copy-kitchen-token.mjs --mode <check|ensure|backup> --db <absolute-safe-copy-path> [--token-file <absolute-path>] [--backup <absolute-path>]");
     }
-    options[key.slice(2)] = value;
+    const optionName = key.slice(2).replace(/-([a-z])/g, (_match, letter) => letter.toUpperCase());
+    options[optionName] = value;
     index += 1;
   }
   if (!options.db || !isAbsolute(options.db)) throw new Error("The safe-copy database path must be absolute.");
