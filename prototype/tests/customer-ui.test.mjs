@@ -23,6 +23,12 @@ test("CustomerScreen renders menu prices but no cart or customer-history totals"
   assert.doesNotMatch(cartPanel, /menu-price|totalAmount|合計/);
 });
 
+test("quantity-selection customer prices omit the automatic sales-unit label", () => {
+  assert.doesNotMatch(customerScreen, /\{item\.quantityUnitLabel\}単価/);
+  assert.ok(customerScreen.includes('<span className="menu-price"><b>{yen(taxExcludedYen(item.price))}</b><small>税込 {yen(item.price)}</small></span>'));
+  assert.ok(customerScreen.includes('<span>1{quantitySelectionUnitLabel}あたり</span>'));
+  assert.ok(customerScreen.includes('{quantitySelectionItem.minimumQuantity}{quantitySelectionUnitLabel}からご注文いただけます。'));
+});
 test("CustomerScreen exposes a normalized rail theme with camellia as the active test theme", () => {
   assert.deepEqual(CUSTOMER_THEMES, { standard: "standard", camellia: "camellia", "autumn-leaves": "autumn-leaves", "moon-susuki": "moon-susuki", "japanese-halloween": "japanese-halloween", christmas: "christmas" });
   assert.equal(CUSTOMER_TEST_THEME, "camellia");
