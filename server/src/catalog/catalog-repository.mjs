@@ -403,6 +403,11 @@ function mapKitchenMenuItem(row) {
     isSoldOut: row.is_sold_out === 1,
     sortOrder: row.sort_order,
     version: row.version,
+    quantitySelectionEnabled: row.quantity_selection_enabled === 1,
+    minimumQuantity: row.minimum_quantity,
+    initialQuantity: row.initial_quantity,
+    quantityStep: row.quantity_step,
+    quantityUnitLabel: row.quantity_unit_label,
   };
 }
 
@@ -740,6 +745,11 @@ export function createCatalogRepository({ database, now = Date.now } = {}) {
           m.formal_name,
           m.kitchen_alias,
           m.is_sold_out,
+          m.quantity_selection_enabled,
+          m.minimum_quantity,
+          m.initial_quantity,
+          m.quantity_step,
+          m.quantity_unit_label,
           m.sort_order,
           m.version
         FROM menu_items AS m

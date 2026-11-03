@@ -21,8 +21,10 @@ const tokenFor = (byte) => Buffer.alloc(32, byte).toString('base64url');
 const hash = (token) => createHash('sha256').update(token, 'utf8').digest('hex');
 const ADMIN_ID = uuid(9_001);
 const CUSTOMER_ID = uuid(9_002);
+const KITCHEN_ID = uuid(9_003);
 const ADMIN_TOKEN = tokenFor(0x31);
 const CUSTOMER_TOKEN = tokenFor(0x11);
+const KITCHEN_TOKEN = tokenFor(0x22);
 const JSON_HEADERS = { 'Content-Type': 'application/json' };
 
 function seed(database) {
@@ -376,6 +378,76 @@ test('quantity settings survive admin API reload and an older update that omits 
       step: customerItem.quantityStep,
       unit: customerItem.quantityUnitLabel,
     }, { enabled: true, minimum: 2, initial: 2, step: 1, unit: '本' });
+  });
+});
+
+test('kitchen menu returns persisted quantity settings without exposing price assertion data', async () => {
+  await withFixture(async ({ port, database }) => {
+    const saved = await request({
+      port,
+      token: ADMIN_TOKEN,
+      body: {
+        ...writeBody(),
+        quantitySelectionEnabled: true,
+        minimumQuantity: 2,
+        initialQuantity: 2,
+        quantityStep: 1,
+        quantityUnitLabel: '本',
+      },
+    });
+    assert.equal(saved.statusCode, 200);
+
+    const persisted = database.prepare(`
+      SELECT quantity_selection_enabled, minimum_quantity, initial_quantity, quantity_step, quantity_unit_label
+      FROM menu_items
+      WHERE menu_item_id = 'sake'
+    `).get();
+    assert.deepEqual({ ...persisted }, {
+      quantity_selection_enabled: 1,
+      minimum_quantity: 2,
+      initial_quantity: 2,
+      quantity_step: 1,
+      quantity_unit_label: '本',
+    });
+
+    database.prepare(`
+      INSERT INTO devices (
+        device_id, role, display_name, token_hash, status, paired_at_ms,
+        revoked_at_ms, created_at_ms, updated_at_ms
+      ) VALUES (?, 'kitchen', 'Kitchen', ?, 'active', 1000, NULL, 1000, 1000)
+    `).run(KITCHEN_ID, hash(KITCHEN_TOKEN));
+    database.prepare(`
+      INSERT INTO menu_items (
+        menu_item_id, category_id, formal_name, kitchen_alias, description,
+        price_yen, is_sold_out, is_active, sort_order, image_uri, version,
+        created_at_ms, updated_at_ms, section_key
+      ) VALUES ('ordinary', 'drink', '通常商品', '通常商品', '', 500, 0, 1, 2, NULL, 1, 1000, 1000, NULL)
+    `).run();
+
+    const kitchenReload = await request({ port, token: KITCHEN_TOKEN, method: 'GET', path: '/v1/menu' });
+    assert.equal(kitchenReload.statusCode, 200);
+    assert.equal(kitchenReload.json.audience, 'kitchen');
+    const kitchenItem = kitchenReload.json.items.find(({ menuItemId }) => menuItemId === 'sake');
+    assert.deepEqual({
+      enabled: kitchenItem.quantitySelectionEnabled,
+      minimum: kitchenItem.minimumQuantity,
+      initial: kitchenItem.initialQuantity,
+      step: kitchenItem.quantityStep,
+      unit: kitchenItem.quantityUnitLabel,
+    }, { enabled: true, minimum: 2, initial: 2, step: 1, unit: '本' });
+    assert.equal(Object.hasOwn(kitchenItem, 'priceYen'), false);
+    assert.equal(Object.hasOwn(kitchenItem, 'priceAssertionRequired'), false);
+
+    const ordinaryItem = kitchenReload.json.items.find(({ menuItemId }) => menuItemId === 'ordinary');
+    assert.deepEqual({
+      enabled: ordinaryItem.quantitySelectionEnabled,
+      minimum: ordinaryItem.minimumQuantity,
+      initial: ordinaryItem.initialQuantity,
+      step: ordinaryItem.quantityStep,
+      unit: ordinaryItem.quantityUnitLabel,
+    }, { enabled: false, minimum: 1, initial: 1, step: 1, unit: '点' });
+    assert.equal(Object.hasOwn(ordinaryItem, 'priceYen'), false);
+    assert.equal(Object.hasOwn(ordinaryItem, 'priceAssertionRequired'), false);
   });
 });
 
