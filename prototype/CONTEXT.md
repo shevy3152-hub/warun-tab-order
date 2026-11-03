@@ -954,3 +954,12 @@
 - 検証: customer-ui 70/70、Sites 4/4、frozen-lockfile依存復元、隔離先でVite 4,658 modulesのbuildとSites packaging。既存distは保持。1280×800 headless画像はChrome GPU subprocess起動失敗で取得できず、Computer Useは行っていない。
 - 独立レビューは指摘なし。稼働サービス・DB・商品マスター・注文・会計は変更していない。
 - 次の作業1つ: review-only Web候補の内容を提示し、稼働反映の別途許可を待つ。
+
+
+## 客席数量選択UIの案内位置調整 2026-11-03
+- 客席メニュー名下へ数量設定から自動表示していた「2本からご注文」等を除去。管理画面の既存料理説明欄はそのまま任意入力・表示に使用し、新しい設定項目や商品マスター変更は加えていない。
+- 数量モーダルの「数量を選択してください」をタイトル右の補助表示から本文先頭へ移動。モーダル見出しに商品名の横幅を確保した。モーダル内の単位・最低数量案内、数量操作、税抜／税込価格表示と既存注文動作は維持。
+- 検証: 対象customer-ui 3/3、Sites 4/4、frozen-lockfile依存確認済み、diff --check PASS。固定HEAD `81aedaa` のGit archiveへ `App.jsx`／`styles.css` だけoverlayし、既存依存を使ったnative Vite build API＋Sites preparation＋inlineをfresh Tempへ実施、119出力でPASS。worktree distは変更していない。スクリーンショットとA90表示確認は未実施。
+- 独立レビューは指摘なし。最低数量案内だけが商品名下から消え、任意料理説明・数量モーダル内案内・単位・数量・価格・既存動作を保つことを確認。
+- 稼働サービス、DB、商品、注文、会計、配信資材は変更していない。ソース差分は未commit／未push、review-only候補は未作成。
+- 次の作業1つ: 対象限定commit／通常push後、今回のWeb差分だけのreview-only候補を準備する。

@@ -25,6 +25,7 @@ test("CustomerScreen renders menu prices but no cart or customer-history totals"
 
 test("quantity-selection customer prices omit the automatic sales-unit label", () => {
   assert.doesNotMatch(customerScreen, /\{item\.quantityUnitLabel\}単価/);
+  assert.doesNotMatch(customerScreen, /quantitySelectionEnabled && item\.minimumQuantity > 1/);
   assert.ok(customerScreen.includes('<span className="menu-price"><b>{yen(taxExcludedYen(item.price))}</b><small>税込 {yen(item.price)}</small></span>'));
   assert.ok(customerScreen.includes('<span>1{quantitySelectionUnitLabel}あたり</span>'));
   assert.ok(customerScreen.includes('{quantitySelectionItem.minimumQuantity}{quantitySelectionUnitLabel}からご注文いただけます。'));
@@ -903,7 +904,10 @@ test("quantity selection is generic, applies after variants, and does not use th
   assert.match(customerScreen, /onClose=\{\(\) => \{ setQuantitySelection\(null\); setQuantitySelectionError\(""\); \}\}/);
   assert.match(customerScreen, /quantitySelection\.baseQuantity \+ quantitySelection\.quantity <= 99/);
   assert.doesNotMatch(customerScreen, /openKushikatsuSelection|kushikatsuSelectionVariant/);
-  assert.match(customerScreen, /titleExtra=\{<span className="kushikatsu-modal-instruction">数量を選択してください<\/span>\}/);
+  assert.doesNotMatch(customerScreen, /titleExtra=\{<span className="kushikatsu-modal-instruction">数量を選択してください<\/span>\}/);
+  assert.match(customerScreen, /<Modal title=\{quantitySelectionItem\.name\} onClose=/);
+  assert.match(customerScreen, /<div className="shochu-selection-modal">\s*<p className="quantity-selection-instruction">数量を選択してください<\/p>/);
+  assert.match(styles, /\.modal--quantity-selection \.quantity-selection-instruction \{[\s\S]*font-size: 18px/);
   assert.match(customerScreen, /quantitySelectionVariant\.name/);
   assert.match(customerScreen, /className="kushikatsu-unit-price"/);
   assert.match(styles, /\.kushikatsu-unit-price \{[\s\S]*display: flex[\s\S]*justify-content: space-between/);

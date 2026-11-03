@@ -14,6 +14,7 @@ Build app UI in `src/`. Keep `.openai/hosting.json`, `worker/index.js`, `scripts
 - Customer devices are fixed to tables 1 through 4 and never expose a table selector to guests.
 - Customer menu cards show a derived tax-exclusive price with the tax-included master price. Customer carts and customer order history never show subtotals or totals.
 - 数量選択商品の客席価格に販売単位由来の赤い自動ラベル（例：「本単価」）を生成しない。単位説明が必要なら既存の商品名編集で品名末尾へ入力し、専用ラベル設定は追加しない。税抜主表示・税込併記は維持する。
+- 数量選択商品の最低注文数を商品名下へ自動表示しない。必要な案内は管理画面の商品説明欄へ任意入力し、数量モーダルの「数量を選択してください」はメニュー名を優先してヘッダー下へ表示する。
 - Kitchen order cards prioritize unserved items and retain completed orders in the same open visit's table receipt with collapsible served details. Remove them from the new-orders screen after checkout completes and the visit closes; preserve history.
 - Kitchen tables use one horizontal row of fixed-width table slots; each slot is an independently vertically scrollable receipt containing that table's checkout and orders. Keep additional tables reachable with horizontal scrolling rather than wrapping slots into another row, and prioritize tables with active checkout requests.
 - Keep the kitchen page focused on real-time work: let its horizontal table-slot row fill available vertical space and keep completed-order/payment-history panels in the existing history route. Completed orders remain in the same open visit's receipt regardless of checkout status; serving alone never closes a session or resets a table.
