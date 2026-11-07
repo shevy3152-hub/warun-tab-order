@@ -565,6 +565,7 @@ test("customer product detail uses the common item-selection routes and shared d
   assert.match(appSource, /usage === "detail" && isFoodMenuItem \? " image-layout-editor__frame--food"/);
   assert.match(styles, /\.product-detail__image \{[\s\S]*aspect-ratio: 760 \/ 550/);
   assert.match(styles, /\.product-detail--food \.product-detail__image \{ aspect-ratio: 1 \/ 1; \}/);
+  assert.match(styles, /\.product-detail--food \{ grid-template-columns: minmax\(0, 1\.5fr\) minmax\(0, 1fr\); \}/);
   assert.match(styles, /\.image-layout-render \{[\s\S]*object-fit: contain; object-position: center; transform-origin: center/);
   assert.match(styles, /\.image-layout-editor__frame--detail \{ aspect-ratio: 760 \/ 550/);
   assert.match(styles, /\.image-layout-editor__frame--detail\.image-layout-editor__frame--food \{ aspect-ratio: 1 \/ 1; \}/);
