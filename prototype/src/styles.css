@@ -372,7 +372,7 @@ h1, h2, h3, p { margin: 0; }
 /* Keep the earlier tall image frame for every non-meal detail; food stays square. */
 @media (orientation: landscape), (min-width: 900px) and (max-height: 800px) {
   .product-detail:not(.product-detail--food) { grid-template-columns: minmax(220px, calc(38% - 60px)) minmax(0, 1fr); gap: 20px; align-items: start; }
-  .product-detail:not(.product-detail--food) .product-detail__image { height: min(550px, calc(100dvh - 170px)); aspect-ratio: auto; }
+  .product-detail:not(.product-detail--food) .product-detail__image { height: min(550px, calc(100dvh - 212px)); aspect-ratio: auto; }
 }
 
 .modal--sake { align-self: start; margin-top: 20px; max-height: calc(100vh - 40px); overflow: hidden; }
@@ -1203,6 +1203,10 @@ h1, h2, h3, p { margin: 0; }
 .image-layout-editor__frame--detail { aspect-ratio: 760 / 550; max-width: 560px; }
 .image-layout-editor__frame--detail.image-layout-editor__frame--food { aspect-ratio: 1 / 1; }
 .image-layout-editor__frame .image-layout-render { position: absolute; inset: 0; }
+/* Match the non-meal editor preview frame to the customer detail viewport. */
+@media (orientation: landscape), (min-width: 900px) and (max-height: 800px) {
+  .image-layout-editor__frame--detail:not(.image-layout-editor__frame--food) { width: clamp(220px, calc(34.96vw - 78.24px), 264px); max-width: 100%; height: min(550px, calc(100dvh - 212px)); aspect-ratio: auto; border: 0; outline: 2px solid var(--ink); }
+}
 .image-layout-editor__controls { display: grid; gap: 14px; }
 .image-layout-editor__hint { margin: 0; color: var(--muted); font-size: 13px; font-weight: 800; }
 .image-layout-editor__controls label { display: grid; grid-template-columns: 1fr auto; gap: 6px 12px; font-weight: 900; }

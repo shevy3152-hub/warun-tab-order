@@ -632,7 +632,8 @@ test("customer detail restores the tall landscape image frame for non-meal categ
   }
 
   assert.match(styles, /@media \(orientation: landscape\), \(min-width: 900px\) and \(max-height: 800px\) \{[\s\S]*?\.product-detail:not\(\.product-detail--food\) \{[^}]*grid-template-columns: minmax\(220px, calc\(38% - 60px\)\)/);
-  assert.match(styles, /\.product-detail:not\(\.product-detail--food\) \.product-detail__image \{[^}]*height: min\(550px, calc\(100dvh - 170px\)\); aspect-ratio: auto;/);
+  assert.match(styles, /\.product-detail:not\(\.product-detail--food\) \.product-detail__image \{[^}]*height: min\(550px, calc\(100dvh - 212px\)\); aspect-ratio: auto;/);
+  assert.match(styles, /\.image-layout-editor__frame--detail:not\(\.image-layout-editor__frame--food\) \{[^}]*width: clamp\(220px, calc\(34\.96vw - 78\.24px\), 264px\);[^}]*height: min\(550px, calc\(100dvh - 212px\)\); aspect-ratio: auto; border: 0; outline: 2px solid var\(--ink\);/);
   assert.match(styles, /\.product-detail--food \.product-detail__image \{ aspect-ratio: 1 \/ 1; \}/);
 });
 
