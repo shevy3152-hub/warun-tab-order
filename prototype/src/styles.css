@@ -369,6 +369,12 @@ h1, h2, h3, p { margin: 0; }
   .modal--product-detail .modal__body { display: block; overflow: hidden; }
 }
 
+/* Keep the earlier tall image frame for every non-meal detail; food stays square. */
+@media (orientation: landscape), (min-width: 900px) and (max-height: 800px) {
+  .product-detail:not(.product-detail--food) { grid-template-columns: minmax(220px, calc(38% - 60px)) minmax(0, 1fr); gap: 20px; align-items: start; }
+  .product-detail:not(.product-detail--food) .product-detail__image { height: min(550px, calc(100dvh - 170px)); aspect-ratio: auto; }
+}
+
 .modal--sake { align-self: start; margin-top: 20px; max-height: calc(100vh - 40px); overflow: hidden; }
 .modal--sake .modal__header { min-height: 66px; padding: 10px 18px; }
 .modal--sake .modal__header h2 { font-size: 24px; }

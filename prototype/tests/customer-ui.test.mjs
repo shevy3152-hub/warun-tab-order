@@ -605,6 +605,37 @@ test("customer detail and menu plus share routes without bypassing availability 
   assert.match(appSource, /const commitShochuSelection = \(\) => \{[\s\S]*setShochuSelection\(null\)/);
 });
 
+test("customer detail restores the tall landscape image frame for non-meal categories", () => {
+  const categories = [
+    { id: "drink", subcategories: [
+      { id: "sake", categoryIds: ["sake"] },
+      { id: "shochu", categoryIds: ["shochu"] },
+      { id: "beer", categoryIds: ["beer"] },
+      { id: "highball", categoryIds: ["highball"] },
+      { id: "sour", categoryIds: ["sour"] },
+      { id: "soft-drink", categoryIds: ["soft-drink"] },
+      { id: "nonalcohol", categoryIds: ["nonalcohol"] },
+    ] },
+    { id: "food", subcategories: [
+      { id: "food-kushi", categoryIds: ["food-kushi"] },
+      { id: "special-hine", categoryIds: ["special-hine"] },
+      { id: "special-reservation", categoryIds: ["special-reservation"] },
+    ] },
+    { id: "winter", subcategories: [{ id: "winter-hotpot", categoryIds: ["winter-hotpot"] }] },
+  ];
+
+  for (const categoryId of ["sake", "shochu", "beer", "highball", "sour", "soft-drink", "nonalcohol"]) {
+    assert.equal(isCustomerMealMenuItem({ categoryId }, categories), false, `${categoryId} keeps the non-meal frame`);
+  }
+  for (const categoryId of ["food-kushi", "special-hine", "special-reservation", "winter-hotpot"]) {
+    assert.equal(isCustomerMealMenuItem({ categoryId }, categories), true, `${categoryId} keeps the square meal frame`);
+  }
+
+  assert.match(styles, /@media \(orientation: landscape\), \(min-width: 900px\) and \(max-height: 800px\) \{[\s\S]*?\.product-detail:not\(\.product-detail--food\) \{[^}]*grid-template-columns: minmax\(220px, calc\(38% - 60px\)\)/);
+  assert.match(styles, /\.product-detail:not\(\.product-detail--food\) \.product-detail__image \{[^}]*height: min\(550px, calc\(100dvh - 170px\)\); aspect-ratio: auto;/);
+  assert.match(styles, /\.product-detail--food \.product-detail__image \{ aspect-ratio: 1 \/ 1; \}/);
+});
+
 test("admin menu editing is grouped, cancellable, and keeps edit ordering data", () => {
   assert.match(appSource, /const menuGroups = \[/);
   assert.match(appSource, /menu-admin-group__heading/);

@@ -983,3 +983,13 @@
 - code commit `76c0e4c461459181666aae20b32dfff2dc93fb73` を通常pushし、push後remote SHA一致を確認。review-only候補 `C:\Users\user\AppData\Local\WarunTabOrder\release-candidates\quantity-v25-product-detail-food-square-large-76c0e4c-20261107-review-only-payload`。manifest `C:\Users\user\AppData\Local\Temp\warun-product-detail-food-square-large-candidate-20261107-f2c636780bb54fffbe666c331ef4c8b1\distribution-manifest.json` SHA-256 `6E27D0D3515DAA010FE1711A6BC882D3B503B51832B3393C57CC236720C72E31`。実配置対象2件のみ: index `8596B574AB30DA899C5AAD3B1BD37F07C9C4E4322A712BB4A92D8A0E0B9EAF2F`、styles module `8CAD198DEC6D2B88A9EB378C147B57FA26E23F169776695392DDF5F0B7B26949`。残る53参照assetは既存WebRootとSHA一致。
 - 稼働Web/API、DB、商品、画像設定、注文、会計、A90は変更なし。既存の前候補・Temp保全・未追跡fixtureは保持。
 - 次の作業1つ: review-only候補の内容を提示し、今回候補の稼働反映許可を待つ。
+
+## 酒類・非食事の商品詳細画像サイズ復元 2026-11-07（review-only候補準備）
+
+- 原因は `ff24a1d` の共通商品詳細レイアウト変更。幅広い2列比率と `760 / 550` 枠が全カテゴリへ適用され、以前の横向き用・高さ最大550pxの画像枠がなくなったため、日本酒・焼酎など非食事商品の画像が小さく見えていた。食事だけの1:1上書きと選択handlerが原因ではない。
+- 横向きで `.product-detail--food` 以外に従来の縦長枠（高さ `min(550px, calc(100dvh - 170px))`、幅は詳細モーダル内で約264px）を戻した。商品名・保存済み画像transform・説明・戻る／「これにする」・選択経路は変更していない。食事・冬季（名物・予約限定を含む）は1:1大画像を維持する。
+- 影響範囲: 日本酒・焼酎のほかビール、ハイボール、サワー、ソフトドリンク、ノンアルも非食事の縦長枠へ戻る。串カツ・名物・予約限定・冬季は食事判定のまま正方形。商品ID・名での例外、商品データ、DB/API、注文／会計、数量／variant／飲み方の処理変更なし。
+- 検証: `customer-ui.test.mjs` 72/72、Sites worker 4/4。Vite 4,659 modules、Sites build preparation、client inliningをTempだけへ実行。隔離Temp上の `pnpm run build` はpnpmがworktree外依存junctionの安全性で拒否したため停止し、依存を復元せずnative Vite API経由で同じbuild段階をTemp出力へ完了。既存 `prototype/dist` は変更なし。
+- 独立レビューは指摘なし。1280×800時のCSSから画像枠約264×550pxと説明カラム約568pxを算出。Computer Use／ブラウザー撮影／A90実測は未実施のため実画面のcomputed boundsと実機表示は未確認。
+- 新しいreview-only Web候補はこのcommitのindexと参照moduleだけで準備する。稼働Web/API、DB、商品、画像設定、注文、会計は変更・反映せず、A90表示確認は別途反映許可後に残す。
+- 次の作業1つ: 2ファイルpayload・既存asset依存・manifestを照合したreview-only候補を提示し、稼働反映の別途許可を待つ。
