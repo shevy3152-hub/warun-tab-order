@@ -993,3 +993,14 @@
 - 独立レビューは指摘なし。1280×800時のCSSから画像枠約264×550pxと説明カラム約568pxを算出。Computer Use／ブラウザー撮影／A90実測は未実施のため実画面のcomputed boundsと実機表示は未確認。
 - 新しいreview-only Web候補はこのcommitのindexと参照moduleだけで準備する。稼働Web/API、DB、商品、画像設定、注文、会計は変更・反映せず、A90表示確認は別途反映許可後に残す。
 - 次の作業1つ: 2ファイルpayload・既存asset依存・manifestを照合したreview-only候補を提示し、稼働反映の別途許可を待つ。
+
+## 2026-11-07 非食事商品詳細画像・管理プレビュー整合の追補
+
+- 独立レビューで、客席画像はモーダル本文の実効高に `max-height: 100%` で制限される一方、管理プレビューはviewport高を使っていた差を確認。両方の非食事詳細枠を `min(550px, calc(100dvh - 212px))` に統一し、客席モーダルの最大高・枠線・header/footer・body paddingを差し引いた利用可能高と一致させた。
+- 管理プレビューは客席と同じ幅式を使い、detail非食事枠だけ `border: 0` と `outline: 2px` にして枠を見せつつ画像描画領域の差をなくした。保存済みlayout transform、画像の `contain` 描画、商品詳細の選択操作は変更なし。食事・冬季／名物／予約限定は引き続き1:1。
+- 影響確認は日本酒・焼酎に加えて、ビール、ハイボール、サワー、ソフトドリンク、ノンアルを非食事枠として確認。食事、名物、予約限定、冬季は正方形を維持。商品データ・DB/API・注文／会計は変更なし。
+- 検証: `customer-ui.test.mjs` 72/72 PASS。Sites worker 4/4 PASSは前回の同じ表示差分調査時に完了し再実行なし。Vite 4,659 modulesのproduction build、Sites build preparation、client inliningを隔離Tempに出力して成功。既存 `prototype/dist` は未変更。独立レビューは追補後の高さ・幅・border parityを再確認し、重大・高・その他の指摘なし。静的CSS assertionでありブラウザーのcomputed bounds、Computer Use、A90実機は未確認。
+- 対象限定commit `b10e4eaacdbe87c8849377c631adc93238604a17` を通常pushし、push後のremote SHAが一致。対象は `prototype/src/styles.css` と `prototype/tests/customer-ui.test.mjs`。旧候補 `quantity-v25-product-detail-nonfood-image-0d40288-20261107-review-only-payload` は保持。
+- 新review-only候補 `C:\Users\user\AppData\Local\WarunTabOrder\release-candidates\quantity-v25-product-detail-nonfood-preview-parity-20261107-review-only-payload`。manifest `C:\Users\user\AppData\Local\Temp\warun-product-detail-nonfood-preview-parity-candidate-20261107\distribution-manifest.json` SHA-256 `D10CF8EC1F9539F0FDF8859B39A92A79871BAF237DF6B6C012D51C152AB93487`。実配置対象はindex `BBBE9B53106434B519E1896E309278C7620D863B957F948B826061433038859E` と module `8CAD198DEC6D2B88A9EB378C147B57FA26E23F169776695392DDF5F0B7B26949` の2件。参照asset 54件、既存WebRoot依存53件はSHA一致。candidate-infoは配置対象外。
+- 稼働Web/API、DB、商品・画像設定、注文・会計、A90は変更していない。実画面computed boundsとA90表示は未確認のまま。候補はreview-onlyで、稼働反映には別途許可が必要。
+- 次の作業1つ: 候補内容と実画面未確認範囲を提示し、稼働反映の別途許可を待つ。
