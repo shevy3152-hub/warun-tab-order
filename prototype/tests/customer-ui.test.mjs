@@ -4,6 +4,7 @@ import test from "node:test";
 import { CUSTOMER_THEMES, CUSTOMER_TEST_THEME, normalizeCustomerTheme } from "../src/customer-theme.js";
 import { adminMenuAvailability } from "../src/admin-menu-status.js";
 import { compareMenuItems } from "../src/menu-ordering.js";
+import { customerMenuSelectionRoute, isCustomerMealMenuItem } from "../src/customer-menu-selection.js";
 import { CUSTOMER_THEME_DEFINITIONS, isAvailableCustomerTheme } from "../../shared/customer-theme-definitions.mjs";
 import { MIN_CUSTOMER_THEME_ZOOM, customerThemeImageLayout, customerThemeImageMinimumZoom, customerThemePositionAfterDrag, customerThemeStoredZoomForVisualZoom, normalizeCustomerThemeLayout, resolveCustomerThemeZoom } from "../src/customer-theme-layout.js";
 
@@ -197,8 +198,8 @@ test("customer menu uses major category navigation with a collapsible rail", () 
   assert.match(appSource, /food-gifu/);
   assert.match(appSource, /CUSTOMER_WINTER_CATEGORY_IDS/);
   assert.match(customerScreen, /冬季限定・現在注文できません/);
-  assert.match(customerScreen, /quantitySelectionEnabled && item\.minimumQuantity > 1/);
-  assert.match(customerScreen, /item\.quantitySelectionEnabled \? <button className="add-button" onClick=\{\(\) => openQuantitySelection\(item\)\}/);
+  assert.match(customerScreen, /customerMenuSelectionRoute\(item\) === "unavailable"/);
+  assert.match(customerScreen, /item\.quantitySelectionEnabled \? <button className="add-button" onClick=\{\(\) => selectCustomerMenuItem\(item\)\}/);
   assert.match(customerScreen, /majorNavOpen/);
   assert.match(customerScreen, /customer-app--category-collapsed/);
   assert.match(appSource, /大分類カテゴリー/);
@@ -263,7 +264,7 @@ test("tapping the central menu folds only the expanded major rail and keeps the 
   assert.match(customerScreen, /const collapseMajorNavOnMenuTap = \(\) => \{[\s\S]*if \(majorNavOpen\) setMajorNavOpen\(false\)/);
   assert.match(customerScreen, /const handleMenuClick = \(\) => \{[\s\S]*collapseMajorNavOnMenuTap\(\);[\s\S]*handleMenuInteraction\(\);/);
   assert.match(customerScreen, /<section className="menu-panel" onWheel=\{handleMenuInteraction\} onTouchMove=\{handleMenuInteraction\} onClick=\{handleMenuClick\}>/);
-  assert.match(customerScreen, /onClick=\{\(\) => canOpenDetail \? setDetailItem\(item\) : undefined\}/);
+  assert.match(customerScreen, /onClick=\{\(\) => canOpenDetail \? openCustomerProductDetail\(item\) : undefined\}/);
   assert.match(customerScreen, /onClick=\{\(\) => selectSubcategory\(category\.id\)\}/);
   assert.match(customerScreen, /scrollIntoView\(\{ behavior: "smooth", block: "start" \}\)/);
   assert.doesNotMatch(customerScreen, /customer-content" onClick|cart-panel" onClick|customer-header" onClick|customer-footer" onClick/);
@@ -543,45 +544,64 @@ test("customer cards show only stored readings and keep the detail hint separate
   assert.match(styles, /\.menu-row__reading \{[\s\S]*white-space: nowrap[\s\S]*overflow: hidden/);
 });
 
-test("product details keep stored readings conditional and let shochu continue to serving selection", () => {
+test("customer product detail uses the common item-selection routes and shared detail-image layout", () => {
   assert.match(appSource, /function Modal\(\{ title, titleExtra = null, children, footer = null, onClose/);
   assert.match(appSource, /className="modal__title-group"><h2 id=\{titleId\}>\{title\}<\/h2>\{titleExtra\}/);
   assert.match(appSource, /\{footer \? <div className="modal__footer">\{footer\}<\/div> : null\}/);
   assert.match(appSource, /className="modal--product-detail" footer=\{<div className="modal-actions product-detail__actions">/);
   assert.match(appSource, /titleExtra=\{detailItem\.detail\?\.reading \? <span className="modal__title-reading">\{detailItem\.detail\.reading\}<\/span> : null\}/);
   assert.doesNotMatch(appSource, /className="product-detail__reading"/);
-  assert.match(appSource, /const chooseShochuFromDetail = \(item\) => \{[\s\S]*setDetailItem\(null\)[\s\S]*openShochuSelection\(item\)/);
-  assert.match(appSource, /const chooseSakeFromDetail = \(item\) => \{[\s\S]*setDetailItem\(null\)[\s\S]*openSakeSelection\(item\)/);
-  assert.match(appSource, /detailItem\.categoryId === "shochu" && detailItem\.servingOptions\?\.length/);
-  assert.match(appSource, /detailItem\.categoryId === "sake" && detailItem\.variants\?\.length/);
-  assert.match(appSource, />これにする<\/button>/);
+  assert.match(appSource, /const selectCustomerMenuItem = \(item\) => \{[\s\S]*route === "sake"[\s\S]*openSakeSelection\(item\)[\s\S]*route === "serving"[\s\S]*openShochuSelection\(item\)[\s\S]*route === "quantity"[\s\S]*openQuantitySelection\(item\)[\s\S]*return addSelection\(item\)/);
+  assert.match(appSource, /const chooseCustomerMenuItemFromDetail = \(item\) => \{[\s\S]*setDetailItem\(null\)[\s\S]*selectCustomerMenuItem\(item\)/);
+  assert.match(customerScreen, /onClick=\{\(\) => selectCustomerMenuItem\(item\)\}/);
+  assert.match(appSource, /footer=\{<div className="modal-actions product-detail__actions"><button type="button" className="button button--quiet" onClick=\{\(\) => setDetailItem\(null\)\}>一覧へ戻る<\/button><button type="button" className="button button--primary button--large" disabled=\{customerMenuSelectionRoute\(detailItem\) === "unavailable"\} onClick=\{\(\) => chooseCustomerMenuItemFromDetail\(detailItem\)\}>これにする<\/button>/);
+  assert.match(appSource, /<ImageLayoutImage source=\{detailItem\.detail\?\.imageUri \|\| detailItem\.imageUri\} alt=\{detailItem\.name\} layout=\{detailItem\.imageLayouts\?\.detail \?\? DEFAULT_IMAGE_LAYOUT\} \/>/);
+  assert.match(appSource, /<ImageLayoutImage source=\{imageUri\} layout=\{layout\} alt="" draggable=\{false\} \/>/);
+  assert.match(appSource, /function ImageLayoutImage\(\{ source, alt = "", layout, draggable \}\)/);
+  assert.match(appSource, /function imageLayoutStyle\(item, usage\) \{[\s\S]*usage === "detail" \? DEFAULT_IMAGE_LAYOUT/);
+  assert.match(appSource, /isCustomerMealMenuItem\(detailItem, customerMajorCategories\)/);
+  assert.match(appSource, /!isCustomerMealMenuItem\(detailItem, customerMajorCategories\) \? <>[\s\S]*<dl>[\s\S]*detailItem\.detail\?\.recommendation/);
+  assert.match(appSource, /isCustomerMealMenuItem\(item, categories\)/);
+  assert.match(appSource, /usage === "detail" && isFoodMenuItem \? " image-layout-editor__frame--food"/);
+  assert.match(styles, /\.product-detail__image \{[\s\S]*aspect-ratio: 760 \/ 550/);
+  assert.match(styles, /\.product-detail--food \.product-detail__image \{ aspect-ratio: 1 \/ 1; \}/);
+  assert.match(styles, /\.image-layout-render \{[\s\S]*object-fit: contain; object-position: center; transform-origin: center/);
+  assert.match(styles, /\.image-layout-editor__frame--detail \{ aspect-ratio: 760 \/ 550/);
+  assert.match(styles, /\.image-layout-editor__frame--detail\.image-layout-editor__frame--food \{ aspect-ratio: 1 \/ 1; \}/);
   assert.match(appSource, /className="button button--quiet" onClick=\{\(\) => setDetailItem\(null\)\}>一覧へ戻る<\/button>/);
-  assert.match(styles, /\.modal--product-detail \.modal__body \{[\s\S]*overflow: hidden/);
-  assert.match(styles, /\.product-detail__actions \.button \{ min-height: 48px; \}/);
-  assert.match(styles, /\.modal__title-group \{[\s\S]*display: flex[\s\S]*align-items: baseline/);
-  assert.match(styles, /\.modal__title-reading \{[\s\S]*white-space: nowrap/);
-  assert.match(styles, /\.modal--product-detail \.modal__footer \{[\s\S]*flex: 0 0 auto/);
-  assert.match(appSource, /className="product-detail__image"><img src=\{detailItem\.detail\?\.imageUri \|\| detailItem\.imageUri\}/);
-  assert.match(styles, /\.product-detail \{[\s\S]*grid-template-columns: minmax\(220px, 45%\) minmax\(0, 1fr\)[\s\S]*align-items: center/);
-  assert.match(styles, /\.product-detail__image \{[\s\S]*height: var\(--product-detail-image-height, min\(550px, calc\(100dvh - 170px\)\)\)[\s\S]*overflow: hidden[\s\S]*background: transparent/);
-  assert.match(styles, /\.product-detail__image > img \{[\s\S]*object-fit: contain[\s\S]*object-position: center[\s\S]*transform: scale\(1\.05\)/);
-  assert.match(styles, /@media \(orientation: portrait\) \{[\s\S]*\.product-detail \{[\s\S]*grid-template-columns: minmax\(220px, 45%\)/);
-  assert.match(styles, /@media \(orientation: landscape\) \{[\s\S]*\.modal--product-detail \{ display: grid; grid-template-rows: auto minmax\(0, 1fr\) auto; \}[\s\S]*\.modal--product-detail \.modal__body \{ overflow: hidden; display: grid; grid-template-rows: minmax\(0, 1fr\); \}[\s\S]*\.product-detail \{ height: auto;[\s\S]*grid-template-columns: minmax\(0, calc\(38% - 20px\)\) minmax\(0, 1fr\)[\s\S]*column-gap: 20px; align-items: start/);
-  assert.match(styles, /@media \(orientation: landscape\) \{[\s\S]*\.product-detail__image \{ height: 100%; padding: 0 0 0 40px; place-items: end start; \}[\s\S]*\.product-detail__image > img \{ min-height: 0; max-height: 100%; transform: translateY\(10%\) scale\(1\.1\); transform-origin: left bottom; object-position: left bottom; \}/);
-  assert.match(styles, /\.modal--product-detail \.product-detail__actions \{ position: relative; top: -5px; margin-top: 0/);
-  assert.match(styles, /@media \(orientation: landscape\) and \(max-height: 700px\) \{[\s\S]*\.modal--product-detail \.modal__body \{ overflow-y: auto/);
-  assert.match(styles, /@media \(orientation: landscape\) and \(max-height: 700px\) \{[\s\S]*\.product-detail__image > img \{ min-height: 0; max-height: 100%; transform: translateY\(10%\) scale\(1\.1\); transform-origin: left bottom; \}/);
-  assert.match(styles, /@media \(min-width: 900px\) and \(max-height: 800px\) \{[\s\S]*\.product-detail \{ height: auto;[\s\S]*grid-template-columns: minmax\(0, calc\(38% - 20px\)\) minmax\(0, 1fr\)[\s\S]*column-gap: 20px; align-items: start/);
-  assert.match(styles, /\.product-detail > :not\(\.product-detail__image\) \{ margin: 0; padding: 10px 0 0; align-self: start; \}/);
-  assert.match(styles, /@media \(min-width: 900px\) and \(max-height: 800px\) \{[\s\S]*\.product-detail__image \{ height: 100%; padding: 0 0 0 40px; place-items: end start; \}[\s\S]*\.product-detail__image > img \{ min-height: 0; max-height: 100%; transform: translateY\(10%\) scale\(1\.1\); transform-origin: left bottom; object-position: left bottom; \}/);
-  assert.match(styles, /\.modal--product-detail \.modal__header \{[\s\S]*min-height: 64px; padding: 4px 16px/);
-  assert.match(styles, /\.modal--product-detail \.modal__body \{[\s\S]*padding: 0 8px/);
-  assert.match(styles, /\.modal--product-detail \.modal__footer \{[\s\S]*padding: 0 18px 4px/);
-  assert.match(styles, /\.product-detail__actions \.button \{ min-height: 48px; \}/);
-  assert.match(styles, /@media \(min-width: 900px\) and \(max-height: 700px\) \{[\s\S]*\.modal--product-detail \{ display: grid; grid-template-rows: auto minmax\(0, 1fr\) auto; height: calc\(100dvh - 16px\); \}[\s\S]*\.modal--product-detail \.modal__body \{ overflow-y: auto/);
-  assert.match(styles, /@media \(min-width: 900px\) and \(min-height: 701px\) and \(max-height: 800px\) \{[\s\S]*\.modal--product-detail \.modal__body \{ overflow: hidden; display: grid/);
-  assert.match(styles, /@media \(min-width: 900px\) and \(max-height: 700px\) \{[\s\S]*\.modal--product-detail \.modal__body \{ overflow-y: auto/);
+  assert.match(styles, /\.modal--product-detail \{ width: min\(900px, 92vw\); max-height: calc\(100dvh - 40px\); overflow: hidden; display: grid; grid-template-rows: auto minmax\(0, 1fr\) auto; \}/);
+  assert.match(styles, /\.modal--product-detail \.modal__body \{ min-height: 0; overflow: hidden/);
+  assert.match(styles, /\.modal--product-detail \.modal__footer \{ min-height: 0; padding: 10px 22px 14px/);
+  assert.match(styles, /\.product-detail__actions \.button \{ min-width: 150px; min-height: 56px/);
+  assert.match(styles, /\.product-detail__content \{[\s\S]*overflow-y: auto[\s\S]*overflow-wrap: anywhere/);
+  assert.match(styles, /\.product-detail__description \{[\s\S]*white-space: pre-wrap/);
+  assert.doesNotMatch(styles, /product-detail__image > img[\s\S]{0,220}transform: translateY\(10%\) scale\(1\.1\)/);
+  assert.match(styles, /@media \(orientation: portrait\) \{[\s\S]*\.modal--product-detail \.modal__body \{ display: block; overflow-y: auto/);
+  assert.match(styles, /@media \(orientation: landscape\) \{[\s\S]*\.modal--product-detail \.modal__body \{ display: block; overflow: hidden/);
   assert.match(appSource, /document\.body\.style\.overflow = "hidden"/);
+});
+
+test("customer detail and menu plus share routes without bypassing availability rules", () => {
+  assert.equal(customerMenuSelectionRoute({ id: "plain", categoryId: "food" }), "direct");
+  assert.equal(customerMenuSelectionRoute({ id: "qty", categoryId: "food", quantitySelectionEnabled: true }), "quantity");
+  assert.equal(customerMenuSelectionRoute({ id: "virtual", categoryId: "food", quantitySelectionEnabled: true, isKushikatsuVirtual: true }), "quantity");
+  assert.equal(customerMenuSelectionRoute({ id: "shochu", categoryId: "shochu", servingOptions: [{ servingOptionId: "water" }] }), "serving");
+  assert.equal(customerMenuSelectionRoute({ id: "sake", categoryId: "sake", variants: [{ variantId: "glass" }] }), "sake");
+  assert.equal(customerMenuSelectionRoute({ id: "sold", categoryId: "food", quantitySelectionEnabled: true, isSoldOut: true }), "unavailable");
+  assert.equal(customerMenuSelectionRoute({ id: "reserved", categoryId: "food", orderingMode: "reservation_only" }), "unavailable");
+  assert.equal(customerMenuSelectionRoute({ id: "sake-empty", categoryId: "sake", variants: [] }), "unavailable");
+  assert.equal(isCustomerMealMenuItem({ categoryId: "user-food-category" }, [{ id: "food", subcategories: [{ id: "user-food-category", categoryIds: ["user-food-category"] }] }]), true);
+  assert.equal(isCustomerMealMenuItem({ categoryId: "user-winter-category" }, [{ id: "winter", subcategories: [{ id: "user-winter-category", categoryIds: ["user-winter-category"] }] }]), true);
+  assert.equal(isCustomerMealMenuItem({ categoryId: "user-food-category" }, [{ id: "user-food-category", sectionKey: "food" }]), true);
+  assert.equal(isCustomerMealMenuItem({ categoryId: "sake" }, [{ id: "drink", subcategories: [{ id: "sake", categoryIds: ["sake"] }] }]), false);
+  assert.match(customerScreen, /const chooseCustomerMenuItemFromDetail = \(item\) => \{[\s\S]*setDetailItem\(null\)[\s\S]*selectCustomerMenuItem\(item\)/);
+  assert.match(customerScreen, /detailSelectionLockedRef\.current \|\| customerMenuSelectionRoute\(item\) === "unavailable"/);
+  assert.match(customerScreen, /detailSelectionLockedRef\.current = true;[\s\S]*setDetailItem\(null\)/);
+  assert.match(appSource, /onClick=\{\(\) => chooseCustomerMenuItemFromDetail\(detailItem\)\}>これにする<\/button>/);
+  assert.match(appSource, /const commitQuantitySelection = \(\) => \{[\s\S]*if \(added\) \{[\s\S]*setQuantitySelection\(null\)/);
+  assert.match(appSource, /onClick=\{\(\) => \{ setQuantitySelection\(null\); setQuantitySelectionError\(""\); \}\}>キャンセル<\/button>/);
+  assert.match(appSource, /const addSakeSelection = \(\) => \{[\s\S]*setSakeSelection\(null\)/);
+  assert.match(appSource, /const commitShochuSelection = \(\) => \{[\s\S]*setShochuSelection\(null\)/);
 });
 
 test("admin menu editing is grouped, cancellable, and keeps edit ordering data", () => {
@@ -984,7 +1004,7 @@ test("image layout editor rotates only the inner image and preserves layout cont
   assert.match(transformSource, /transform: `translate\(\$\{Number\(layout\.positionX\) \* 100\}%\, \$\{Number\(layout\.positionY\) \* 100\}%\) scale\(\$\{Number\(layout\.scale\)\}\) rotate\(\$\{Number\(layout\.rotation\)\}deg\)`/);
   assert.doesNotMatch(transformSource, /image-layout-editor__frame/);
   const editor = appSource.slice(appSource.indexOf("function ImageLayoutEditor"), appSource.indexOf("function AdminScreen"));
-  assert.match(editor, /<img src=\{imageUri\} alt="" draggable="false" style=\{imageLayoutTransform\(layout\)\} \/>/);
+  assert.match(editor, /<ImageLayoutImage source=\{imageUri\} layout=\{layout\} alt="" draggable=\{false\} \/>/);
   assert.match(editor, /角度 <output>\{layout\.rotation\.toFixed\(1\)\}°<\/output><input type="range" min="-15" max="15" step="0\.1" value=\{layout\.rotation\}/);
   assert.match(editor, /adjust\("rotation", -1\)/);
   assert.match(editor, /adjust\("rotation", -0\.1\)/);
@@ -1009,7 +1029,7 @@ test("admin menu thumbnails apply the saved thumbnail layout in the same portrai
   assert.match(styles, /\.admin-menu-card__image-frame \{ width: 76\.1905%; height: 100%; overflow: hidden; \}/);
   assert.match(styles, /\.image-layout-editor__frame \{[^}]*aspect-ratio: 64 \/ 84/);
   assert.match(customerScreen, /imageLayoutStyle\(item, "thumbnail"\)/);
-  assert.match(customerScreen, /imageLayoutStyle\(detailItem, "detail"\)/);
+  assert.match(customerScreen, /detailItem\.imageLayouts\?\.detail \?\? DEFAULT_IMAGE_LAYOUT/);
 });
 
 test("shared menu editor saves the detail image URI without replacing the list URI or image layouts", () => {

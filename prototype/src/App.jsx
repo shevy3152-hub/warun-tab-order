@@ -31,6 +31,7 @@ import * as React from "react";
 import { createClientOrderId, createCustomerOrderClient, resolveOrderApiConfig } from "./order-outbox.js";
 import { claimCustomerDevice, createIndexedDbCredentialStore, loadOrCreateCustomerDevice, pairingClaimErrorMessage, runtimeForCustomerCredentials } from "./device-credentials.js";
 import { customerOrderErrorCategory, customerOrderNoticeFromOutboxEvent } from "./customer-order-notice.js";
+import { customerMenuSelectionRoute, isCustomerMealMenuItem } from "./customer-menu-selection.js";
 import { AdminPairingError, configuredAdminToken, createAdminRideGuidanceContact, deleteAdminRideGuidanceContact, fetchAdminBusinessHours, fetchAdminCheckoutRequests, fetchAdminCustomerOrderStartNotice, fetchAdminCustomerThemeConfig, fetchAdminDiagnostics, fetchAdminMenu, fetchAdminSessionMenuAccess, fetchArchivedAdminMenuItems, previewAdminMenuItemLifecycle, executeAdminMenuItemLifecycle, restoreArchivedAdminMenuItem, allowAdminSessionMenuItem, confirmAndCloseAdminEmptySession, revokeAdminSessionMenuItem, fetchAdminOrderHistory, fetchAdminPaymentHistory, fetchAdminPairingPreflight, fetchAdminRideGuidance, issueCustomerPairingCode, revokeAdminDevice, saveAdminBusinessHours, saveAdminCustomerOrderStartNotice, saveAdminCustomerThemeConfig, uploadAdminCustomerThemeImage, saveAdminImageLayouts, saveAdminCategory, saveAdminMenuItem, saveAdminMenuOrdering, saveAdminRideGuidanceOrdering, saveAdminRideGuidancePickup, updateAdminRideGuidanceContact, voidAdminPayment } from "./admin-pairing.js";
 import { adjustKitchenItemUnitPrice, adjustKitchenOrderItemQuantity as adjustKitchenItemQuantityRequest, cancelKitchenCheckout, cancelKitchenOrderItem, closeKitchenTableSession, createKitchenOrder, fetchKitchenCheckoutRequests, fetchKitchenOrderHistory, fetchKitchenPaymentHistory, fetchKitchenSnapshot, kitchenAdditionRequestItem, kitchenApiConfigured, KitchenApiError, markKitchenItemServed, payKitchenCheckout, readyKitchenCheckout, resolveKitchenStaffCall, restoreKitchenOrderItem, saveKitchenCheckoutAdjustments, subscribeKitchenInvalidations, voidKitchenPayment } from "./kitchen-api.js";
 import { createKitchenOrderAttempts } from "./kitchen-order-attempts.js";
@@ -422,6 +423,8 @@ function shochuThumbUri(uri) {
   return typeof uri === "string" ? uri.replace(/-thumb-v1(\.webp(?:[?#].*)?)$/, "-thumb-v2$1") : uri;
 }
 
+const DEFAULT_IMAGE_LAYOUT = Object.freeze({ scale: 1, positionX: 0, positionY: 0, rotation: 0, fit: "contain" });
+
 function imageLayoutTransform(layout) {
   if (!layout) return undefined;
   return {
@@ -433,7 +436,12 @@ function imageLayoutTransform(layout) {
 }
 
 function imageLayoutStyle(item, usage) {
-  return imageLayoutTransform(item?.imageLayouts?.[usage]);
+  const layout = item?.imageLayouts?.[usage] ?? (usage === "detail" ? DEFAULT_IMAGE_LAYOUT : null);
+  return imageLayoutTransform(layout);
+}
+
+function ImageLayoutImage({ source, alt = "", layout, draggable }) {
+  return <img className="image-layout-render" src={source} alt={alt} draggable={draggable} style={imageLayoutTransform(layout)} />;
 }
 
 function listImageVisible(item) {
@@ -926,6 +934,7 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
   const [rideGuidanceRefreshKey, setRideGuidanceRefreshKey] = useState(0);
   const [showBusinessNotice, setShowBusinessNotice] = useState(false);
   const [detailItem, setDetailItem] = useState(null);
+  const detailSelectionLockedRef = useRef(false);
   const [sakeSelection, setSakeSelection] = useState(null);
   const [sakeSelectionError, setSakeSelectionError] = useState("");
   const [shochuSelection, setShochuSelection] = useState(null);
@@ -1663,6 +1672,10 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
     collapseMajorNavOnMenuTap();
     handleMenuInteraction();
   };
+  const openCustomerProductDetail = (item) => {
+    detailSelectionLockedRef.current = false;
+    setDetailItem(item);
+  };
   const handleMenuInteraction = () => {
     setIsMenuHeaderHidden(true);
     if (menuIdleTimerRef.current) window.clearTimeout(menuIdleTimerRef.current);
@@ -1736,6 +1749,20 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
     setQuantitySelection({ itemId: item.id, variantId: variant?.variantId ?? null, temperature: selection.temperature ?? null, quantity: draftQuantity, baseQuantity });
     setQuantitySelectionError("");
   };
+  const selectCustomerMenuItem = (item) => {
+    const route = customerMenuSelectionRoute(item);
+    if (route === "unavailable") return false;
+    if (route === "sake") { openSakeSelection(item); return true; }
+    if (route === "serving") { openShochuSelection(item); return true; }
+    if (route === "quantity") { openQuantitySelection(item); return true; }
+    return addSelection(item);
+  };
+  const chooseCustomerMenuItemFromDetail = (item) => {
+    if (detailSelectionLockedRef.current || customerMenuSelectionRoute(item) === "unavailable") return false;
+    detailSelectionLockedRef.current = true;
+    setDetailItem(null);
+    return selectCustomerMenuItem(item);
+  };
   const adjustQuantitySelection = (delta) => {
     setQuantitySelection((current) => {
       if (!current) return current;
@@ -1766,14 +1793,6 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
       setQuantitySelection(null);
       setQuantitySelectionError("");
     }
-  };
-  const chooseShochuFromDetail = (item) => {
-    setDetailItem(null);
-    openShochuSelection(item);
-  };
-  const chooseSakeFromDetail = (item) => {
-    setDetailItem(null);
-    openSakeSelection(item);
   };
   const adjustShochuQuantity = (optionId, delta) => {
     setShochuSelection((current) => {
@@ -1960,17 +1979,17 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
                 const row = isSake ? (
                   <article className={`menu-row sake-menu-row ${item.isSoldOut ? "is-sold-out" : ""}`} key={item.id}>
                     <div className="menu-row__index">{String(index + 1).padStart(2, "0")}</div>
-                    <button className="product-image-button" onClick={() => canOpenDetail ? setDetailItem(item) : undefined} aria-label={`${item.name}の詳細を見る`} disabled={!canOpenDetail}>{item.imageUri ? <img src={item.imageUri} alt="" style={imageLayoutStyle(item, "thumbnail")} /> : <span>画像なし</span>}</button>
-                    <button className="menu-row__copy menu-row__copy--button" onClick={() => canOpenDetail ? setDetailItem(item) : undefined} disabled={!canOpenDetail} aria-label={item.name + "の詳細を見る"}>{item.detail?.reading ? <small className="menu-row__reading">{item.detail.reading}</small> : null}<h2>{item.name}</h2>{canOpenDetail || listComment ? <small className="menu-row__detail-hint">{canOpenDetail ? <span className="menu-row__detail-hint__action">タップで明細</span> : null}{canOpenDetail && listComment ? <span className="menu-row__detail-hint__separator" aria-hidden="true">｜</span> : null}{listComment ? <span className="menu-row__comment">{listComment}</span> : null}</small> : null}</button>
-                    {item.orderingMode === "reservation_only" ? <div className="reservation-only-label"><b>予約限定</b></div> : <button className="sake-serve-button" onClick={() => openSakeSelection(item)} disabled={item.isSoldOut || !item.variants.length} aria-label={`${item.name}の提供方法を選ぶ`}><span>提供方法を選ぶ</span><small>グラス／徳利</small></button>}
+                    <button className="product-image-button" onClick={() => canOpenDetail ? openCustomerProductDetail(item) : undefined} aria-label={`${item.name}の詳細を見る`} disabled={!canOpenDetail}>{item.imageUri ? <img src={item.imageUri} alt="" style={imageLayoutStyle(item, "thumbnail")} /> : <span>画像なし</span>}</button>
+                    <button className="menu-row__copy menu-row__copy--button" onClick={() => canOpenDetail ? openCustomerProductDetail(item) : undefined} disabled={!canOpenDetail} aria-label={item.name + "の詳細を見る"}>{item.detail?.reading ? <small className="menu-row__reading">{item.detail.reading}</small> : null}<h2>{item.name}</h2>{canOpenDetail || listComment ? <small className="menu-row__detail-hint">{canOpenDetail ? <span className="menu-row__detail-hint__action">タップで明細</span> : null}{canOpenDetail && listComment ? <span className="menu-row__detail-hint__separator" aria-hidden="true">｜</span> : null}{listComment ? <span className="menu-row__comment">{listComment}</span> : null}</small> : null}</button>
+                    {item.orderingMode === "reservation_only" ? <div className="reservation-only-label"><b>予約限定</b></div> : <button className="sake-serve-button" onClick={() => selectCustomerMenuItem(item)} disabled={customerMenuSelectionRoute(item) === "unavailable"} aria-label={`${item.name}の提供方法を選ぶ`}><span>提供方法を選ぶ</span><small>グラス／徳利</small></button>}
                   </article>
                 ) : (
                   <article className={`menu-row ${isFood ? "food-menu-row" : ""} ${isShochu ? "shochu-menu-row" : ""} ${showListImage ? "" : "menu-row--no-image"} ${item.isSoldOut ? "is-sold-out" : ""}`} key={item.id} ref={isFirstShochuImo ? imoRef : null}>
                     <div className="menu-row__index">{String(index + 1).padStart(2, "0")}</div>
-                    {showListImage ? <button className="product-image-button" onClick={() => canOpenDetail ? setDetailItem(item) : undefined} aria-label={`${item.name}の詳細を見る`} disabled={!canOpenDetail}>{item.imageUri ? <img src={isShochu ? shochuThumbUri(item.imageUri) : item.imageUri} alt="" style={imageLayoutStyle(item, "thumbnail")} /> : <span>画像なし</span>}</button> : null}
-                    <button className="menu-row__copy menu-row__copy--button" onClick={() => canOpenDetail ? setDetailItem(item) : undefined} aria-label={`${item.name}の詳細を見る`} disabled={!canOpenDetail}>{item.detail?.reading ? <small className="menu-row__reading">{item.detail.reading}</small> : null}<h2>{item.name}</h2>{foodDescription ? <small className="menu-row__food-description">{foodDescription}</small> : null}{canOpenDetail || listComment ? <small className="menu-row__detail-hint">{canOpenDetail ? <span className="menu-row__detail-hint__action">タップで明細</span> : null}{canOpenDetail && listComment ? <span className="menu-row__detail-hint__separator" aria-hidden="true">｜</span> : null}{listComment ? <span className="menu-row__comment">{listComment}</span> : null}</small> : null}</button>
+                    {showListImage ? <button className="product-image-button" onClick={() => canOpenDetail ? openCustomerProductDetail(item) : undefined} aria-label={`${item.name}の詳細を見る`} disabled={!canOpenDetail}>{item.imageUri ? <img src={isShochu ? shochuThumbUri(item.imageUri) : item.imageUri} alt="" style={imageLayoutStyle(item, "thumbnail")} /> : <span>画像なし</span>}</button> : null}
+                    <button className="menu-row__copy menu-row__copy--button" onClick={() => canOpenDetail ? openCustomerProductDetail(item) : undefined} aria-label={`${item.name}の詳細を見る`} disabled={!canOpenDetail}>{item.detail?.reading ? <small className="menu-row__reading">{item.detail.reading}</small> : null}<h2>{item.name}</h2>{foodDescription ? <small className="menu-row__food-description">{foodDescription}</small> : null}{canOpenDetail || listComment ? <small className="menu-row__detail-hint">{canOpenDetail ? <span className="menu-row__detail-hint__action">タップで明細</span> : null}{canOpenDetail && listComment ? <span className="menu-row__detail-hint__separator" aria-hidden="true">｜</span> : null}{listComment ? <span className="menu-row__comment">{listComment}</span> : null}</small> : null}</button>
                     {item.quantitySelectionEnabled ? <span className="menu-price"><b>{yen(taxExcludedYen(item.price))}</b><small>税込 {yen(item.price)}</small></span> : <PriceDisplay priceYen={item.price} />}
-                    {item.orderingMode === "reservation_only" ? <div className="reservation-only-label"><b>予約限定</b></div> : item.isSoldOut ? <div className="sold-out-label"><b>{CUSTOMER_WINTER_CATEGORY_IDS.has(item.categoryId) ? "冬季限定・現在注文できません" : "売り切れ"}</b><small>{CUSTOMER_WINTER_CATEGORY_IDS.has(item.categoryId) ? "SEASONAL PAUSED" : "SOLD OUT"}</small></div> : item.servingOptions.length ? <button className="shochu-serving-button" onClick={() => openShochuSelection(item)} aria-label={`${item.name}の飲み方選択`}>飲み方選択</button> : item.quantitySelectionEnabled ? <button className="add-button" onClick={() => openQuantitySelection(item)} aria-label={`${item.name}の数量を選ぶ`}><Plus size={36} weight="bold" /></button> : <button className="add-button" onClick={() => addSelection(item)} aria-label={`${item.name}を追加`}><Plus size={36} weight="bold" /></button>}
+                    {item.orderingMode === "reservation_only" ? <div className="reservation-only-label"><b>予約限定</b></div> : item.isSoldOut ? <div className="sold-out-label"><b>{CUSTOMER_WINTER_CATEGORY_IDS.has(item.categoryId) ? "冬季限定・現在注文できません" : "売り切れ"}</b><small>{CUSTOMER_WINTER_CATEGORY_IDS.has(item.categoryId) ? "SEASONAL PAUSED" : "SOLD OUT"}</small></div> : item.servingOptions.length ? <button className="shochu-serving-button" onClick={() => selectCustomerMenuItem(item)} aria-label={`${item.name}の飲み方選択`}>飲み方選択</button> : item.quantitySelectionEnabled ? <button className="add-button" onClick={() => selectCustomerMenuItem(item)} aria-label={`${item.name}の数量を選ぶ`}><Plus size={36} weight="bold" /></button> : <button className="add-button" onClick={() => selectCustomerMenuItem(item)} aria-label={`${item.name}を追加`}><Plus size={36} weight="bold" /></button>}
                   </article>
                 );
                 return (
@@ -2045,7 +2064,19 @@ function CustomerScreen({ state, updateState, deviceId, orderClient, customerDev
       {modal === "staff" ? <Modal title="スタッフを呼びますか？" onClose={() => { if (!staffCallSubmitting) setModal(null); }}><p className="modal-lead">テーブル {device.tableId} からスタッフへお知らせします。</p>{staffCallCooldownRemainingSeconds > 0 ? <p role="status">次の呼び出しまであと {staffCallCooldownRemainingSeconds} 秒です。</p> : null}<div className="modal-actions"><button className="button button--quiet" disabled={staffCallSubmitting} onClick={() => setModal(null)}>やめる</button><button className="button button--primary button--large" disabled={staffCallSubmitting || staffCallCooldownRemainingSeconds > 0} onClick={callStaff}><Bell size={22} weight="bold" /> {staffCallSubmitting ? "送信中" : staffCallCooldownRemainingSeconds > 0 ? `あと${staffCallCooldownRemainingSeconds}秒` : "呼び出す"}</button></div></Modal> : null}
       {modal === "feature" ? <Modal title="確認" onClose={() => setModal(null)}><p className="modal-lead">この機能は次の実装段階で接続します。</p><div className="modal-actions"><button className="button button--primary" onClick={() => setModal(null)}>閉じる</button></div></Modal> : null}
       {modal === "history" ? <Modal title="これまでのご注文" onClose={() => setModal(null)} wide><div className="customer-history">{apiMode && apiHistoryState.loading ? <div className="empty-state"><ClipboardText size={42} /><p>注文履歴を読み込んでいます。</p></div> : apiMode && apiHistoryState.error ? <div className="empty-state"><ClipboardText size={42} /><p>注文履歴を取得できません。</p></div> : customerHistory.length ? customerHistory.map((order) => <article key={order.id}><header><b>{formatTime(order.createdAt)} のご注文</b><span className={`status-chip status-${order.status}`}>{customerTransportLabel(order)}</span></header>{order.items.map((item) => <div key={item.id}><span>{selectionDisplayName({ name: item.nameSnapshot }, item)}</span><b>{item.quantity}{item.quantityUnitLabelSnapshot ?? "点"}</b></div>)}</article>) : <div className="empty-state"><ClipboardText size={42} /><p>注文履歴はまだありません。</p></div>}</div></Modal> : null}
-      {detailItem ? <Modal title={detailItem.name} titleExtra={detailItem.detail?.reading ? <span className="modal__title-reading">{detailItem.detail.reading}</span> : null} onClose={() => setDetailItem(null)} wide className="modal--product-detail" footer={<div className="modal-actions product-detail__actions"><button className="button button--quiet" onClick={() => setDetailItem(null)}>一覧へ戻る</button>{detailItem.categoryId === "shochu" && detailItem.servingOptions?.length ? <button className="button button--primary button--large" onClick={() => chooseShochuFromDetail(detailItem)}>これにする</button> : detailItem.categoryId === "sake" && detailItem.variants?.length ? <button className="button button--primary button--large" onClick={() => chooseSakeFromDetail(detailItem)}>これにする</button> : null}</div>}><div className="product-detail">{detailItem.detail?.imageUri || detailItem.imageUri ? <div className="product-detail__image"><img src={detailItem.detail?.imageUri || detailItem.imageUri} alt={detailItem.name} style={imageLayoutStyle(detailItem, "detail")} /></div> : null}<div>{detailItem.detail?.itemType ? <span className="category-tag">{detailItem.detail.itemType}</span> : null}<p className="product-detail__description">{detailItem.detail?.description || detailItem.description}</p><dl>{[["産地", "origin"], ["蔵元", "producer"], ["味の特徴", "taste"], ["香り", "aroma"], ["甘辛", "sweetness"], ["キレ", "finish"]].filter(([, key]) => detailItem.detail?.[key]).map(([label, key]) => <div key={key}><dt>{label}</dt><dd>{detailItem.detail[key]}</dd></div>)}</dl>{detailItem.detail?.recommendation ? <blockquote>{detailItem.detail.recommendation}</blockquote> : null}</div></div></Modal> : null}
+      {detailItem ? <Modal title={detailItem.name} titleExtra={detailItem.detail?.reading ? <span className="modal__title-reading">{detailItem.detail.reading}</span> : null} onClose={() => setDetailItem(null)} wide className="modal--product-detail" footer={<div className="modal-actions product-detail__actions"><button type="button" className="button button--quiet" onClick={() => setDetailItem(null)}>一覧へ戻る</button><button type="button" className="button button--primary button--large" disabled={customerMenuSelectionRoute(detailItem) === "unavailable"} onClick={() => chooseCustomerMenuItemFromDetail(detailItem)}>これにする</button></div>}>
+        <div className={`product-detail ${isCustomerMealMenuItem(detailItem, customerMajorCategories) ? "product-detail--food" : ""}`}>
+          {detailItem.detail?.imageUri || detailItem.imageUri ? <div className="product-detail__image"><ImageLayoutImage source={detailItem.detail?.imageUri || detailItem.imageUri} alt={detailItem.name} layout={detailItem.imageLayouts?.detail ?? DEFAULT_IMAGE_LAYOUT} /></div> : null}
+          <div className="product-detail__content">
+            {!isCustomerMealMenuItem(detailItem, customerMajorCategories) && detailItem.detail?.itemType ? <span className="category-tag">{detailItem.detail.itemType}</span> : null}
+            <p className="product-detail__description">{detailItem.detail?.description || detailItem.description}</p>
+            {!isCustomerMealMenuItem(detailItem, customerMajorCategories) ? <>
+              <dl>{[["産地", "origin"], ["蔵元", "producer"], ["味の特徴", "taste"], ["香り", "aroma"], ["甘辛", "sweetness"], ["キレ", "finish"]].filter(([, key]) => detailItem.detail?.[key]).map(([label, key]) => <div key={key}><dt>{label}</dt><dd>{detailItem.detail[key]}</dd></div>)}</dl>
+              {detailItem.detail?.recommendation ? <blockquote>{detailItem.detail.recommendation}</blockquote> : null}
+            </> : null}
+          </div>
+        </div>
+      </Modal> : null}
       {showBusinessNotice && businessHours.noticeEnabled && businessHours.noticeText.trim() ? <Modal title="営業日・営業時間のご案内" titleId="business-hours-notice-title" onClose={() => setShowBusinessNotice(false)} className="modal--business-hours-notice" footer={<div className="modal-actions"><button type="button" className="button button--primary" onClick={() => setShowBusinessNotice(false)}>閉じる</button></div>}><div className="business-hours-notice__body"><p>{businessHours.noticeText}</p></div></Modal> : null}
     </div>
   );
@@ -3671,9 +3702,7 @@ function BusinessHoursEditor({ state, adminApiMode, onChange, onSave, onDiscard,
   </section>;
 }
 
-const DEFAULT_IMAGE_LAYOUT = Object.freeze({ scale: 1, positionX: 0, positionY: 0, rotation: 0, fit: "contain" });
-
-function ImageLayoutEditor({ item, onClose, onSaved }) {
+function ImageLayoutEditor({ item, categories = CUSTOMER_MAJOR_CATEGORIES, onClose, onSaved }) {
   const [usage, setUsage] = useState("thumbnail");
   const [mode, setMode] = useState("manual");
   const [layouts, setLayouts] = useState(() => ({ thumbnail: { ...DEFAULT_IMAGE_LAYOUT, ...(item.imageLayouts?.thumbnail ?? {}) }, detail: { ...DEFAULT_IMAGE_LAYOUT, ...(item.imageLayouts?.detail ?? {}) } }));
@@ -3683,6 +3712,7 @@ function ImageLayoutEditor({ item, onClose, onSaved }) {
   const dragRef = useRef(null);
   const layout = layouts[usage];
   const imageUri = usage === "thumbnail" ? item.imageUri : item.detail?.imageUri || item.imageUri;
+  const isFoodMenuItem = isCustomerMealMenuItem(item, categories);
   const setLayout = (patch) => setLayouts((current) => ({ ...current, [usage]: { ...current[usage], ...patch } }));
   const adjust = (key, amount) => setLayout({ [key]: Math.max(key === "scale" ? 0.5 : key === "rotation" ? -15 : -1, Math.min(key === "scale" ? 4 : key === "rotation" ? 15 : 1, Number((layout[key] + amount).toFixed(2)))) });
   useEffect(() => {
@@ -3723,8 +3753,8 @@ function ImageLayoutEditor({ item, onClose, onSaved }) {
     <div className="image-layout-editor">
       <div className="image-layout-editor__tabs" role="tablist">{[["thumbnail", "一覧用"], ["detail", "詳細用"]].map(([id, label]) => <button type="button" role="tab" aria-selected={usage === id} className={usage === id ? "is-active" : ""} onClick={() => setUsage(id)} key={id}>{label}</button>)}</div>
       <div className="image-layout-editor__workspace">
-        <div className={`image-layout-editor__frame image-layout-editor__frame--${usage}`} ref={frameRef} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerUp} onWheel={onWheel} aria-label={`${usage === "thumbnail" ? "一覧" : "詳細"}用画像プレビュー`}>
-          {imageUri ? <img src={imageUri} alt="" draggable="false" style={imageLayoutTransform(layout)} /> : <span>画像なし</span>}
+        <div className={`image-layout-editor__frame image-layout-editor__frame--${usage}${usage === "detail" && isFoodMenuItem ? " image-layout-editor__frame--food" : ""}`} ref={frameRef} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerUp} onWheel={onWheel} aria-label={`${usage === "thumbnail" ? "一覧" : "詳細"}用画像プレビュー`}>
+          {imageUri ? <ImageLayoutImage source={imageUri} layout={layout} alt="" draggable={false} /> : <span>画像なし</span>}
         </div>
         <div className="image-layout-editor__controls">
           <p className="image-layout-editor__hint">枠内をドラッグ／ホイールで調整（A90相当プレビュー）</p>
@@ -4854,7 +4884,7 @@ function AdminScreen({ state, updateState, section = "menu" }) {
         {menuItemLifecycle.error ? <p className="checkout-feedback checkout-feedback--error" role="alert">{menuItemLifecycle.error}</p> : null}
         {menuItemLifecycle.kind !== "checking" ? <div className="modal-actions"><button type="button" className="button button--quiet" onClick={() => setMenuItemLifecycle(null)} disabled={menuItemLifecycle.busy}>キャンセル</button><button type="button" className="button button--primary button--large" onClick={() => void confirmMenuItemLifecycle()} disabled={menuItemLifecycle.busy}>{menuItemLifecycle.busy ? "処理中…" : menuItemLifecycle.kind === "restore" ? "客席非表示で復帰" : menuItemLifecycle.disposition === "archive" ? "アーカイブする" : "削除する"}</button></div> : null}
       </Modal> : null}
-      {imageLayoutItemId ? <ImageLayoutEditor item={state.menuItems.find((item) => item.id === imageLayoutItemId)} onClose={() => setImageLayoutItemId(null)} onSaved={(imageLayouts, version) => { updateState((current) => ({ ...current, menuItems: current.menuItems.map((item) => item.id === imageLayoutItemId ? { ...item, imageLayouts, version } : item) })); setImageLayoutItemId(null); }} /> : null}
+      {imageLayoutItemId ? <ImageLayoutEditor item={state.menuItems.find((item) => item.id === imageLayoutItemId)} categories={state.categories} onClose={() => setImageLayoutItemId(null)} onSaved={(imageLayouts, version) => { updateState((current) => ({ ...current, menuItems: current.menuItems.map((item) => item.id === imageLayoutItemId ? { ...item, imageLayouts, version } : item) })); setImageLayoutItemId(null); }} /> : null}
     </StaffShell>
   );
 }

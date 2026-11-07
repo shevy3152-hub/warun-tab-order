@@ -963,3 +963,13 @@
 - 独立レビューは指摘なし。最低数量案内だけが商品名下から消え、任意料理説明・数量モーダル内案内・単位・数量・価格・既存動作を保つことを確認。
 - 稼働サービス、DB、商品、注文、会計、配信資材は変更していない。ソース差分は未commit／未push、review-only候補は未作成。
 - 次の作業1つ: 対象限定commit／通常push後、今回のWeb差分だけのreview-only候補を準備する。
+
+
+## 客席商品詳細画像・選択導線の改善 2026-11-07（対象限定commit済／review-only候補準備）
+
+- 実装前に1280×800の画面案を提示し、利用者の指定で食事画像を1:1、食事詳細を説明文中心、日本酒・焼酎程度の幅に調整。酒類向け産地・味などの情報は食事詳細に表示しない。
+- 管理プレビューと客席詳細は同じ保存transform・contain規則を使用。長文説明は本文内でスクロールし、戻る／「これにする」を固定。選択は既存の直接追加・数量・焼酎飲み方・日本酒variant経路へ接続し、取消では追加せず連打も抑止。
+- 検証: customer-ui 71/71 PASS。隔離ブラウザー1280×800 CSS pxで食事モーダル幅900px・1:1画像・長文・操作ボタン、管理／客席の構図一致、通常追加1回、数量取消と3本確定、焼酎／日本酒既存選択と取消を確認。独立レビューの動的カテゴリ判定指摘を共通判定で修正し、追レビューで解消。
+- 隔離Temp複写で4659 modulesのproduction build、Sites 4/4 PASS。既存prototype/distは変更なし。最終buildのWeb差分だけを候補 `C:\Users\user\AppData\Local\WarunTabOrder\release-candidates\quantity-v25-product-detail-food-square-20261107-review-only-payload` に準備し、manifestは `C:\Users\user\AppData\Local\Temp\warun-product-detail-food-square-candidate-20261107-48b8b6e175564c958a8bd75b39e5bea2\distribution-manifest.json`。実配置対象はindex.htmlと新styles moduleの2件。他53参照assetは稼働WebRootの同SHAを確認。
+- 稼働Web/API、DB、商品、画像設定、注文、会計は変更していない。A90実機表示・操作は未確認。全server suiteは今回対象外。既存の未追跡server fixtureは保持。
+- 次の作業1つ: review-only候補の内容を提示して別途稼働反映許可を待つ。
