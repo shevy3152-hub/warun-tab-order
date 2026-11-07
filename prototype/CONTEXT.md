@@ -974,11 +974,12 @@
 - 稼働Web/API、DB、商品、画像設定、注文、会計は変更していない。A90実機表示・操作は未確認。全server suiteは今回対象外。既存の未追跡server fixtureは保持。
 - 次の作業1つ: review-only候補の内容を提示して別途稼働反映許可を待つ。
 
-## 客席食事詳細画像の拡大 2026-11-07（今回追補・review-only候補準備）
+## 客席食事詳細画像の拡大 2026-11-07（review-only候補準備済み）
 
-- 利用者確認により、対象は焼酎の飲み方選択ではなく酒類の商品詳細モーダルと確定。1280×800時の共通詳細モーダルは900×760px。食事詳細も外寸を維持し、1:1画像を大きくするため食事だけ2カラムを1.5fr／1frに変更。
-- CSSから見積もる画像枠は約497×497px、説明欄は約331px。戻る／「これにする」は固定フッター、説明文は従来のスクロール領域を維持。静的レイアウト案は900×760px・500×500pxで可視提示済み。イラストは寸法確認用の仮絵。
-- 関連検証: customer-ui 71/71 PASS、隔離Temp build 4,659 modules、Sites 4/4 PASS、diff --check PASS。既存distは未変更。fresh Tempへのfrozen offline依存復元はesbuild tarball欠落で失敗。既存node_modules参照のTemp buildで成功し、依存変更なし。
-- 独立レビューは1280×800で幅・高さ・footerに明確な問題なし。テストassertだけでは描画測定を証明しない指摘を受領。Chromeの隔離描画測定は環境制限で未完了のため、実画面のcomputed boundsは未確認と記録する。
-- 稼働Web/API、DB、商品・画像設定、注文、会計、A90は変更なし。既存候補を保持。新review-only候補は `quantity-v25-product-detail-food-square-large-20261107-review-only-payload` に対象Web差分だけ準備する。
-- 次の作業1つ: 対象限定commit／通常push後、新候補のmanifestとSHAを提示し、稼働反映の別途許可を待つ。
+- 利用者確認により、対象は焼酎の飲み方選択ではなく酒類の商品詳細モーダルと確定。1280×800時の共通詳細モーダルは900×760px。食事詳細も外寸を維持し、1:1画像を広くするため食事だけ2カラムを1.5fr／1frへ変更。
+- CSS寸法上、1280×800で画像枠は約497×497px、説明欄は約331px。戻る／「これにする」は固定フッター、説明欄のスクロールを維持。可視提示した静的プレビューは900×760px・500×500px。画像は寸法確認用の仮絵。
+- 検証: customer-ui 71/71 PASS、隔離Temp production build 4,659 modules、Sites 4/4 PASS、diff --check PASS。既存distは未変更。fresh Tempでのfrozen offline依存復元はesbuild tarball欠落で失敗。既存node_modulesを参照する隔離Temp buildで成功し、依存変更なし。
+- 独立レビューでは1280×800の幅・高さ・footerに明確な問題なし。CSSテストassertのみでは実描画 bounds を証明しないとの指摘あり。Chromeでのisolated computed bounds取得は未完了のため、実画面描画は未確認。
+- code commit `76c0e4c461459181666aae20b32dfff2dc93fb73` を通常pushし、push後remote SHA一致を確認。review-only候補 `C:\Users\user\AppData\Local\WarunTabOrder\release-candidates\quantity-v25-product-detail-food-square-large-76c0e4c-20261107-review-only-payload`。manifest `C:\Users\user\AppData\Local\Temp\warun-product-detail-food-square-large-candidate-20261107-f2c636780bb54fffbe666c331ef4c8b1\distribution-manifest.json` SHA-256 `6E27D0D3515DAA010FE1711A6BC882D3B503B51832B3393C57CC236720C72E31`。実配置対象2件のみ: index `8596B574AB30DA899C5AAD3B1BD37F07C9C4E4322A712BB4A92D8A0E0B9EAF2F`、styles module `8CAD198DEC6D2B88A9EB378C147B57FA26E23F169776695392DDF5F0B7B26949`。残る53参照assetは既存WebRootとSHA一致。
+- 稼働Web/API、DB、商品、画像設定、注文、会計、A90は変更なし。既存の前候補・Temp保全・未追跡fixtureは保持。
+- 次の作業1つ: review-only候補の内容を提示し、今回候補の稼働反映許可を待つ。
