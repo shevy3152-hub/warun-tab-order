@@ -208,7 +208,7 @@ h1, h2, h3, p { margin: 0; }
 .menu-heading__breadcrumb b { color: var(--red); font-size: 20px; }
 .menu-heading__breadcrumb strong { color: var(--ink); font-size: 2em; line-height: 1; }
 .subcategory-nav { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; padding: 6px 0 8px; border-bottom: 1px solid var(--red); }
-.subcategory-nav button { min-width: 0; min-height: 52px; padding: 0 10px; border: 1px solid var(--red); background: #fffaf3; color: var(--red); white-space: nowrap; font-size: 20px; font-weight: 900; }
+.subcategory-nav button { min-width: 0; min-height: 52px; padding: 0 10px; border: 1px solid var(--red); background: #fff1d8; color: var(--red); white-space: nowrap; font-size: 20px; font-weight: 900; }
 .subcategory-nav button.is-active { background: var(--red); color: #fff; }
 .menu-list { min-height: 0; overflow-y: auto; }
 .menu-row { min-height: 123px; display: grid; grid-template-columns: 68px 88px minmax(0, 1fr) 112px 176px; column-gap: 12px; align-items: center; border-bottom: 1px solid #c46e69; }
